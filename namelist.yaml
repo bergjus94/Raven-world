@@ -1,0 +1,40 @@
+gauge_id: '0001'
+start_date: '2016-06-22'
+end_date: '2022-12-31'
+cali_end_date: '2020-12-31'
+cell_size: 1000
+model_type: 'HBV'
+template: true
+main_dir: '/home/jberg/OneDrive/Raven_worldwide'
+coupled: true
+# lateral connections: 'multiple': HRU connects to multiple HRUs downstream, 'single': each HRU has one lateral connection
+nconnect: 'multiple'
+# possible discretization options: 'elevation', 'landuse', 'aspect', 'slope'
+criteria:
+  - elevation
+  - landuse
+future: false
+debug: true
+
+# Paths (relative to main_dir or absolute)
+meteo_dir: '/run/user/1001/gvfs/smb-share:server=fileserv02.giub.unibe.ch,share=userdata/jberg/Meteo_data/Era5_worldwide/gauge_{gauge_id}'
+shape_dir: '01_data/topo/catchment_shapefile/shape_{gauge_id}.shp'
+raster_dir: '01_data/topo/catchment_dem/dem_{gauge_id}.tif'
+stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
+landuse_dir: '01_data/topo/catchment_landuse/landuse_{gauge_id}.tif'
+glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
+glogem_dir: '01_data/GloGEM/GloGEM_output_{gauge_id}.dat'
+swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
+params_dir: 'config/default_params.yaml'
+
+model_dirs:
+  coupled: '03_model_setups_coupled'
+  uncoupled: '03_model_setups'
+
+
+# Forcing files (can be empty or filled as needed)
+forcing_files:
+  - 'era5_land_2m_temperature_2000-2000_daily_max_combined.nc'
+  - 'era5_land_2m_temperature_2000-2000_daily_min_combined.nc'
+  - 'era5_land_2m_temperature_2000-2000_daily_mean_combined.nc'
+  - 'era5_land_total_precipitation_2000-2000_daily_combined.nc'
