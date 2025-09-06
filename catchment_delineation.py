@@ -476,11 +476,11 @@ class CatchmentDelineator:
         
 def main():
     # Your existing main function
-    stations_file = "/home/jberg/OneDrive/Raven_worldwide/01_data/topo/gauging_stations/Nepal_stations_east.shp"
+    stations_file = "/home/jberg/OneDrive/Raven_worldwide/01_data/topo/gauging_stations/Pakistan_stations.shp"
     base_dir = "/home/jberg/OneDrive/Raven_worldwide/01_data"
     
     try:
-        delineator = CatchmentDelineator(base_dir=base_dir, country="Nepal")
+        delineator = CatchmentDelineator(base_dir=base_dir, country="Pakistan")
         
         stations_gdf = delineator.load_gauge_stations(stations_file=stations_file)
         dem_path = delineator.download_srtm_in_chunks()

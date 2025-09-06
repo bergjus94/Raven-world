@@ -1156,18 +1156,50 @@ class CatchmentProcessor:
             # Calculate area
             area = np.sum(hru_mask) * cell_area
             
-            # Calculate statistics for each raster
-            # DEM stats
+            # ✅ FIXED DEM STATS - Handle small HRUs properly
             dem_masked = self.dem_data.values[hru_mask]
-            dem_masked = dem_masked[dem_masked != -32768]
-            mean_elevation = np.nanmean(dem_masked) if len(dem_masked) > 0 else np.nan
             
-            # Slope stats
+            # First, try to get valid elevation values (exclude SRTM nodata)
+            valid_dem = dem_masked[(dem_masked != -32768) & ~np.isnan(dem_masked)]
+            
+            if len(valid_dem) > 0:
+                # Use valid elevation data
+                mean_elevation = np.nanmean(valid_dem)
+            else:
+                # If no valid elevation data in this HRU, use nearest neighbor interpolation
+                self.logger.warning(f"HRU {hru_id} has no valid elevation data, using nearest neighbor interpolation")
+                
+                # Get HRU centroid
+                rows, cols = np.where(hru_mask)
+                center_row, center_col = np.mean(rows), np.mean(cols)
+                
+                # Find nearest valid elevation value
+                dem_full = self.dem_data.values
+                valid_mask = (dem_full != -32768) & ~np.isnan(dem_full)
+                
+                if np.any(valid_mask):
+                    # Get coordinates of all valid pixels
+                    valid_rows, valid_cols = np.where(valid_mask)
+                    
+                    # Calculate distances to HRU centroid
+                    distances = np.sqrt((valid_rows - center_row)**2 + (valid_cols - center_col)**2)
+                    
+                    # Find nearest valid pixel
+                    nearest_idx = np.argmin(distances)
+                    mean_elevation = dem_full[valid_rows[nearest_idx], valid_cols[nearest_idx]]
+                    
+                    self.logger.debug(f"HRU {hru_id}: interpolated elevation {mean_elevation:.1f}m from nearest neighbor")
+                else:
+                    # Last resort: use a default elevation (shouldn't happen)
+                    mean_elevation = 1000.0  # Default elevation in meters
+                    self.logger.warning(f"HRU {hru_id}: using default elevation {mean_elevation}m")
+            
+            # Slope stats (keep your existing logic)
             slope_masked = self.slope_data.values[hru_mask]
             slope_masked = slope_masked[~np.isnan(slope_masked)]
             mean_slope = np.nanmean(slope_masked) if len(slope_masked) > 0 else np.nan
             
-            # Aspect stats (circular mean)
+            # Aspect stats (circular mean) (keep your existing logic)
             aspect_masked = self.aspect_data.values[hru_mask]
             aspect_masked = aspect_masked[~np.isnan(aspect_masked)]
             
@@ -1181,6 +1213,7 @@ class CatchmentProcessor:
             else:
                 mean_aspect = np.nan
             
+            # Rest of your code remains the same...
             # Get values from hru_df for this HRU
             hru_row = self.hru_df[self.hru_df['Unit ID'] == hru_id]
             
@@ -1213,7 +1246,7 @@ class CatchmentProcessor:
                 'HRU_ID': int(hru_id),
                 'Area_m2': float(area),
                 'Area_km2': float(area / 1_000_000),
-                'Elev_Mean': float(mean_elevation),
+                'Elev_Mean': float(mean_elevation),  # Now guaranteed to be a valid value
                 'Elev_Min': elev_min,
                 'Elev_Max': elev_max,
                 'Slope_deg': float(mean_slope),
@@ -1224,6 +1257,7 @@ class CatchmentProcessor:
                 'Glacier_Cl': glacier_class
             })
         
+        # Rest of your method remains the same...
         # Create DataFrame from results
         stats_df = pd.DataFrame(results)
         
@@ -1243,10 +1277,16 @@ class CatchmentProcessor:
         if 'Aspect_deg' in stats_df.columns:
             stats_df['Aspect_deg'] = stats_df['Aspect_deg'].interpolate(method='nearest').fillna(0)
         
+        # ✅ ADDITIONAL CHECK: Ensure no NaN elevations remain
+        if stats_df['Elev_Mean'].isna().any():
+            self.logger.warning("Some HRUs still have NaN elevation, using interpolation")
+            stats_df['Elev_Mean'] = stats_df['Elev_Mean'].interpolate(method='linear').fillna(stats_df['Elev_Mean'].mean())
+        
         # Print summary statistics
         self.logger.info(f"Total number of HRUs: {len(stats_df)}")
         self.logger.info(f"Total area: {stats_df['Area_km2'].sum():.2f} km²")
         self.logger.info(f"Elevation range: {stats_df['Elev_Mean'].min():.2f} - {stats_df['Elev_Mean'].max():.2f} m")
+        self.logger.info(f"HRUs with valid elevation: {(~stats_df['Elev_Mean'].isna()).sum()}/{len(stats_df)}")
         
         # Visualize results if in debug mode
         if self.debug:
@@ -1676,10 +1716,20 @@ class HRUConnectivityCalculator:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         
-        # Disable matplotlib font manager debug messages
+        # Disable verbose logging from various packages
         logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        logging.getLogger('rasterio').setLevel(logging.WARNING)
+        logging.getLogger('fiona').setLevel(logging.WARNING)
+        logging.getLogger('numba').setLevel(logging.WARNING)
+        logging.getLogger('numba.core').setLevel(logging.WARNING)
+        logging.getLogger('numba.core.ssa').setLevel(logging.WARNING)
+        logging.getLogger('numba.core.interpreter').setLevel(logging.WARNING)
+        logging.getLogger('numba.core.byteflow').setLevel(logging.WARNING)
+        logging.getLogger('numba.core.compiler_lock').setLevel(logging.WARNING)
         
         return logging.getLogger(f'HRUConnectivityCalculator_Gauge_{self.gauge_id}')
+
 
     def get_path(self, filename: str) -> Path:
         """

@@ -341,9 +341,9 @@ def download_esa_worldcover_for_catchment(gauge_id, shapefile_dir, output_dir, b
     print(f"\n{'='*80}")
     print(f"PROCESSING ESA WORLDCOVER FOR GAUGE {gauge_id}")
     print(f"{'='*80}")
-    
-    shapefile_path = os.path.join(shapefile_dir, f"shape_{gauge_id}.shp")
-    
+
+    shapefile_path = os.path.join(shapefile_dir, f"catchment_shape_{gauge_id}.shp")
+
     if not os.path.exists(shapefile_path):
         print(f"ERROR: Shapefile not found: {shapefile_path}")
         return None
@@ -435,7 +435,7 @@ def print_landuse_info(landuse_path):
 
 if __name__ == "__main__":
     # Parameters
-    gauge_id = "0001"  # Change this to your gauge ID
+    gauge_id = "0620"  # Change this to your gauge ID
     
     # Directories
     shapefile_dir = "/home/jberg/OneDrive/Raven_worldwide/01_data/topo/catchment_shapefile"

@@ -1,0 +1,349 @@
+nohup: ignoring input
+2025-09-06 10:53:06,440 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 10:53:06,447 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 10:53:06,452 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 10:53:06,454 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 10:53:06,661 INFO Request ID is 74f6c2f6-c59c-4693-826c-9ed5209286c6
+2025-09-06 10:53:06,710 INFO Request ID is 84fa46ff-ccca-4a53-a98d-17ca310aff16
+2025-09-06 10:53:06,865 INFO status has been updated to accepted
+2025-09-06 10:53:06,873 INFO Request ID is 2bee8185-68c6-4387-8b32-ae32a9940da2
+2025-09-06 10:53:06,903 INFO status has been updated to accepted
+2025-09-06 10:53:06,913 INFO status has been updated to accepted
+2025-09-06 10:53:07,072 INFO Request ID is 3230e22e-d0dc-4ede-9f61-2023fed21501
+2025-09-06 10:53:07,110 INFO status has been updated to accepted
+2025-09-06 11:09:25,865 INFO status has been updated to running
+2025-09-06 11:11:26,070 INFO status has been updated to successful
+2025-09-06 11:11:26,210 INFO status has been updated to running
+🚀 Starting ERA5-Land download (PARALLEL)...
+
+================================================================================
+🎯 PROCESSING GAUGE 0104 (PARALLEL MODE)
+================================================================================
+📍 Found shapefile: /home/jberg/OneDrive/Raven_worldwide/01_data/topo/catchment_shapefile/catchment_shape_0104.shp
+Extracted extent: North=35.282, West=73.503, South=34.672, East=74.236
+Buffer applied: 0.1°
+📁 Output directory: /run/user/1001/gvfs/smb-share:server=fileserv02.giub.unibe.ch,share=userdata/jberg/Meteo_data/Era5_worldwide/gauge_0104
+
+🌍 Processing variable: total_precipitation
+
+📋 Downloading 348 files for total_precipitation (parallel)
+   Years: [1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009]
+   Months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+   Max workers: 4
+📥 Downloading total_precipitation for 1981-01...
+📥 Downloading total_precipitation for 1981-02...
+📥 Downloading total_precipitation for 1981-03...
+📥 Downloading total_precipitation for 1981-04...
+615600b4232cdccd38c04b741158675f.nc:   0%|          | 0.00/152k [00:00<?, ?B/s]615600b4232cdccd38c04b741158675f.nc: 100%|██████████| 152k/152k [00:00<00:00, 738kB/s]                                                                                      2025-09-06 11:11:26,871 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:11:27,022 INFO Request ID is d6c989a4-cb32-40e9-8d40-e1647a2c447f
+2025-09-06 11:11:27,087 INFO status has been updated to accepted
+2025-09-06 11:13:26,214 INFO status has been updated to running
+2025-09-06 11:13:26,313 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_04.nc
+✅ [1/348] Downloaded: total_precipitation 1981-04
+📥 Downloading total_precipitation for 1981-05...
+63b282cfabb746c740f10bce2665b7ef.nc:   0%|          | 0.00/169k [00:00<?, ?B/s]63b282cfabb746c740f10bce2665b7ef.nc: 100%|██████████| 169k/169k [00:00<00:00, 814kB/s]                                                                                      2025-09-06 11:13:27,040 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:13:27,271 INFO Request ID is 7c746804-9291-4b71-8d6e-1e0afddec2bd
+2025-09-06 11:13:27,340 INFO status has been updated to accepted
+2025-09-06 11:15:26,351 INFO status has been updated to successful
+2025-09-06 11:15:26,398 INFO status has been updated to running
+✅ Downloaded: era5_land_total_precipitation_1981_03.nc
+✅ [2/348] Downloaded: total_precipitation 1981-03
+📥 Downloading total_precipitation for 1981-06...
+d0fdd3b6d735c3c4b82d327ccc360c67.nc:   0%|          | 0.00/178k [00:00<?, ?B/s]d0fdd3b6d735c3c4b82d327ccc360c67.nc: 100%|██████████| 178k/178k [00:00<00:00, 928kB/s]                                                                                      2025-09-06 11:15:27,047 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:15:27,184 INFO Request ID is 34546378-bc9e-4911-adeb-a5d887e9b27e
+2025-09-06 11:15:27,283 INFO status has been updated to accepted
+2025-09-06 11:17:26,529 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_02.nc
+✅ [3/348] Downloaded: total_precipitation 1981-02
+📥 Downloading total_precipitation for 1981-07...
+f5f517b0332556efcd54766c52764604.nc:   0%|          | 0.00/175k [00:00<?, ?B/s]f5f517b0332556efcd54766c52764604.nc: 100%|██████████| 175k/175k [00:00<00:00, 880kB/s]                                                                                      2025-09-06 11:17:27,208 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:17:27,464 INFO Request ID is c33c7de7-dd00-43c4-adf3-740ced907289
+2025-09-06 11:17:27,507 INFO status has been updated to accepted
+2025-09-06 11:27:46,714 INFO status has been updated to running
+2025-09-06 11:29:46,792 INFO status has been updated to running
+2025-09-06 11:29:46,825 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_01.nc
+✅ [4/348] Downloaded: total_precipitation 1981-01
+📥 Downloading total_precipitation for 1981-08...
+7c8220f3140dc031b716b0d1380ad439.nc:   0%|          | 0.00/174k [00:00<?, ?B/s]7c8220f3140dc031b716b0d1380ad439.nc: 100%|██████████| 174k/174k [00:00<00:00, 785kB/s]                                                                                      2025-09-06 11:29:47,502 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:29:47,626 INFO Request ID is 10bc3f83-c24d-4d91-86ec-ec9e9fd6b97f
+2025-09-06 11:29:47,714 INFO status has been updated to accepted
+2025-09-06 11:31:46,897 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_05.nc
+✅ [5/348] Downloaded: total_precipitation 1981-05
+📥 Downloading total_precipitation for 1981-09...
+3559473fe3b85e43c3e16ebb5244515.nc:   0%|          | 0.00/185k [00:00<?, ?B/s]2025-09-06 11:31:47,233 INFO status has been updated to running
+3559473fe3b85e43c3e16ebb5244515.nc: 100%|██████████| 185k/185k [00:00<00:00, 918kB/s]                                                                                     2025-09-06 11:31:47,522 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:31:47,673 INFO Request ID is 64fe4c18-5a60-4ddc-9273-a9157e4149b9
+2025-09-06 11:31:47,712 INFO status has been updated to accepted
+2025-09-06 11:33:46,909 INFO status has been updated to running
+2025-09-06 11:33:47,344 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_06.nc
+✅ [6/348] Downloaded: total_precipitation 1981-06
+📥 Downloading total_precipitation for 1981-10...
+5b1d23a041ad69cdba87115f76452809.nc:   0%|          | 0.00/197k [00:00<?, ?B/s]5b1d23a041ad69cdba87115f76452809.nc: 100%|██████████| 197k/197k [00:00<00:00, 935kB/s]                                                                                      2025-09-06 11:33:48,049 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:33:48,161 INFO Request ID is d281ca12-a737-4719-8d10-5a852e15f4a4
+2025-09-06 11:33:48,218 INFO status has been updated to accepted
+2025-09-06 11:35:47,000 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_07.nc
+✅ [7/348] Downloaded: total_precipitation 1981-07
+📥 Downloading total_precipitation for 1981-11...
+2241b91acceb79d3bd53aac29c95d6e6.nc:   0%|          | 0.00/198k [00:00<?, ?B/s]2241b91acceb79d3bd53aac29c95d6e6.nc: 100%|██████████| 198k/198k [00:00<00:00, 617kB/s]                                                                                      2025-09-06 11:35:47,849 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:35:47,976 INFO Request ID is b5747ace-771a-4348-aaf5-327bcdfa4a83
+2025-09-06 11:35:48,031 INFO status has been updated to accepted
+2025-09-06 11:58:08,042 INFO status has been updated to running
+2025-09-06 12:00:07,955 INFO status has been updated to running
+2025-09-06 12:00:08,194 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_08.nc
+✅ [8/348] Downloaded: total_precipitation 1981-08
+📥 Downloading total_precipitation for 1981-12...
+481644a5981141ebd38ee445789a8418.nc:   0%|          | 0.00/181k [00:00<?, ?B/s]481644a5981141ebd38ee445789a8418.nc: 100%|██████████| 181k/181k [00:00<00:00, 738kB/s]                                                                                      2025-09-06 12:00:09,377 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:00:09,584 INFO Request ID is 05b0bcfa-413d-4949-bbcc-735939f6823c
+2025-09-06 12:00:09,651 INFO status has been updated to accepted
+2025-09-06 12:02:07,992 INFO status has been updated to running
+2025-09-06 12:02:08,060 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_09.nc
+✅ [9/348] Downloaded: total_precipitation 1981-09
+📥 Downloading total_precipitation for 1982-01...
+815f81f4c3a04a34fd9b70e5cd562e7d.nc:   0%|          | 0.00/189k [00:00<?, ?B/s]815f81f4c3a04a34fd9b70e5cd562e7d.nc: 100%|██████████| 189k/189k [00:00<00:00, 940kB/s]                                                                                      2025-09-06 12:02:08,812 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:02:09,658 INFO Request ID is 9c14126a-4507-47aa-aeb2-ef8d468bd46b
+2025-09-06 12:02:09,721 INFO status has been updated to accepted
+2025-09-06 12:04:08,113 INFO status has been updated to successful
+2025-09-06 12:04:08,312 INFO status has been updated to running
+✅ Downloaded: era5_land_total_precipitation_1981_10.nc
+✅ [10/348] Downloaded: total_precipitation 1981-10
+📥 Downloading total_precipitation for 1982-02...
+7afcfe77bef0a4f770f69e1fbfd91f2c.nc:   0%|          | 0.00/154k [00:00<?, ?B/s]7afcfe77bef0a4f770f69e1fbfd91f2c.nc: 100%|██████████| 154k/154k [00:00<00:00, 808kB/s]                                                                                      2025-09-06 12:04:09,011 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:04:09,125 INFO Request ID is 21766959-2f65-4122-bb03-91defe1f8892
+2025-09-06 12:04:09,167 INFO status has been updated to accepted
+2025-09-06 12:06:08,430 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_11.nc
+✅ [11/348] Downloaded: total_precipitation 1981-11
+📥 Downloading total_precipitation for 1982-03...
+962fef4a4c7b2f79fadc0abae76b5b9e.nc:   0%|          | 0.00/145k [00:00<?, ?B/s]962fef4a4c7b2f79fadc0abae76b5b9e.nc: 100%|██████████| 145k/145k [00:00<00:00, 665kB/s]                                                                                      2025-09-06 12:06:09,133 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:06:09,300 INFO Request ID is 3129ef26-5bd7-42e9-bc95-79f7098da4e8
+2025-09-06 12:06:09,341 INFO status has been updated to accepted
+2025-09-06 12:22:29,089 INFO status has been updated to running
+2025-09-06 12:24:29,212 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1981_12.nc
+✅ [12/348] Downloaded: total_precipitation 1981-12
+📥 Downloading total_precipitation for 1982-04...
+a95c27153a573780c9f5a9e0058697d4.nc:   0%|          | 0.00/168k [00:00<?, ?B/s]a95c27153a573780c9f5a9e0058697d4.nc: 100%|██████████| 168k/168k [00:00<00:00, 824kB/s]                                                                                      2025-09-06 12:24:30,079 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:24:30,210 INFO Request ID is e0842119-8813-4be3-876e-ec41300bddf1
+2025-09-06 12:24:30,258 INFO status has been updated to accepted
+2025-09-06 12:24:31,485 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_01.nc
+✅ [13/348] Downloaded: total_precipitation 1982-01
+📥 Downloading total_precipitation for 1982-05...
+226c2088afa9f4629597c9c2fe389dc.nc:   0%|          | 0.00/177k [00:00<?, ?B/s]226c2088afa9f4629597c9c2fe389dc.nc: 100%|██████████| 177k/177k [00:00<00:00, 881kB/s]                                                                                     2025-09-06 12:24:32,804 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:24:32,970 INFO Request ID is a15d8eac-4f7d-4fac-925f-52e3e4184f5a
+2025-09-06 12:24:33,078 INFO status has been updated to accepted
+2025-09-06 12:26:29,179 INFO status has been updated to running
+2025-09-06 12:28:29,254 INFO status has been updated to running
+2025-09-06 12:28:29,294 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_02.nc
+✅ [14/348] Downloaded: total_precipitation 1982-02
+📥 Downloading total_precipitation for 1982-06...
+405f481451e1159a5379403997bc6251.nc:   0%|          | 0.00/200k [00:00<?, ?B/s]405f481451e1159a5379403997bc6251.nc: 100%|██████████| 200k/200k [00:00<00:00, 487kB/s]                                                                                      2025-09-06 12:28:30,221 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:28:30,413 INFO Request ID is c314f95a-b53c-42a4-8d68-41098df9667c
+2025-09-06 12:28:30,454 INFO status has been updated to accepted
+2025-09-06 12:30:29,416 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_03.nc
+✅ [15/348] Downloaded: total_precipitation 1982-03
+📥 Downloading total_precipitation for 1982-07...
+bcdf8467086e8e83f6eb5dda4441317f.nc:   0%|          | 0.00/147k [00:00<?, ?B/s]bcdf8467086e8e83f6eb5dda4441317f.nc: 100%|██████████| 147k/147k [00:00<00:00, 818kB/s]                                                                                      2025-09-06 12:30:33,787 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:30:33,971 INFO Request ID is e61fe88e-2197-41c7-9de6-b378db67d4b1
+2025-09-06 12:30:34,054 INFO status has been updated to accepted
+2025-09-06 12:46:49,451 INFO status has been updated to running
+2025-09-06 12:50:49,717 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_04.nc
+✅ [16/348] Downloaded: total_precipitation 1982-04
+📥 Downloading total_precipitation for 1982-08...
+6c8631e46a06bdc86ded5d84f3401b1f.nc:   0%|          | 0.00/168k [00:00<?, ?B/s]6c8631e46a06bdc86ded5d84f3401b1f.nc: 100%|██████████| 168k/168k [00:00<00:00, 480kB/s]                                                                                      2025-09-06 12:50:51,725 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:50:51,915 INFO Request ID is 769eb016-cb87-4748-9276-e4a606f85f85
+2025-09-06 12:50:51,976 INFO status has been updated to accepted
+2025-09-06 12:50:52,623 INFO status has been updated to running
+2025-09-06 12:52:50,233 INFO status has been updated to running
+2025-09-06 12:52:53,122 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_05.nc
+✅ [17/348] Downloaded: total_precipitation 1982-05
+📥 Downloading total_precipitation for 1982-09...
+a0cd46eb29a41e083d5c8b52e54ddb56.nc:   0%|          | 0.00/168k [00:00<?, ?B/s]a0cd46eb29a41e083d5c8b52e54ddb56.nc: 100%|██████████| 168k/168k [00:00<00:00, 667kB/s]                                                                                      2025-09-06 12:52:54,059 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:52:55,458 INFO Request ID is 5e5735f2-b147-44bd-85d6-840ed096006c
+2025-09-06 12:52:55,500 INFO status has been updated to accepted
+2025-09-06 12:54:50,362 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_06.nc
+✅ [18/348] Downloaded: total_precipitation 1982-06
+📥 Downloading total_precipitation for 1982-10...
+3c239da5c2835687eba97922cdf4fa7d.nc:   0%|          | 0.00/194k [00:00<?, ?B/s]3c239da5c2835687eba97922cdf4fa7d.nc: 100%|██████████| 194k/194k [00:00<00:00, 862kB/s]                                                                                      2025-09-06 12:54:51,073 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:54:51,213 INFO Request ID is 7b86001f-8810-4e7c-967e-47a85b428440
+2025-09-06 12:54:51,267 INFO status has been updated to accepted
+2025-09-06 12:54:53,868 INFO status has been updated to running
+2025-09-06 12:56:53,998 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_07.nc
+✅ [19/348] Downloaded: total_precipitation 1982-07
+📥 Downloading total_precipitation for 1982-11...
+305a39aadb180aa05e2e55b63600fac.nc:   0%|          | 0.00/197k [00:00<?, ?B/s]305a39aadb180aa05e2e55b63600fac.nc: 100%|██████████| 197k/197k [00:00<00:00, 910kB/s]                                                                                     2025-09-06 12:56:56,352 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:56:56,572 INFO Request ID is 33dd0bdd-97df-433f-940d-8df207ec86cb
+2025-09-06 12:56:56,613 INFO status has been updated to accepted
+2025-09-06 13:13:11,221 INFO status has been updated to running
+2025-09-06 13:15:11,438 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_08.nc
+✅ [20/348] Downloaded: total_precipitation 1982-08
+📥 Downloading total_precipitation for 1982-12...
+4e474d45e49ac947fcd139345a016c66.nc:   0%|          | 0.00/193k [00:00<?, ?B/s]4e474d45e49ac947fcd139345a016c66.nc: 100%|██████████| 193k/193k [00:00<00:00, 820kB/s]                                                                                      2025-09-06 13:15:12,554 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:15:12,680 INFO Request ID is 54b6a3af-2f29-43a7-af1c-c15ddd78b205
+2025-09-06 13:15:12,729 INFO status has been updated to accepted
+2025-09-06 13:15:14,732 INFO status has been updated to running
+2025-09-06 13:17:10,649 INFO status has been updated to running
+2025-09-06 13:17:14,943 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_09.nc
+✅ [21/348] Downloaded: total_precipitation 1982-09
+📥 Downloading total_precipitation for 1983-01...
+d35ee473012120d227fdb12c0ed92d4.nc:   0%|          | 0.00/188k [00:00<?, ?B/s]d35ee473012120d227fdb12c0ed92d4.nc: 100%|██████████| 188k/188k [00:00<00:00, 455kB/s]                                                                                     2025-09-06 13:17:19,069 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:17:19,343 INFO Request ID is 447609c8-0352-4e87-82f8-3788c063899f
+2025-09-06 13:17:19,442 INFO status has been updated to accepted
+2025-09-06 13:19:10,869 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_10.nc
+✅ [22/348] Downloaded: total_precipitation 1982-10
+📥 Downloading total_precipitation for 1983-02...
+4d7b88285879bfdb8bd2138f3b0a4875.nc:   0%|          | 0.00/183k [00:00<?, ?B/s]4d7b88285879bfdb8bd2138f3b0a4875.nc: 100%|██████████| 183k/183k [00:00<00:00, 838kB/s]                                                                                      2025-09-06 13:19:11,642 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:19:11,792 INFO Request ID is f62a29da-e417-42af-86a5-2e80fc822c69
+2025-09-06 13:19:11,853 INFO status has been updated to accepted
+2025-09-06 13:19:16,191 INFO status has been updated to running
+2025-09-06 13:21:16,314 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_11.nc
+✅ [23/348] Downloaded: total_precipitation 1982-11
+📥 Downloading total_precipitation for 1983-03...
+2799f955028803d31d9c0b48a8c6ba6.nc:   0%|          | 0.00/179k [00:00<?, ?B/s]2799f955028803d31d9c0b48a8c6ba6.nc: 100%|██████████| 179k/179k [00:00<00:00, 829kB/s]                                                                                     2025-09-06 13:21:17,029 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:21:17,196 INFO Request ID is 1af69cdb-6c48-482a-ac59-e5c827e71e89
+2025-09-06 13:21:17,235 INFO status has been updated to accepted
+2025-09-06 13:41:32,879 INFO status has been updated to running
+2025-09-06 13:43:32,984 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1982_12.nc
+✅ [24/348] Downloaded: total_precipitation 1982-12
+📥 Downloading total_precipitation for 1983-04...
+9f6e4ad876a3bf4b5e4115d29089b309.nc:   0%|          | 0.00/173k [00:00<?, ?B/s]9f6e4ad876a3bf4b5e4115d29089b309.nc: 100%|██████████| 173k/173k [00:00<00:00, 938kB/s]                                                                                      2025-09-06 13:43:33,684 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:43:33,864 INFO Request ID is 6dd21059-46fb-4e59-89e2-d2b1fa0268e2
+2025-09-06 13:43:34,095 INFO status has been updated to accepted
+2025-09-06 13:43:39,014 INFO status has been updated to running
+2025-09-06 13:45:31,650 INFO status has been updated to running
+2025-09-06 13:45:39,101 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_01.nc
+✅ [25/348] Downloaded: total_precipitation 1983-01
+📥 Downloading total_precipitation for 1983-05...
+ce7a9a8d2705fb87639300a84bae11c2.nc:   0%|          | 0.00/162k [00:00<?, ?B/s]ce7a9a8d2705fb87639300a84bae11c2.nc: 100%|██████████| 162k/162k [00:00<00:00, 744kB/s]                                                                                      2025-09-06 13:45:40,116 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:45:40,347 INFO Request ID is 52f253c8-fe18-4553-8d89-73e75a41e228
+2025-09-06 13:45:40,405 INFO status has been updated to accepted
+2025-09-06 13:47:31,780 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_02.nc
+✅ [26/348] Downloaded: total_precipitation 1983-02
+📥 Downloading total_precipitation for 1983-06...
+359680cca3111873122f9287855a562e.nc:   0%|          | 0.00/179k [00:00<?, ?B/s]359680cca3111873122f9287855a562e.nc: 100%|██████████| 179k/179k [00:00<00:00, 834kB/s]                                                                                      2025-09-06 13:47:32,732 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:47:32,894 INFO Request ID is 27349fb8-0e82-42e3-8533-9788cec1cbc9
+2025-09-06 13:47:32,982 INFO status has been updated to accepted
+2025-09-06 13:47:36,717 INFO status has been updated to running
+2025-09-06 13:49:36,835 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_03.nc
+✅ [27/348] Downloaded: total_precipitation 1983-03
+📥 Downloading total_precipitation for 1983-07...
+9003a90b43e0bb4e05240e8d979d4f69.nc:   0%|          | 0.00/174k [00:00<?, ?B/s]9003a90b43e0bb4e05240e8d979d4f69.nc: 100%|██████████| 174k/174k [00:00<00:00, 864kB/s]                                                                                      2025-09-06 13:49:37,555 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:49:37,711 INFO Request ID is 3b39a630-8e5f-4a66-ab3b-cf79fd001ec2
+2025-09-06 13:49:37,805 INFO status has been updated to accepted
+2025-09-06 14:07:54,439 INFO status has been updated to running
+2025-09-06 14:09:54,586 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_04.nc
+✅ [28/348] Downloaded: total_precipitation 1983-04
+📥 Downloading total_precipitation for 1983-08...
+4785fb7efebb1f9b13c8a6e197908fb2.nc:   0%|          | 0.00/168k [00:00<?, ?B/s]4785fb7efebb1f9b13c8a6e197908fb2.nc: 100%|██████████| 168k/168k [00:00<00:00, 787kB/s]                                                                                      2025-09-06 14:09:57,593 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:09:57,736 INFO Request ID is e712242f-8c1a-4cb6-8d14-b5e9ac67b083
+2025-09-06 14:09:57,797 INFO status has been updated to accepted
+2025-09-06 14:10:00,259 INFO status has been updated to running
+2025-09-06 14:11:52,859 INFO status has been updated to running
+2025-09-06 14:12:00,424 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_05.nc
+✅ [29/348] Downloaded: total_precipitation 1983-05
+📥 Downloading total_precipitation for 1983-09...
+5ec8efaca5ad7b06873d77174b40f474.nc:   0%|          | 0.00/173k [00:00<?, ?B/s]5ec8efaca5ad7b06873d77174b40f474.nc: 100%|██████████| 173k/173k [00:00<00:00, 425kB/s]                                                                                      2025-09-06 14:12:01,509 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:12:01,635 INFO Request ID is 05352161-150a-4aaf-862e-4824fcb863a0
+2025-09-06 14:12:01,676 INFO status has been updated to accepted
+2025-09-06 14:13:53,083 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_06.nc
+✅ [30/348] Downloaded: total_precipitation 1983-06
+📥 Downloading total_precipitation for 1983-10...
+5313d7efd298ca111972597a0cdff21c.nc:   0%|          | 0.00/191k [00:00<?, ?B/s]5313d7efd298ca111972597a0cdff21c.nc: 100%|██████████| 191k/191k [00:00<00:00, 639kB/s]                                                                                      2025-09-06 14:13:53,958 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:13:54,125 INFO Request ID is 900de38c-076a-4efd-a8aa-e5504a1cc05d
+2025-09-06 14:13:54,171 INFO status has been updated to accepted
+2025-09-06 14:13:57,953 INFO status has been updated to running
+2025-09-06 14:17:58,188 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_07.nc
+✅ [31/348] Downloaded: total_precipitation 1983-07
+📥 Downloading total_precipitation for 1983-11...
+d471060339eb676b2b963ce3ffbdda5e.nc:   0%|          | 0.00/193k [00:00<?, ?B/s]d471060339eb676b2b963ce3ffbdda5e.nc: 100%|██████████| 193k/193k [00:00<00:00, 919kB/s]                                                                                      2025-09-06 14:17:58,946 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:17:59,136 INFO Request ID is 64801048-72b9-4161-b9dc-ee9bc907c986
+2025-09-06 14:17:59,195 INFO status has been updated to accepted
+2025-09-06 14:32:17,633 INFO status has been updated to running
+2025-09-06 14:34:17,785 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_08.nc
+✅ [32/348] Downloaded: total_precipitation 1983-08
+📥 Downloading total_precipitation for 1983-12...
+1bd4157ac39e6b2921bb05cfa9ffdf21.nc:   0%|          | 0.00/179k [00:00<?, ?B/s]1bd4157ac39e6b2921bb05cfa9ffdf21.nc: 100%|██████████| 179k/179k [00:00<00:00, 912kB/s]                                                                                      2025-09-06 14:34:18,535 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:34:18,918 INFO Request ID is b2798ff5-df46-42d1-9166-3a780e803679
+2025-09-06 14:34:18,966 INFO status has been updated to accepted
+2025-09-06 14:34:21,679 INFO status has been updated to running
+2025-09-06 14:36:21,779 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_09.nc
+✅ [33/348] Downloaded: total_precipitation 1983-09
+📥 Downloading total_precipitation for 1984-01...
+7b09f66f9f903a9a90935771538fd56.nc:   0%|          | 0.00/168k [00:00<?, ?B/s]7b09f66f9f903a9a90935771538fd56.nc: 100%|██████████| 168k/168k [00:00<00:00, 933kB/s]                                                                                     2025-09-06 14:36:22,613 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:36:22,745 INFO Request ID is 2a18adc5-37d0-4b79-94dc-0ba3f0a4fdbd
+2025-09-06 14:36:22,782 INFO status has been updated to accepted
+2025-09-06 14:38:18,862 INFO status has been updated to running
+2025-09-06 14:40:14,358 INFO status has been updated to running
+2025-09-06 14:40:19,010 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_10.nc
+✅ [34/348] Downloaded: total_precipitation 1983-10
+📥 Downloading total_precipitation for 1984-02...
+e05d6318558f78c104cdf3ec60f6ecc.nc:   0%|          | 0.00/178k [00:00<?, ?B/s]e05d6318558f78c104cdf3ec60f6ecc.nc: 100%|██████████| 178k/178k [00:00<00:00, 865kB/s]                                                                                     2025-09-06 14:40:19,740 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:40:20,527 INFO Request ID is 78b576ac-c4bd-453f-a781-0003dd287fc6
+2025-09-06 14:40:20,608 INFO status has been updated to accepted
+2025-09-06 14:42:14,532 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_12.nc
+✅ [35/348] Downloaded: total_precipitation 1983-12
+📥 Downloading total_precipitation for 1984-03...
+13737a9ef5f57d4bfb71cad9e97cb3b6.nc:   0%|          | 0.00/116k [00:00<?, ?B/s]13737a9ef5f57d4bfb71cad9e97cb3b6.nc: 100%|██████████| 116k/116k [00:00<00:00, 578kB/s]                                                                                      2025-09-06 14:42:15,269 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:42:15,433 INFO Request ID is ae7293ff-66d8-426a-ab8d-9b22eea0df5c
+2025-09-06 14:42:15,473 INFO status has been updated to accepted
+2025-09-06 14:50:38,421 INFO status has been updated to running
+2025-09-06 14:52:38,545 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1983_11.nc
+✅ [36/348] Downloaded: total_precipitation 1983-11
+📥 Downloading total_precipitation for 1984-04...
+ecda050be8e8f138f241a0014b36a0ea.nc:   0%|          | 0.00/184k [00:00<?, ?B/s]ecda050be8e8f138f241a0014b36a0ea.nc: 100%|██████████| 184k/184k [00:00<00:00, 726kB/s]                                                                                      2025-09-06 14:52:39,413 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:52:39,568 INFO Request ID is f554fb03-0310-4536-9fe0-298c5cb4d48d
+2025-09-06 14:52:39,874 INFO status has been updated to accepted
+2025-09-06 14:52:42,135 INFO status has been updated to running
+2025-09-06 14:56:39,907 INFO status has been updated to running
+2025-09-06 14:56:42,478 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1984_01.nc
+✅ [37/348] Downloaded: total_precipitation 1984-01
+📥 Downloading total_precipitation for 1984-05...
+a970ae963c76ced557002c688907025d.nc:   0%|          | 0.00/178k [00:00<?, ?B/s]a970ae963c76ced557002c688907025d.nc: 100%|██████████| 178k/178k [00:00<00:00, 502kB/s]                                                                                      2025-09-06 14:56:45,745 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:56:45,858 INFO Request ID is 5115c969-15c9-4425-a602-bb93117ae304
+2025-09-06 14:56:45,910 INFO status has been updated to accepted
+2025-09-06 14:58:34,592 INFO status has been updated to running
+2025-09-06 14:58:40,009 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1984_02.nc
+✅ [38/348] Downloaded: total_precipitation 1984-02
+📥 Downloading total_precipitation for 1984-06...
+687e19e9fd7daed0f2fbd8993a06cf80.nc:   0%|          | 0.00/172k [00:00<?, ?B/s]687e19e9fd7daed0f2fbd8993a06cf80.nc: 100%|██████████| 172k/172k [00:00<00:00, 821kB/s]                                                                                      2025-09-06 14:58:40,735 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:58:40,877 INFO Request ID is 087b45d5-2612-4cd5-a2ae-3382b2b0d5c7
+2025-09-06 14:58:40,969 INFO status has been updated to accepted
+2025-09-06 15:00:34,722 INFO status has been updated to successful
+✅ Downloaded: era5_land_total_precipitation_1984_03.nc
+✅ [39/348] Downloaded: total_precipitation 1984-03
+📥 Downloading total_precipitation for 1984-07...
+3952125d17a22f5e5e8d82394616ab4c.nc:   0%|          | 0.00/173k [00:00<?, ?B/s]3952125d17a22f5e5e8d82394616ab4c.nc: 100%|██████████| 173k/173k [00:00<00:00, 577kB/s]                                                                                      2025-09-06 15:00:35,568 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 15:00:35,709 INFO Request ID is aad86466-4ab3-49b9-8adb-656c04eba3f3
+2025-09-06 15:00:35,777 INFO status has been updated to accepted

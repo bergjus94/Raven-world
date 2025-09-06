@@ -246,14 +246,14 @@ class ERA5LandAnalyzer:
 
     def _combine_monthly_files(self, file_list: List[Path], variable_type: str) -> Optional[xr.Dataset]:
         """
-        Combine monthly files into a single dataset
+        Combine monthly files into a single dataset, with better error handling
         
         Parameters
         ----------
         file_list : List[Path]
             List of monthly NetCDF files
         variable_type : str
-            'temperature' or 'precipitation'
+            'temperature', 'precipitation', or 'potential_evaporation'
             
         Returns
         -------
@@ -270,34 +270,175 @@ class ERA5LandAnalyzer:
             # Sort files to ensure chronological order
             sorted_files = sorted(file_list)
             
-            # Open multiple files and combine along time dimension
-            ds = xr.open_mfdataset(sorted_files, combine='by_coords', chunks={'time': 100})
+            # ✅ IMPROVED: First check which files are valid
+            valid_files = []
+            invalid_files = []
             
-            # Handle different time coordinate names
-            time_coord = None
-            for coord in ['time', 'valid_time', 'datetime']:
-                if coord in ds.dims:
-                    time_coord = coord
-                    break
+            for file_path in sorted_files:
+                try:
+                    # Quick test to see if file can be opened
+                    with xr.open_dataset(file_path, engine='netcdf4') as test_ds:
+                        # Check if it has the expected dimensions
+                        if 'time' in test_ds.dims or 'valid_time' in test_ds.dims:
+                            valid_files.append(file_path)
+                        else:
+                            invalid_files.append(file_path)
+                            self.logger.warning(f"File missing time dimension: {file_path.name}")
+                except Exception as e:
+                    invalid_files.append(file_path)
+                    self.logger.error(f"Cannot read file {file_path.name}: {str(e)}")
             
-            if time_coord is None:
-                self.logger.error(f"No time coordinate found in {variable_type} dataset")
+            if invalid_files:
+                self.logger.warning(f"Found {len(invalid_files)} invalid files out of {len(sorted_files)}")
+                
+            if not valid_files:
+                self.logger.error(f"No valid files found for {variable_type}")
+                return None
+                
+            self.logger.info(f"Using {len(valid_files)} valid files out of {len(sorted_files)}")
+            
+            # ✅ COMPLETELY REWRITTEN: Use xarray's built-in concatenation with proper time handling
+            if len(valid_files) > 50:  # For large numbers of files
+                self.logger.info(f"Large file count ({len(valid_files)}) - using batch processing with proper time concatenation")
+                
+                # Process in smaller batches but with proper time coordinate handling
+                batch_size = 12  # Monthly files, so 12 = 1 year batches
+                datasets = []
+                
+                for i in range(0, len(valid_files), batch_size):
+                    batch_files = valid_files[i:i+batch_size]
+                    batch_num = i//batch_size + 1
+                    total_batches = (len(valid_files)-1)//batch_size + 1
+                    
+                    self.logger.debug(f"Processing batch {batch_num}/{total_batches}: {len(batch_files)} files")
+                    
+                    try:
+                        # Open and immediately combine this batch
+                        batch_datasets = []
+                        for file_path in batch_files:
+                            ds = xr.open_dataset(file_path, engine='netcdf4')
+                            
+                            # Standardize time coordinate name immediately
+                            time_coord = None
+                            for coord in ['time', 'valid_time', 'datetime']:
+                                if coord in ds.dims:
+                                    time_coord = coord
+                                    break
+                            
+                            if time_coord and time_coord != 'time':
+                                ds = ds.rename({time_coord: 'time'})
+                            
+                            # Ensure time is properly decoded
+                            if 'time' in ds.coords:
+                                if not pd.api.types.is_datetime64_any_dtype(ds.time):
+                                    # Try to decode time coordinate
+                                    try:
+                                        ds = xr.decode_cf(ds)
+                                    except:
+                                        self.logger.warning(f"Could not decode time for {file_path.name}")
+                            
+                            batch_datasets.append(ds)
+                        
+                        # Concatenate this batch along time dimension
+                        if batch_datasets:
+                            batch_combined = xr.concat(batch_datasets, dim='time', combine_attrs='drop_conflicts')
+                            
+                            # Sort by time to ensure chronological order
+                            batch_combined = batch_combined.sortby('time')
+                            
+                            # Load into memory to free file handles
+                            batch_combined = batch_combined.load()
+                            datasets.append(batch_combined)
+                            
+                            # Close individual datasets
+                            for ds in batch_datasets:
+                                ds.close()
+                        
+                    except Exception as e:
+                        self.logger.error(f"Error processing batch {batch_num}: {str(e)}")
+                        continue
+                
+                if not datasets:
+                    self.logger.error(f"No datasets could be processed for {variable_type}")
+                    return None
+                
+                # Combine all batches
+                self.logger.info(f"Combining {len(datasets)} batches...")
+                ds = xr.concat(datasets, dim='time', combine_attrs='drop_conflicts')
+                
+                # Close batch datasets to free memory
+                for batch_ds in datasets:
+                    batch_ds.close()
+                    
+            else:
+                # ✅ SIMPLIFIED: Direct approach for smaller file counts with proper time handling
+                self.logger.info(f"Processing {len(valid_files)} files directly")
+                
+                # Open all files and standardize time coordinates
+                datasets = []
+                for file_path in valid_files:
+                    ds = xr.open_dataset(file_path, engine='netcdf4')
+                    
+                    # Standardize time coordinate name
+                    time_coord = None
+                    for coord in ['time', 'valid_time', 'datetime']:
+                        if coord in ds.dims:
+                            time_coord = coord
+                            break
+                    
+                    if time_coord and time_coord != 'time':
+                        ds = ds.rename({time_coord: 'time'})
+                    
+                    # Ensure time is properly decoded
+                    if 'time' in ds.coords:
+                        if not pd.api.types.is_datetime64_any_dtype(ds.time):
+                            try:
+                                ds = xr.decode_cf(ds)
+                            except:
+                                self.logger.warning(f"Could not decode time for {file_path.name}")
+                    
+                    datasets.append(ds)
+                
+                # Concatenate all datasets
+                ds = xr.concat(datasets, dim='time', combine_attrs='drop_conflicts')
+                
+                # Close individual datasets
+                for dataset in datasets:
+                    dataset.close()
+            
+            # ✅ FINAL TIME COORDINATE VERIFICATION AND CLEANUP
+            if 'time' not in ds.dims:
+                self.logger.error(f"No time coordinate found in combined {variable_type} dataset")
+                self.logger.debug(f"Available dimensions: {list(ds.dims)}")
+                self.logger.debug(f"Available coordinates: {list(ds.coords)}")
                 return None
             
-            # Rename to standard 'time' if needed
-            if time_coord != 'time':
-                self.logger.debug(f"Renaming time coordinate from '{time_coord}' to 'time'")
-                ds = ds.rename({time_coord: 'time'})
+            # Ensure time is properly sorted
+            ds = ds.sortby('time')
+            
+            # Verify we have a proper datetime index
+            if not pd.api.types.is_datetime64_any_dtype(ds.time):
+                self.logger.error(f"Time coordinate is not datetime type: {ds.time.dtype}")
+                # Try one more time to decode
+                try:
+                    ds = xr.decode_cf(ds)
+                    self.logger.debug("Successfully decoded time coordinate")
+                except Exception as e:
+                    self.logger.error(f"Failed to decode time coordinate: {e}")
+                    return None
             
             self.logger.info(f"Combined {variable_type} dataset shape: {dict(ds.dims)}")
             self.logger.info(f"Time range: {ds.time.min().values} to {ds.time.max().values}")
+            self.logger.info(f"Time coordinate type: {ds.time.dtype}")
             
             return ds
             
         except Exception as e:
             self.logger.error(f"Error combining {variable_type} files: {str(e)}")
+            import traceback
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             return None
-        
+            
     
     #---------------------------------------------------------------------------------
 
@@ -320,14 +461,26 @@ class ERA5LandAnalyzer:
             self.logger.warning("No 'time' coordinate found in dataset")
             return dataset
         
-        # Filter to exact date range
-        filtered_ds = dataset.sel(time=slice(self.start_date, self.end_date))
-        
-        self.logger.info(f"Filtered to exact range: {self.start_date.date()} to {self.end_date.date()}")
-        self.logger.info(f"Filtered time range: {filtered_ds.time.min().values} to {filtered_ds.time.max().values}")
-        self.logger.info(f"Filtered dataset shape: {dict(filtered_ds.dims)}")
-        
-        return filtered_ds
+        try:
+            # Convert start and end dates to the same format as the dataset time coordinate
+            start_date_str = self.start_date.strftime('%Y-%m-%d')
+            end_date_str = self.end_date.strftime('%Y-%m-%d')
+            
+            self.logger.debug(f"Filtering from {start_date_str} to {end_date_str}")
+            
+            # Filter to exact date range using string dates
+            filtered_ds = dataset.sel(time=slice(start_date_str, end_date_str))
+            
+            self.logger.info(f"Filtered to exact range: {self.start_date.date()} to {self.end_date.date()}")
+            self.logger.info(f"Filtered time range: {filtered_ds.time.min().values} to {filtered_ds.time.max().values}")
+            self.logger.info(f"Filtered dataset shape: {dict(filtered_ds.dims)}")
+            
+            return filtered_ds
+            
+        except Exception as e:
+            self.logger.error(f"Error filtering time range: {str(e)}")
+            self.logger.warning("Returning unfiltered dataset")
+            return dataset
 
     #---------------------------------------------------------------------------------
 

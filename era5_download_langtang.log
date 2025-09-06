@@ -1,0 +1,292 @@
+nohup: ignoring input
+2025-09-06 11:27:56,862 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:27:56,865 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:27:56,867 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:27:56,899 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:27:57,002 INFO Request ID is cadb6099-c3a5-4b6e-aceb-7889732c7b83
+2025-09-06 11:27:57,017 INFO Request ID is 77c0a4c6-4d01-4b84-8a40-8a5f90481642
+2025-09-06 11:27:57,056 INFO Request ID is ada1ddf5-82e1-47af-87b3-150611817265
+2025-09-06 11:27:57,066 INFO status has been updated to accepted
+2025-09-06 11:27:57,088 INFO status has been updated to accepted
+2025-09-06 11:27:57,092 INFO status has been updated to accepted
+2025-09-06 11:27:57,111 INFO Request ID is b5f933a4-16e5-4bdb-8331-27d50d55cdcc
+2025-09-06 11:27:57,147 INFO status has been updated to accepted
+2025-09-06 11:44:16,415 INFO status has been updated to running
+2025-09-06 11:46:16,448 INFO status has been updated to running
+2025-09-06 11:46:16,536 INFO status has been updated to successful
+🚀 Starting ERA5-Land download (PARALLEL)...
+
+================================================================================
+🎯 PROCESSING GAUGE 4461 (PARALLEL MODE)
+================================================================================
+📍 Found shapefile: /home/jberg/OneDrive/Raven_worldwide/01_data/topo/catchment_shapefile/catchment_shape_4461.shp
+Extracted extent: North=28.485, West=85.450, South=28.030, East=85.898
+Buffer applied: 0.1°
+📁 Output directory: /run/user/1001/gvfs/smb-share:server=fileserv02.giub.unibe.ch,share=userdata/jberg/Meteo_data/Era5_worldwide/gauge_4461
+
+🌍 Processing variable: potential_evaporation
+
+📋 Downloading 48 files for potential_evaporation (parallel)
+   Years: [1993, 2003, 2013, 2020]
+   Months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+   Max workers: 4
+📥 Downloading potential_evaporation for 1993-01...
+📥 Downloading potential_evaporation for 1993-03...
+📥 Downloading potential_evaporation for 1993-02...
+📥 Downloading potential_evaporation for 1993-04...
+9f0c3136950bee931348ab904ebbfca9.nc:   0%|          | 0.00/128k [00:00<?, ?B/s]9f0c3136950bee931348ab904ebbfca9.nc: 100%|██████████| 128k/128k [00:00<00:00, 501kB/s]                                                                                      2025-09-06 11:46:17,549 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:46:17,735 INFO Request ID is 38f2f69f-99ec-4527-8afb-71bf98ddb121
+2025-09-06 11:46:17,775 INFO status has been updated to accepted
+2025-09-06 11:50:16,302 INFO status has been updated to running
+2025-09-06 11:50:16,673 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_01.nc
+✅ [1/48] Downloaded: potential_evaporation 1993-01
+📥 Downloading potential_evaporation for 1993-05...
+b88c2cb452a3c9a53e887a87057b4b0e.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]b88c2cb452a3c9a53e887a87057b4b0e.nc: 100%|██████████| 127k/127k [00:00<00:00, 749kB/s]                                                                                      2025-09-06 11:50:33,858 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:50:34,362 INFO Request ID is 91b5437a-e786-495a-90b0-3457f1f112b4
+2025-09-06 11:50:34,401 INFO status has been updated to accepted
+2025-09-06 11:54:16,512 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_03.nc
+✅ [2/48] Downloaded: potential_evaporation 1993-03
+📥 Downloading potential_evaporation for 1993-06...
+2088c9613a4fb35174e1c24a877ceaee.nc:   0%|          | 0.00/125k [00:00<?, ?B/s]2025-09-06 11:54:16,881 INFO status has been updated to running
+2088c9613a4fb35174e1c24a877ceaee.nc: 100%|██████████| 125k/125k [00:00<00:00, 578kB/s]                                                                                      2025-09-06 11:54:17,234 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:54:17,361 INFO Request ID is 2861ea15-6783-4254-81e1-44cb7c1dce7e
+2025-09-06 11:54:17,405 INFO status has been updated to accepted
+2025-09-06 11:58:17,156 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_04.nc
+✅ [3/48] Downloaded: potential_evaporation 1993-04
+📥 Downloading potential_evaporation for 1993-07...
+af898a80e7f66e5bd4e04d8447316874.nc:   0%|          | 0.00/121k [00:00<?, ?B/s]af898a80e7f66e5bd4e04d8447316874.nc: 100%|██████████| 121k/121k [00:00<00:00, 441kB/s]                                                                                      2025-09-06 11:58:17,987 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 11:58:18,260 INFO Request ID is a0aab3a8-7ab9-4665-8009-2259e833fd1c
+2025-09-06 11:58:18,307 INFO status has been updated to accepted
+2025-09-06 12:14:38,059 INFO status has been updated to running
+2025-09-06 12:14:53,741 INFO status has been updated to running
+2025-09-06 12:16:38,164 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_02.nc
+✅ [4/48] Downloaded: potential_evaporation 1993-02
+📥 Downloading potential_evaporation for 1993-08...
+6b52557158ff4061172eff354e232ac5.nc:   0%|          | 0.00/126k [00:00<?, ?B/s]6b52557158ff4061172eff354e232ac5.nc: 100%|██████████| 126k/126k [00:00<00:00, 642kB/s]                                                                                      2025-09-06 12:16:38,830 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:16:38,972 INFO Request ID is 76a10a4a-c545-4db2-b33c-f30e4490d65e
+2025-09-06 12:16:39,058 INFO status has been updated to accepted
+2025-09-06 12:16:53,860 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_05.nc
+✅ [5/48] Downloaded: potential_evaporation 1993-05
+📥 Downloading potential_evaporation for 1993-09...
+a45da6c494c0c6d888eb3c4f29e684da.nc:   0%|          | 0.00/125k [00:00<?, ?B/s]a45da6c494c0c6d888eb3c4f29e684da.nc: 100%|██████████| 125k/125k [00:00<00:00, 719kB/s]                                                                                      2025-09-06 12:16:54,555 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:16:54,672 INFO Request ID is 1468a488-5de2-41b1-a2af-e40888acd4eb
+2025-09-06 12:16:54,736 INFO status has been updated to accepted
+2025-09-06 12:18:37,136 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_06.nc
+✅ [6/48] Downloaded: potential_evaporation 1993-06
+📥 Downloading potential_evaporation for 1993-10...
+d16d0f30bb9df0be0870d2cb40005deb.nc:   0%|          | 0.00/129k [00:00<?, ?B/s]d16d0f30bb9df0be0870d2cb40005deb.nc: 100%|██████████| 129k/129k [00:00<00:00, 540kB/s]                                                                                      2025-09-06 12:18:38,034 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:18:38,438 INFO Request ID is cf9375b2-a006-4c4f-95ca-4e87a2d2244b
+2025-09-06 12:18:38,478 INFO status has been updated to accepted
+2025-09-06 12:20:37,989 INFO status has been updated to running
+2025-09-06 12:22:38,105 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_07.nc
+✅ [7/48] Downloaded: potential_evaporation 1993-07
+📥 Downloading potential_evaporation for 1993-11...
+723cbee9400b1967b2d40d371e5ef742.nc:   0%|          | 0.00/130k [00:00<?, ?B/s]723cbee9400b1967b2d40d371e5ef742.nc: 100%|██████████| 130k/130k [00:00<00:00, 528kB/s]                                                                                      2025-09-06 12:22:39,135 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:22:39,288 INFO Request ID is 22451b9c-55e5-414b-9d6d-17897fbebf2d
+2025-09-06 12:22:39,350 INFO status has been updated to accepted
+2025-09-06 12:38:59,078 INFO status has been updated to running
+2025-09-06 12:40:59,177 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_08.nc
+✅ [8/48] Downloaded: potential_evaporation 1993-08
+📥 Downloading potential_evaporation for 1993-12...
+cd174f8960debcc3f8fcd480d9683cc0.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]cd174f8960debcc3f8fcd480d9683cc0.nc: 100%|██████████| 127k/127k [00:00<00:00, 696kB/s]                                                                                      2025-09-06 12:40:59,840 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:40:59,994 INFO Request ID is d61d7e59-76aa-4fbc-99ce-36b64372eeb2
+2025-09-06 12:41:00,035 INFO status has been updated to accepted
+2025-09-06 12:41:14,489 INFO status has been updated to running
+2025-09-06 12:42:58,421 INFO status has been updated to running
+2025-09-06 12:43:14,719 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_09.nc
+✅ [9/48] Downloaded: potential_evaporation 1993-09
+📥 Downloading potential_evaporation for 2003-01...
+70b35ff63b4ff6a1a8b5f321a9527466.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]70b35ff63b4ff6a1a8b5f321a9527466.nc: 100%|██████████| 127k/127k [00:00<00:00, 608kB/s]                                                                                      2025-09-06 12:43:15,399 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:43:15,583 INFO Request ID is 02cc7e46-3990-43b1-bb0f-c7ac45a0f6d9
+2025-09-06 12:43:15,674 INFO status has been updated to accepted
+2025-09-06 12:44:58,524 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_10.nc
+✅ [10/48] Downloaded: potential_evaporation 1993-10
+📥 Downloading potential_evaporation for 2003-02...
+914cf0cf957c665a8b001dbbf7a2c4ed.nc:   0%|          | 0.00/125k [00:00<?, ?B/s]2025-09-06 12:44:58,879 INFO status has been updated to running
+914cf0cf957c665a8b001dbbf7a2c4ed.nc: 100%|██████████| 125k/125k [00:00<00:00, 730kB/s]                                                                                      2025-09-06 12:44:59,156 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:44:59,321 INFO Request ID is 3c853a4d-bae0-4f58-af82-5d319b829c0d
+2025-09-06 12:44:59,372 INFO status has been updated to accepted
+2025-09-06 12:46:59,002 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_11.nc
+✅ [11/48] Downloaded: potential_evaporation 1993-11
+📥 Downloading potential_evaporation for 2003-03...
+1329989ea52a30755c9c24d29151f6e7.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]1329989ea52a30755c9c24d29151f6e7.nc: 100%|██████████| 127k/127k [00:00<00:00, 532kB/s]                                                                                      2025-09-06 12:46:59,752 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:46:59,872 INFO Request ID is bb8b2af4-638a-4aad-b77a-663bf6896829
+2025-09-06 12:46:59,917 INFO status has been updated to accepted
+2025-09-06 12:55:34,752 INFO status has been updated to running
+2025-09-06 12:57:34,844 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_1993_12.nc
+✅ [12/48] Downloaded: potential_evaporation 1993-12
+📥 Downloading potential_evaporation for 2003-04...
+1bab70a8a23ac56a5f5b079e4526327b.nc:   0%|          | 0.00/121k [00:00<?, ?B/s]1bab70a8a23ac56a5f5b079e4526327b.nc: 100%|██████████| 121k/121k [00:00<00:00, 601kB/s]                                                                                      2025-09-06 12:57:35,520 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 12:57:35,633 INFO Request ID is 6a984cbc-5d26-4ec9-b604-b77645b7829d
+2025-09-06 12:57:35,700 INFO status has been updated to accepted
+2025-09-06 13:07:20,594 INFO status has been updated to running
+2025-09-06 13:09:18,868 INFO status has been updated to running
+2025-09-06 13:09:20,717 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_02.nc
+✅ [13/48] Downloaded: potential_evaporation 2003-02
+📥 Downloading potential_evaporation for 2003-05...
+fa3214003b99c969110c3b38eb60c86f.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]fa3214003b99c969110c3b38eb60c86f.nc: 100%|██████████| 127k/127k [00:00<00:00, 624kB/s]                                                                                      2025-09-06 13:09:21,404 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:09:21,584 INFO Request ID is 8283a711-eb36-4f52-93dd-8b029fc9659b
+2025-09-06 13:09:21,626 INFO status has been updated to accepted
+2025-09-06 13:11:19,352 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_01.nc
+✅ [14/48] Downloaded: potential_evaporation 2003-01
+📥 Downloading potential_evaporation for 2003-06...
+d9b0cb42c5ec72f5759295103e40ce6f.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]2025-09-06 13:11:19,676 INFO status has been updated to running
+d9b0cb42c5ec72f5759295103e40ce6f.nc: 100%|██████████| 127k/127k [00:00<00:00, 624kB/s]                                                                                      2025-09-06 13:11:20,026 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:11:20,204 INFO Request ID is 7bff0c37-34ed-49d9-b533-ec28fd5f68c4
+2025-09-06 13:11:20,256 INFO status has been updated to accepted
+2025-09-06 13:13:19,803 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_03.nc
+✅ [15/48] Downloaded: potential_evaporation 2003-03
+📥 Downloading potential_evaporation for 2003-07...
+105efeec1ef58d8e0ca6f448bd74e3d2.nc:   0%|          | 0.00/124k [00:00<?, ?B/s]105efeec1ef58d8e0ca6f448bd74e3d2.nc: 100%|██████████| 124k/124k [00:00<00:00, 614kB/s]                                                                                      2025-09-06 13:13:20,590 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:13:20,719 INFO Request ID is 73037864-1fa0-4512-9489-37c1fd4bd340
+2025-09-06 13:13:20,760 INFO status has been updated to accepted
+2025-09-06 13:21:55,577 INFO status has been updated to running
+2025-09-06 13:23:55,721 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_04.nc
+✅ [16/48] Downloaded: potential_evaporation 2003-04
+📥 Downloading potential_evaporation for 2003-08...
+68f47c99a993f75359e0e5163aba2d32.nc:   0%|          | 0.00/126k [00:00<?, ?B/s]68f47c99a993f75359e0e5163aba2d32.nc: 100%|██████████| 126k/126k [00:00<00:00, 588kB/s]                                                                                      2025-09-06 13:23:56,498 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:23:56,615 INFO Request ID is 6efe525c-f77b-4396-84e9-1e84a6f08170
+2025-09-06 13:23:56,671 INFO status has been updated to accepted
+2025-09-06 13:33:41,321 INFO status has been updated to running
+2025-09-06 13:35:40,090 INFO status has been updated to running
+2025-09-06 13:35:41,424 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_05.nc
+✅ [17/48] Downloaded: potential_evaporation 2003-05
+📥 Downloading potential_evaporation for 2003-09...
+adb99679ef7c7b6b1ee87a7a513ac7a1.nc:   0%|          | 0.00/126k [00:00<?, ?B/s]adb99679ef7c7b6b1ee87a7a513ac7a1.nc: 100%|██████████| 126k/126k [00:00<00:00, 355kB/s]                                                                                      2025-09-06 13:35:44,599 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:35:44,719 INFO Request ID is 82d1c8c1-a9bd-4f9e-9889-980983f47ea5
+2025-09-06 13:35:44,761 INFO status has been updated to accepted
+2025-09-06 13:37:40,186 INFO status has been updated to successful
+2025-09-06 13:37:40,219 INFO status has been updated to running
+✅ Downloaded: era5_land_potential_evaporation_2003_06.nc
+✅ [18/48] Downloaded: potential_evaporation 2003-06
+📥 Downloading potential_evaporation for 2003-10...
+8c7f2fc17a44de1aa50ddf47c140edf2.nc:   0%|          | 0.00/129k [00:00<?, ?B/s]8c7f2fc17a44de1aa50ddf47c140edf2.nc: 100%|██████████| 129k/129k [00:00<00:00, 600kB/s]                                                                                      2025-09-06 13:37:40,919 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:37:41,405 INFO Request ID is e3ecdad9-0b45-412d-8bd3-569e14fa20a5
+2025-09-06 13:37:41,464 INFO status has been updated to accepted
+2025-09-06 13:39:40,336 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_07.nc
+✅ [19/48] Downloaded: potential_evaporation 2003-07
+📥 Downloading potential_evaporation for 2003-11...
+da53ed7251d8a4ecd344a9e9a0073d62.nc:   0%|          | 0.00/130k [00:00<?, ?B/s]da53ed7251d8a4ecd344a9e9a0073d62.nc: 100%|██████████| 130k/130k [00:00<00:00, 615kB/s]                                                                                      2025-09-06 13:39:41,040 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:39:41,215 INFO Request ID is d3b935f7-2895-4dc6-aaa6-d4ffaa8d23c7
+2025-09-06 13:39:41,288 INFO status has been updated to accepted
+2025-09-06 13:50:16,148 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_08.nc
+✅ [20/48] Downloaded: potential_evaporation 2003-08
+📥 Downloading potential_evaporation for 2003-12...
+b5697548083034a915cef4968ddd7a16.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]b5697548083034a915cef4968ddd7a16.nc: 100%|██████████| 127k/127k [00:00<00:00, 540kB/s]                                                                                      2025-09-06 13:50:16,924 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 13:50:17,204 INFO Request ID is 7c145b78-71c7-4f8c-93e7-b2f90db3550e
+2025-09-06 13:50:17,256 INFO status has been updated to accepted
+2025-09-06 14:00:04,259 INFO status has been updated to running
+2025-09-06 14:04:01,020 INFO status has been updated to running
+2025-09-06 14:04:04,479 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_09.nc
+✅ [21/48] Downloaded: potential_evaporation 2003-09
+📥 Downloading potential_evaporation for 2013-01...
+7a93b6e217726d33717f3134bb0b61ba.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]7a93b6e217726d33717f3134bb0b61ba.nc: 100%|██████████| 127k/127k [00:00<00:00, 598kB/s]                                                                                      2025-09-06 14:04:06,069 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:04:06,221 INFO Request ID is 676907bf-178e-4d42-9518-79a1db559255
+2025-09-06 14:04:06,290 INFO status has been updated to accepted
+2025-09-06 14:06:01,119 INFO status has been updated to successful
+2025-09-06 14:06:01,314 INFO status has been updated to running
+✅ Downloaded: era5_land_potential_evaporation_2003_10.nc
+✅ [22/48] Downloaded: potential_evaporation 2003-10
+📥 Downloading potential_evaporation for 2013-02...
+6c182ab900dc9def53a6c0ef04f3cb3c.nc:   0%|          | 0.00/125k [00:00<?, ?B/s]6c182ab900dc9def53a6c0ef04f3cb3c.nc: 100%|██████████| 125k/125k [00:00<00:00, 616kB/s]                                                                                      2025-09-06 14:06:02,045 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:06:02,162 INFO Request ID is 88b5430a-ab58-4afa-95e5-eb7bd6b13cd1
+2025-09-06 14:06:02,213 INFO status has been updated to accepted
+2025-09-06 14:08:01,425 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_11.nc
+✅ [23/48] Downloaded: potential_evaporation 2003-11
+📥 Downloading potential_evaporation for 2013-03...
+720f14bc9c739231a38d96ffece7b390.nc:   0%|          | 0.00/128k [00:00<?, ?B/s]720f14bc9c739231a38d96ffece7b390.nc: 100%|██████████| 128k/128k [00:00<00:00, 638kB/s]                                                                                      2025-09-06 14:08:02,271 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:08:02,387 INFO Request ID is 7e5ffc1c-a37d-47ab-bc12-cb605dd858f1
+2025-09-06 14:08:02,455 INFO status has been updated to accepted
+2025-09-06 14:16:37,183 INFO status has been updated to running
+2025-09-06 14:18:37,283 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2003_12.nc
+✅ [24/48] Downloaded: potential_evaporation 2003-12
+📥 Downloading potential_evaporation for 2013-04...
+5844cd7597dd03e785533e538dabe6ae.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]5844cd7597dd03e785533e538dabe6ae.nc: 100%|██████████| 127k/127k [00:00<00:00, 559kB/s]                                                                                      2025-09-06 14:18:38,007 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:18:38,161 INFO Request ID is 4ec1e953-1fd7-4366-b21a-65f8ccd6b35f
+2025-09-06 14:18:38,198 INFO status has been updated to accepted
+2025-09-06 14:26:26,014 INFO status has been updated to running
+2025-09-06 14:28:21,870 INFO status has been updated to running
+2025-09-06 14:28:26,129 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2013_01.nc
+✅ [25/48] Downloaded: potential_evaporation 2013-01
+📥 Downloading potential_evaporation for 2013-05...
+8394c3308117f3b8f537860f5aa91a99.nc:   0%|          | 0.00/121k [00:00<?, ?B/s]8394c3308117f3b8f537860f5aa91a99.nc: 100%|██████████| 121k/121k [00:00<00:00, 632kB/s]                                                                                      2025-09-06 14:28:27,013 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:28:27,425 INFO Request ID is 774fbbb4-2b2b-4093-a7b7-e8ff8efb8be5
+2025-09-06 14:28:27,545 INFO status has been updated to accepted
+2025-09-06 14:30:21,998 INFO status has been updated to successful
+2025-09-06 14:30:22,068 INFO status has been updated to running
+✅ Downloaded: era5_land_potential_evaporation_2013_02.nc
+✅ [26/48] Downloaded: potential_evaporation 2013-02
+📥 Downloading potential_evaporation for 2013-06...
+a575c0abd6a48a47f9aa69202873d6ca.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]a575c0abd6a48a47f9aa69202873d6ca.nc: 100%|██████████| 127k/127k [00:00<00:00, 676kB/s]                                                                                      2025-09-06 14:30:22,844 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:30:23,006 INFO Request ID is 8a7e090a-9d4b-4404-94e5-5c08239db388
+2025-09-06 14:30:23,062 INFO status has been updated to accepted
+2025-09-06 14:32:22,153 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2013_03.nc
+✅ [27/48] Downloaded: potential_evaporation 2013-03
+📥 Downloading potential_evaporation for 2013-07...
+5d1e8eb8a0567d7110c88137ec1a84c3.nc:   0%|          | 0.00/125k [00:00<?, ?B/s]5d1e8eb8a0567d7110c88137ec1a84c3.nc: 100%|██████████| 125k/125k [00:00<00:00, 674kB/s]                                                                                      2025-09-06 14:32:22,802 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:32:22,970 INFO Request ID is 65595759-0dc8-4aa9-bc35-a3f1532a25cb
+2025-09-06 14:32:23,055 INFO status has been updated to accepted
+2025-09-06 14:40:57,761 INFO status has been updated to running
+2025-09-06 14:44:46,759 INFO status has been updated to running
+2025-09-06 14:44:58,121 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2013_04.nc
+✅ [28/48] Downloaded: potential_evaporation 2013-04
+📥 Downloading potential_evaporation for 2013-08...
+3d3f0aa226c102c2fa56b24b7e66a735.nc:   0%|          | 0.00/128k [00:00<?, ?B/s]3d3f0aa226c102c2fa56b24b7e66a735.nc: 100%|██████████| 128k/128k [00:00<00:00, 599kB/s]                                                                                      2025-09-06 14:44:58,932 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:44:59,048 INFO Request ID is e89660b8-0a90-4632-8302-1b5ad35d9d46
+2025-09-06 14:44:59,085 INFO status has been updated to accepted
+2025-09-06 14:46:41,993 INFO status has been updated to running
+2025-09-06 14:46:46,873 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2013_05.nc
+✅ [29/48] Downloaded: potential_evaporation 2013-05
+📥 Downloading potential_evaporation for 2013-09...
+2d2de2ea222942bc20f2bfa353fa4f15.nc:   0%|          | 0.00/127k [00:00<?, ?B/s]2d2de2ea222942bc20f2bfa353fa4f15.nc: 100%|██████████| 127k/127k [00:00<00:00, 568kB/s]                                                                                      2025-09-06 14:46:47,571 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:46:47,728 INFO Request ID is b622e760-7613-4f41-9cca-e9eae5142b46
+2025-09-06 14:46:47,782 INFO status has been updated to accepted
+2025-09-06 14:48:42,083 INFO status has been updated to running
+2025-09-06 14:48:42,199 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2013_06.nc
+✅ [30/48] Downloaded: potential_evaporation 2013-06
+📥 Downloading potential_evaporation for 2013-10...
+64d672cf190e9e643991cea616f38f36.nc:   0%|          | 0.00/130k [00:00<?, ?B/s]64d672cf190e9e643991cea616f38f36.nc: 100%|██████████| 130k/130k [00:00<00:00, 499kB/s]                                                                                      2025-09-06 14:48:44,591 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:48:44,865 INFO Request ID is c321a9bd-450a-4900-9487-178ab65b8aad
+2025-09-06 14:48:44,923 INFO status has been updated to accepted
+2025-09-06 14:50:42,421 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2013_07.nc
+✅ [31/48] Downloaded: potential_evaporation 2013-07
+📥 Downloading potential_evaporation for 2013-11...
+56a481e0e3025edbb0b0dc74d4f3f466.nc:   0%|          | 0.00/130k [00:00<?, ?B/s]56a481e0e3025edbb0b0dc74d4f3f466.nc: 100%|██████████| 130k/130k [00:00<00:00, 605kB/s]                                                                                      2025-09-06 14:50:43,228 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 14:50:43,716 INFO Request ID is 9ac4500f-5926-4d37-a4c0-6f9064415c2a
+2025-09-06 14:50:43,756 INFO status has been updated to accepted
+2025-09-06 15:05:19,018 INFO status has been updated to running
+2025-09-06 15:11:19,584 INFO status has been updated to successful
+✅ Downloaded: era5_land_potential_evaporation_2013_08.nc
+✅ [32/48] Downloaded: potential_evaporation 2013-08
+📥 Downloading potential_evaporation for 2013-12...
+129d2e2a499bc01baab1eff05a6cc6d5.nc:   0%|          | 0.00/126k [00:00<?, ?B/s]129d2e2a499bc01baab1eff05a6cc6d5.nc: 100%|██████████| 126k/126k [00:00<00:00, 546kB/s]                                                                                      2025-09-06 15:11:20,352 INFO [2024-09-26T00:00:00] Watch our [Forum](https://forum.ecmwf.int/) for Announcements, news and other discussed topics.
+2025-09-06 15:11:20,519 INFO Request ID is 02b3b6af-f4b8-4ee1-b4be-43d4efeff04b
+2025-09-06 15:11:20,563 INFO status has been updated to accepted
