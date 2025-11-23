@@ -97,13 +97,7 @@ class CatchmentProcessor:
         self.gauge_id = self.config['gauge_id']
         self.main_dir = Path(self.config['main_dir'])
         self.coupled = self.config.get('coupled', False)
-        self.model_dirs = self.config['model_dirs']
-        
-        # CORRECT MODEL DIR CONSTRUCTION
-        if self.coupled:
-            self.model_dir = self.main_dir / self.model_dirs["coupled"] / f'catchment_{self.gauge_id}'
-        else:
-            self.model_dir = self.main_dir / self.model_dirs["uncoupled"] / f'catchment_{self.gauge_id}'
+        self.model_dir = self.main_dir / self.config.get('config_dir') / f"catchment_{self.gauge_id}"
 
         # Data directories (format paths with gauge_id) - CORRECTED PATHS
         self.shape_dir = self.main_dir / self.config['shape_dir'].format(gauge_id=self.gauge_id)
@@ -1661,13 +1655,7 @@ class HRUConnectivityCalculator:
             self.model_type = namelist_config['model_type']
             main_dir = Path(namelist_config['main_dir'])
             coupled = namelist_config.get('coupled', False)
-            model_dirs = namelist_config['model_dirs']
-            
-            # CONSTRUCT MODEL_DIR THE SAME WAY AS CatchmentProcessor
-            if coupled:
-                self.model_dir = main_dir / model_dirs["coupled"] / f'catchment_{self.gauge_id}'
-            else:
-                self.model_dir = main_dir / model_dirs["uncoupled"] / f'catchment_{self.gauge_id}'
+            self.model_dir = main_dir / namelist_config.get('config_dir') / f"catchment_{self.gauge_id}"
             
             # Optional parameters from namelist or defaults
             self.mode = namelist_config.get('mode', 'single')

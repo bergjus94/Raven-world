@@ -50,19 +50,13 @@ class HBVProcessor:
         # Extract configuration
         self.gauge_id = self.nml["gauge_id"]
         self.coupled = self.nml["coupled"]
-        self.main_dir = self.nml["main_dir"]
-        self.model_dirs = self.nml["model_dirs"]
+        self.main_dir = Path(self.nml["main_dir"])
+        self.model_dir = self.main_dir / self.nml.get('config_dir')
         self.model_type = "HBV"  # Fixed to HBV
         self.params_dir = self.nml["params_dir"]
         self.start_date = self.nml["start_date"]
         self.end_date = self.nml["end_date"]
         self.cali_end_date = self.nml["cali_end_date"]
-        
-        # Set model directory
-        if self.coupled:
-            self.model_dir = Path(self.main_dir, self.model_dirs["coupled"])
-        else:
-            self.model_dir = Path(self.main_dir, self.model_dirs["uncoupled"])
         
         # Load parameters
         with open(self.params_dir, "r") as f:
@@ -487,8 +481,8 @@ class HBVProcessor:
             "#HRU Groups Definition": [hru_groups_definition] if hru_groups_definition else [],
             "#Hydrologic Process Order": [
                 ":HydrologicProcesses",
-                "   :Flush             RAVEN_DEFAULT      SNOW            ATMOSPHERE",
-                "       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
+                "#   :Flush             RAVEN_DEFAULT      SNOW            ATMOSPHERE",
+                "#       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
                 "   :SnowRefreeze      FREEZE_DEGREE_DAY  SNOW_LIQ        SNOW",
                 "   :Precipitation     PRECIP_RAVEN       ATMOS_PRECIP    MULTIPLE",
                 "   :CanopyEvaporation CANEVP_ALL         CANOPY          ATMOSPHERE",
@@ -505,6 +499,7 @@ class HBVProcessor:
                 "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
                 "       :-->Conditional HRU_TYPE IS_NOT ROCK",
                 "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
+                "       :-->Conditional HRU_TYPE IS_NOT LAKE",
                 "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
                 "   :CapillaryRise     RISE_HBV           FAST_RESERVOIR 	SOIL[0]",
                 "   :LakeEvaporation   LAKE_EVAP_BASIC    SLOW_RESERVOIR  ATMOSPHERE",

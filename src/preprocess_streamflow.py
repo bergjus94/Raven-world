@@ -46,12 +46,7 @@ class StreamflowProcessor:
         self.model_type = config.get('model_type')
         self.debug = config.get('debug', False)
         self.coupled = config.get('coupled', False)
-        
-        # Set model directory based on coupled/uncoupled
-        if self.coupled:
-            self.model_dir = self.main_dir / config['model_dirs']['coupled']
-        else:
-            self.model_dir = self.main_dir / config['model_dirs']['uncoupled']
+        self.model_dir = self.main_dir / config.get('config_dir')
         
         # Get streamflow file path
         stream_dir = config.get('stream_dir', '').format(gauge_id=self.gauge_id)

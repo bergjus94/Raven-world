@@ -32,7 +32,7 @@ class ERA5LandAnalyzer:
     A class for analyzing and plotting ERA5-Land meteorological data
     """
     
-    def __init__(self, namelist_path: Union[str, Path]) -> None:
+    def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
         """
         Initialize the ERA5-Land data analyzer
         
@@ -40,7 +40,12 @@ class ERA5LandAnalyzer:
         ----------
         namelist_path : str or Path
             Path to the namelist YAML configuration file
+        force_reprocess : bool, optional
+            If True, reprocess files even if they already exist (default: False)
         """
+        # Store the force_reprocess flag
+        self.force_reprocess = force_reprocess
+        
         # Load configuration from namelist directly
         namelist_path = Path(namelist_path)
         
@@ -58,12 +63,7 @@ class ERA5LandAnalyzer:
         self.model_type = self.config.get('model_type')
         self.debug = self.config.get('debug', False)
         self.coupled = self.config.get('coupled', False)
-        
-        # Set model directory based on coupled/uncoupled
-        if self.coupled:
-            self.model_dir = self.main_dir / self.config['model_dirs']['coupled']
-        else:
-            self.model_dir = self.main_dir / self.config['model_dirs']['uncoupled']
+        self.model_dir = self.main_dir / self.config.get('config_dir')
         
         # Setup directories
         self.era5_data_dir = Path(self.config['meteo_dir'].format(gauge_id=self.gauge_id))
@@ -119,9 +119,42 @@ class ERA5LandAnalyzer:
         self.logger.info(f"Plots will be saved to: {self.plots_dir}")
         self.logger.info(f"Processed meteo files will be saved to: {self.output_path}")
         
-        # Find and process monthly files
-        self.processed_files = self._find_and_process_monthly_files()
-        self.logger.info(f"Processed {len(self.processed_files)} daily files for gauge {self.gauge_id}")
+        # Check for existing files before processing
+        existing_files = self._check_existing_files()
+        existing_count = sum(existing_files.values())
+        total_expected = len(existing_files)
+        
+        if existing_count == total_expected and not force_reprocess:
+            self.logger.info(f"🎉 All {total_expected} processed files already exist!")
+            self.logger.info("⏭️ Skipping processing. Set force_reprocess=True to reprocess anyway.")
+            
+            # Build list of existing files
+            expected_files = {
+                'temperature_mean': 'era5_land_temp_mean.nc',
+                'temperature_min': 'era5_land_temp_min.nc',
+                'temperature_max': 'era5_land_temp_max.nc',
+                'precipitation': 'era5_land_precip.nc',
+                'potential_evaporation': 'era5_land_pet.nc'
+            }
+            
+            self.processed_files = []
+            for file_type, exists in existing_files.items():
+                if exists:
+                    self.processed_files.append(self.output_path / expected_files[file_type])
+                    
+        elif existing_count > 0 and not force_reprocess:
+            self.logger.info(f"📂 Found {existing_count}/{total_expected} existing files")
+            self.logger.info("🔄 Will only process missing files. Set force_reprocess=True to reprocess all.")
+            # Continue with normal processing
+            self.processed_files = self._find_and_process_monthly_files()
+        else:
+            if force_reprocess and existing_count > 0:
+                self.logger.info(f"🔄 Reprocessing all files (force_reprocess=True)")
+            
+            # Find and process monthly files
+            self.processed_files = self._find_and_process_monthly_files()
+        
+        self.logger.info(f"Available files: {len(self.processed_files)} daily files for gauge {self.gauge_id}")
 
         # Automatically run analysis and create plots
         if self.processed_files:
@@ -157,22 +190,59 @@ class ERA5LandAnalyzer:
 
     #---------------------------------------------------------------------------------
 
+    def _check_existing_files(self) -> Dict[str, bool]:
+        """
+        Check if ERA5-Land processed files already exist in the output directory
+        
+        Returns
+        -------
+        Dict[str, bool]
+            Dictionary indicating which file types already exist
+        """
+        existing_files = {
+            'temperature_mean': False,
+            'temperature_min': False,
+            'temperature_max': False,
+            'precipitation': False,
+            'potential_evaporation': False
+        }
+        
+        # Check for each expected output file
+        expected_files = {
+            'temperature_mean': 'era5_land_temp_mean.nc',
+            'temperature_min': 'era5_land_temp_min.nc',
+            'temperature_max': 'era5_land_temp_max.nc',
+            'precipitation': 'era5_land_precip.nc',
+            'potential_evaporation': 'era5_land_pet.nc'
+        }
+        
+        for file_type, filename in expected_files.items():
+            file_path = self.output_path / filename
+            if file_path.exists():
+                existing_files[file_type] = True
+                self.logger.info(f"✅ Found existing file: {filename}")
+            else:
+                self.logger.debug(f"❌ Missing file: {filename}")
+        
+        return existing_files
+
+    #---------------------------------------------------------------------------------
+
     def _find_monthly_files(self) -> Dict[str, List[Path]]:
         """
-        Find all monthly files in the ERA5-Land data directory
-        
+        Find all monthly files in the ERA5-Land data directory, including geopotential
+
         Returns
         -------
         Dict[str, List[Path]]
             Dictionary with lists of files for each variable type
         """
         self.logger.info(f"Finding monthly files for period {self.start_date.date()} to {self.end_date.date()}")
-        
+
         # Generate all year-month combinations needed
-        # FIX: Include the start month even if it's partial
         start_year_month = (self.start_date.year, self.start_date.month)
         end_year_month = (self.end_date.year, self.end_date.month)
-        
+
         year_months = []
         current_date = self.start_date.replace(day=1)  # Start from first day of start month
         while current_date <= self.end_date:
@@ -182,64 +252,84 @@ class ERA5LandAnalyzer:
                 current_date = current_date.replace(year=current_date.year + 1, month=1)
             else:
                 current_date = current_date.replace(month=current_date.month + 1)
-        
+
         self.logger.info(f"Need data for {len(year_months)} months: {year_months[0]} to {year_months[-1]}")
-        
+
         # Find files for each variable
         monthly_files = {
             'temperature': [],
             'precipitation': [],
-            'potential_evaporation': []  # Add PET
+            'potential_evaporation': [],
+            'geopotential': []  # 🏔️ Add geopotential
         }
-        
+
         missing_files = []
-        
+
         for year, month in year_months:
             # Temperature files
             temp_pattern = f"era5_land_2m_temperature_{year}_{month:02d}.nc"
             temp_file = self.era5_data_dir / temp_pattern
-            
-            if temp_file.exists():
+
+            if temp_file.exists() and temp_file.stat().st_size > 0:
                 monthly_files['temperature'].append(temp_file)
                 self.logger.debug(f"Found temperature file: {temp_file.name}")
+            elif temp_file.exists() and temp_file.stat().st_size == 0:
+                missing_files.append(str(temp_file))
+                self.logger.warning(f"Empty temperature file (0 bytes): {temp_file}")
             else:
                 missing_files.append(str(temp_file))
                 self.logger.warning(f"Missing temperature file: {temp_file}")
-            
+
             # Precipitation files
             precip_pattern = f"era5_land_total_precipitation_{year}_{month:02d}.nc"
             precip_file = self.era5_data_dir / precip_pattern
-            
-            if precip_file.exists():
+
+            if precip_file.exists() and precip_file.stat().st_size > 0:
                 monthly_files['precipitation'].append(precip_file)
                 self.logger.debug(f"Found precipitation file: {precip_file.name}")
+            elif precip_file.exists() and precip_file.stat().st_size == 0:
+                missing_files.append(str(precip_file))
+                self.logger.warning(f"Empty precipitation file (0 bytes): {precip_file}")
             else:
                 missing_files.append(str(precip_file))
                 self.logger.warning(f"Missing precipitation file: {precip_file}")
-            
+
             # PET files
             pet_pattern = f"era5_land_potential_evaporation_{year}_{month:02d}.nc"
             pet_file = self.era5_data_dir / pet_pattern
-            
-            if pet_file.exists():
+
+            if pet_file.exists() and pet_file.stat().st_size > 0:
                 monthly_files['potential_evaporation'].append(pet_file)
                 self.logger.debug(f"Found PET file: {pet_file.name}")
+            elif pet_file.exists() and pet_file.stat().st_size == 0:
+                missing_files.append(str(pet_file))
+                self.logger.warning(f"Empty PET file (0 bytes): {pet_file}")
             else:
                 missing_files.append(str(pet_file))
                 self.logger.warning(f"Missing PET file: {pet_file}")
-        
+
+        # 🏔️ Look for geopotential file (only need to find it once since it's time-invariant)
+        geopotential_file = self.era5_data_dir / "era5_land_geopotential.nc"
+        if geopotential_file.exists() and geopotential_file.stat().st_size > 0:
+            monthly_files['geopotential'].append(geopotential_file)
+            self.logger.debug(f"Found geopotential file: {geopotential_file.name}")
+        else:
+            self.logger.warning(f"Geopotential file not found: {geopotential_file}")
+            self.logger.warning("💡 Meteorological files will be processed without elevation data")
+
         # Report summary
         self.logger.info(f"Found {len(monthly_files['temperature'])} temperature files")
         self.logger.info(f"Found {len(monthly_files['precipitation'])} precipitation files")
         self.logger.info(f"Found {len(monthly_files['potential_evaporation'])} PET files")
-        
+        self.logger.info(f"Found {len(monthly_files['geopotential'])} geopotential files")
+
         if missing_files:
             self.logger.warning(f"Missing {len(missing_files)} files:")
             for missing in missing_files[:5]:  # Show first 5 missing files
                 self.logger.warning(f"  - {missing}")
             if len(missing_files) > 5:
                 self.logger.warning(f"  ... and {len(missing_files) - 5} more")
-        
+
         return monthly_files
 
     #---------------------------------------------------------------------------------
@@ -658,55 +748,538 @@ class ERA5LandAnalyzer:
         except Exception as e:
             self.logger.error(f"Error aggregating {variable_type}: {str(e)}")
             return {}
+
+    def process_geopotential_to_elevation(self) -> Optional[Path]:
+        """
+        Process geopotential NetCDF file to elevation and save as separate file with single elevation value per cell
+        MODIFIED: Skip coordinate flipping here to match meteorological data processing timing
+        
+        Returns
+        -------
+        Optional[Path]
+            Path to created elevation file, or None if failed
+        """
+        self.logger.info("🏔️ Processing geopotential to elevation...")
+        
+        # Find geopotential file in the same directory as monthly files
+        geopotential_file = self.era5_data_dir / "era5_land_geopotential.nc"
+        
+        if not geopotential_file.exists():
+            self.logger.error(f"❌ Geopotential file not found: {geopotential_file}")
+            self.logger.error("💡 Expected file: era5_land_geopotential.nc in ERA5 data directory")
+            return None
+        
+        try:
+            self.logger.info(f"📂 Loading geopotential file: {geopotential_file}")
+            
+            # Open geopotential data
+            ds_geo = xr.open_dataset(geopotential_file)
+            
+            self.logger.info(f"📊 Geopotential file contents:")
+            self.logger.info(f"  Variables: {list(ds_geo.data_vars)}")
+            self.logger.info(f"  Dimensions: {dict(ds_geo.dims)}")
+            self.logger.info(f"  Coordinates: {list(ds_geo.coords)}")
+            
+            # Find geopotential variable (usually 'z' or 'geopotential')
+            geo_var = None
+            possible_vars = ['z', 'geopotential', 'Z']
+            
+            for var in ds_geo.data_vars:
+                if var in possible_vars:
+                    geo_var = var
+                    break
+            
+            if geo_var is None:
+                self.logger.error(f"❌ Could not find geopotential variable")
+                self.logger.error(f"Available variables: {list(ds_geo.data_vars)}")
+                self.logger.error(f"Expected one of: {possible_vars}")
+                ds_geo.close()
+                return None
+            
+            self.logger.info(f"✅ Using geopotential variable: '{geo_var}'")
+            
+            # Get geopotential data
+            geo_data = ds_geo[geo_var]
+            self.logger.info(f"  Original shape: {geo_data.shape}")
+            self.logger.info(f"  Original dimensions: {geo_data.dims}")
+            
+            # Remove time dimension if present (geopotential is time-invariant)
+            if 'time' in geo_data.dims:
+                self.logger.info("⏰ Removing time dimension from geopotential data")
+                geo_data = geo_data.isel(time=0)
+                self.logger.info(f"  New shape: {geo_data.shape}")
+            
+            # Convert geopotential to elevation
+            # Geopotential (m²/s²) ÷ standard gravity (9.80665 m/s²) = elevation (m)
+            standard_gravity = 9.80665  # m/s²
+            
+            self.logger.info(f"🔄 Converting geopotential to elevation (÷ {standard_gravity} m/s²)")
+            elevation_data = geo_data / standard_gravity
+            
+            # 🔧 SKIP COORDINATE FLIPPING HERE - let it happen in _save_daily_files
+            # elevation_data = self._check_and_fix_coordinate_flipping_single_var(elevation_data)
+            self.logger.info("⏭️ Skipping coordinate flipping for elevation - will be handled during save")
+            
+            # 🔧 IMPORTANT: Create a simple 2D dataset with just the elevation variable
+            # No time dimension, just latitude and longitude with elevation values
+            ds_elevation = xr.Dataset({
+                'elevation': elevation_data
+            })
+            
+            # ... rest of the function stays the same ...
+            
+            # Update elevation variable attributes
+            ds_elevation['elevation'].attrs = {
+                'units': 'm',
+                'long_name': 'Surface elevation above sea level',
+                'standard_name': 'surface_altitude',
+                'source': 'ERA5-Land geopotential converted to elevation',
+                'conversion_factor': f'Divided by standard gravity ({standard_gravity} m/s²)',
+                'description': 'Average elevation for each ERA5-Land grid cell',
+                'processing_date': pd.Timestamp.now().isoformat(),
+                'grid_mapping': 'WGS84'
+            }
+            
+            # Copy coordinate attributes from original data
+            for coord in ds_elevation.coords:
+                if coord in ds_geo.coords:
+                    ds_elevation[coord].attrs = ds_geo[coord].attrs
+            
+            # Add global attributes
+            ds_elevation.attrs.update({
+                'title': 'ERA5-Land elevation data',
+                'gauge_id': str(self.gauge_id),  # Ensure string type
+                'processed_by': 'ERA5LandAnalyzer',
+                'creation_date': pd.Timestamp.now().isoformat(),
+                'source_file': str(geopotential_file),
+                'coordinate_orientation': 'Same as source data - will be corrected during meteorological processing',
+                'conventions': 'CF-1.8',
+                'institution': 'Processed from ERA5-Land reanalysis',
+                'comment': 'Single elevation value per grid cell, time-invariant'
+            })
+            
+            # Save elevation file (without coordinate flipping)
+            elevation_file = self.output_path / 'era5_land_elevation.nc'
+            ds_elevation.to_netcdf(elevation_file)
+            
+            # Log elevation statistics
+            elev_values = ds_elevation['elevation'].values
+            self.logger.info(f"📊 Elevation statistics:")
+            self.logger.info(f"  Min: {np.nanmin(elev_values):.1f} m")
+            self.logger.info(f"  Max: {np.nanmax(elev_values):.1f} m")
+            self.logger.info(f"  Mean: {np.nanmean(elev_values):.1f} m")
+            self.logger.info(f"  Data shape: {elev_values.shape}")
+            
+            self.logger.info(f"✅ Elevation file saved: {elevation_file}")
+            
+            # Close datasets
+            ds_geo.close()
+            ds_elevation.close()
+            
+            return elevation_file
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error processing geopotential to elevation: {e}")
+            import traceback
+            self.logger.error(f"Full traceback: {traceback.format_exc()}")
+            return None
+
+    def _check_and_fix_coordinate_flipping_single_var(self, data_array: xr.DataArray) -> xr.DataArray:
+        """
+        Apply coordinate flipping to a single DataArray (for elevation processing)
+        
+        Parameters
+        ----------
+        data_array : xr.DataArray
+            Input DataArray
+            
+        Returns
+        -------
+        xr.DataArray
+            DataArray with corrected coordinate orientation
+        """
+        # Check for latitude coordinates
+        lat_dim = None
+        for dim in ['latitude', 'lat', 'y']:
+            if dim in data_array.coords:
+                lat_dim = dim
+                break
+        
+        if lat_dim is None:
+            self.logger.debug("No latitude coordinate found - skipping flip check")
+            return data_array
+        
+        lat_coords = data_array.coords[lat_dim].values
+        lat_decreasing = lat_coords[0] > lat_coords[-1]
+        
+        if lat_decreasing:
+            self.logger.warning("⚠️  Latitude coordinates are decreasing - applying coordinate flip")
+            
+            # Flip latitude coordinates by reversing the slice
+            data_corrected = data_array.sel({lat_dim: slice(None, None, -1)})
+            
+            # Verify the flip
+            new_lat_coords = data_corrected.coords[lat_dim].values
+            self.logger.info(f"✅ Latitude corrected: {lat_coords.min():.4f} to {lat_coords.max():.4f}")
+            self.logger.info(f"   Original order: {lat_coords[0]:.4f} → {lat_coords[-1]:.4f}")
+            self.logger.info(f"   Corrected order: {new_lat_coords[0]:.4f} → {new_lat_coords[-1]:.4f}")
+            
+            return data_corrected
+        else:
+            self.logger.debug("✅ Latitude coordinates are correctly oriented (increasing)")
+            return data_array
+
+    def plot_elevation_with_cell_numbers(self, elevation_file: Optional[Path] = None) -> None:
+        """
+        Plot elevation data using cell numbers - shows single elevation value per cell
+        
+        Parameters
+        ----------
+        elevation_file : Optional[Path]
+            Path to elevation file. If None, looks for era5_land_elevation.nc in output directory
+        """
+        if elevation_file is None:
+            elevation_file = self.output_path / 'era5_land_elevation.nc'
+        
+        if not elevation_file.exists():
+            self.logger.error(f"❌ Elevation file not found: {elevation_file}")
+            return
+        
+        self.logger.info(f"🗺️ Plotting elevation data with cell numbers: {elevation_file.name}")
+        
+        try:
+            # Load elevation data
+            ds = xr.open_dataset(elevation_file)
+            elevation = ds['elevation']
+            
+            self.logger.info(f"📊 Elevation data info:")
+            self.logger.info(f"  Shape: {elevation.shape}")
+            self.logger.info(f"  Dimensions: {elevation.dims}")
+            self.logger.info(f"  Coordinates: {list(elevation.coords)}")
+            
+            # Get coordinate information
+            if 'latitude' in elevation.coords and 'longitude' in elevation.coords:
+                lat_coords = elevation.coords['latitude'].values
+                lon_coords = elevation.coords['longitude'].values
+                lat_name, lon_name = 'latitude', 'longitude'
+            elif 'lat' in elevation.coords and 'lon' in elevation.coords:
+                lat_coords = elevation.coords['lat'].values
+                lon_coords = elevation.coords['lon'].values
+                lat_name, lon_name = 'lat', 'lon'
+            else:
+                self.logger.error("❌ Cannot find latitude/longitude coordinates")
+                return
+            
+            self.logger.info(f"  Latitude range: {lat_coords.min():.4f} to {lat_coords.max():.4f}")
+            self.logger.info(f"  Longitude range: {lon_coords.min():.4f} to {lon_coords.max():.4f}")
+            self.logger.info(f"  Number of lat cells: {len(lat_coords)}")
+            self.logger.info(f"  Number of lon cells: {len(lon_coords)}")
+            
+            # Get elevation values
+            elev_values = elevation.values
+            
+            # Create figure
+            fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+            
+            # Plot 1: Elevation with cell numbers as coordinates
+            ax1 = axes[0]
+            
+            # Create cell number arrays
+            lon_cells = np.arange(len(lon_coords))  # X-axis: longitude cell numbers
+            lat_cells = np.arange(len(lat_coords))  # Y-axis: latitude cell numbers
+            
+            # 🔧 SIMPLE APPROACH: Use pcolormesh for clean cell-by-cell display
+            im1 = ax1.pcolormesh(lon_cells, lat_cells, elev_values, 
+                                cmap='terrain', shading='nearest')
+            
+            # Add colorbar
+            cbar1 = plt.colorbar(im1, ax=ax1, shrink=0.8)
+            cbar1.set_label('Elevation (m)', rotation=270, labelpad=20)
+            
+            # Customize plot 1
+            ax1.set_title(f'ERA5-Land Elevation - Cell Numbers\nGauge {self.gauge_id}', 
+                        fontsize=12, fontweight='bold')
+            ax1.set_xlabel('Longitude Cell Number')
+            ax1.set_ylabel('Latitude Cell Number')
+            ax1.grid(True, alpha=0.3)
+            
+            # Add cell number annotations on key points
+            rows, cols = elev_values.shape
+            for i in range(0, rows, max(1, rows//5)):  # Show ~5 labels per axis
+                for j in range(0, cols, max(1, cols//5)):
+                    if not np.isnan(elev_values[i, j]):
+                        ax1.annotate(f'({j},{i})\n{elev_values[i,j]:.0f}m', 
+                                (j, i), ha='center', va='center',
+                                fontsize=7, alpha=0.8,
+                                bbox=dict(boxstyle='round,pad=0.2', 
+                                        facecolor='white', alpha=0.7))
+            
+            # Plot 2: Same data with geographic coordinates
+            ax2 = axes[1]
+            
+            # Use pcolormesh for geographic coordinates too
+            im2 = ax2.pcolormesh(lon_coords, lat_coords, elev_values,
+                                cmap='terrain', shading='nearest')
+            
+            # Add colorbar
+            cbar2 = plt.colorbar(im2, ax=ax2, shrink=0.8)
+            cbar2.set_label('Elevation (m)', rotation=270, labelpad=20)
+            
+            # Customize plot 2
+            ax2.set_title(f'ERA5-Land Elevation - Geographic Coordinates\nGauge {self.gauge_id}', 
+                        fontsize=12, fontweight='bold')
+            ax2.set_xlabel('Longitude (°)')
+            ax2.set_ylabel('Latitude (°)')
+            ax2.grid(True, alpha=0.3)
+            ax2.set_aspect('equal')
+            
+            # Add statistics text box
+            stats_text = f'''Elevation Stats:
+    Min: {np.nanmin(elev_values):.0f} m
+    Max: {np.nanmax(elev_values):.0f} m
+    Mean: {np.nanmean(elev_values):.0f} m
+    Grid: {len(lon_coords)} × {len(lat_coords)} cells
+    Type: Single value per cell'''
+            
+            ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes,
+                    verticalalignment='top', fontsize=9,
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            
+            plt.tight_layout()
+            
+            # Save plot
+            save_path = self.plots_dir / f'era5_elevation_cell_values_gauge_{self.gauge_id}.png'
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            self.logger.info(f"📊 Elevation plot saved: {save_path}")
+            
+            plt.show()
+            
+            # Close dataset
+            ds.close()
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error plotting elevation: {e}")
+            import traceback
+            self.logger.error(f"Full traceback: {traceback.format_exc()}")
+
+    #---------------------------------------------------------------------------------
+
+    def _check_and_fix_coordinate_flipping(self, dataset: xr.Dataset) -> xr.Dataset:
+        """
+        Check if coordinates are flipped and correct them consistently with GridWeightsGenerator
+        
+        Parameters
+        ----------
+        dataset : xr.Dataset
+            Input dataset
+            
+        Returns
+        -------
+        xr.Dataset
+            Dataset with corrected coordinate orientation
+        """
+        # Check for latitude coordinates
+        lat_dim = None
+        for dim in ['latitude', 'lat', 'y']:
+            if dim in dataset.coords:
+                lat_dim = dim
+                break
+        
+        if lat_dim is None:
+            self.logger.debug("No latitude coordinate found - skipping flip check")
+            return dataset
+        
+        lat_coords = dataset.coords[lat_dim].values
+        lat_decreasing = lat_coords[0] > lat_coords[-1]
+        
+        if lat_decreasing:
+            self.logger.warning("⚠️  Latitude coordinates are decreasing - applying coordinate flip")
+            self.logger.warning("🔄 This matches the GridWeightsGenerator correction for consistent orientation")
+            
+            # Flip latitude coordinates by reversing the slice
+            dataset_corrected = dataset.sel({lat_dim: slice(None, None, -1)})
+            
+            # Verify the flip
+            new_lat_coords = dataset_corrected.coords[lat_dim].values
+            self.logger.info(f"✅ Latitude corrected: {lat_coords.min():.4f} to {lat_coords.max():.4f}")
+            self.logger.info(f"   Original order: {lat_coords[0]:.4f} → {lat_coords[-1]:.4f}")
+            self.logger.info(f"   Corrected order: {new_lat_coords[0]:.4f} → {new_lat_coords[-1]:.4f}")
+            
+            return dataset_corrected
+        else:
+            self.logger.debug("✅ Latitude coordinates are correctly oriented (increasing)")
+            return dataset
         
     #---------------------------------------------------------------------------------
 
     def _save_daily_files(self, daily_datasets: Dict[str, xr.Dataset]) -> List[Path]:
         """
-        Save daily aggregated datasets to NetCDF files in the model data_obs directory
-        
+        Save daily aggregated datasets to NetCDF files with correct coordinate orientation and elevation data
+
         Parameters
         ----------
         daily_datasets : Dict[str, xr.Dataset]
             Dictionary of daily datasets
-            
+
         Returns
         -------
         List[Path]
             List of saved file paths
         """
         saved_files = []
-        
+
+        # 🏔️ Load elevation data once (if it exists)
+        elevation_dataset = None
+        elevation_file = self.output_path / 'era5_land_elevation.nc'
+
+        if elevation_file.exists():
+            try:
+                self.logger.info(f"📍 Loading elevation data from: {elevation_file.name}")
+                elevation_dataset = xr.open_dataset(elevation_file)
+
+                # Verify elevation data structure
+                if 'elevation' in elevation_dataset.data_vars:
+                    elev_shape = elevation_dataset['elevation'].shape
+                    elev_dims = elevation_dataset['elevation'].dims
+                    self.logger.info(f"   Elevation shape: {elev_shape}, dimensions: {elev_dims}")
+
+                    # 🔧 CRITICAL FIX: Apply coordinate flipping to elevation data too!
+                    self.logger.debug("Applying coordinate flipping to elevation data...")
+                    elevation_corrected = self._check_and_fix_coordinate_flipping(elevation_dataset)
+                    elevation_dataset.close()  # Close original
+                    elevation_dataset = elevation_corrected
+                    self.logger.debug("✅ Elevation data coordinate flipping applied")
+
+                else:
+                    self.logger.warning("❌ No 'elevation' variable found in elevation file")
+                    elevation_dataset = None
+
+            except Exception as e:
+                self.logger.error(f"❌ Error loading elevation file: {e}")
+                elevation_dataset = None
+        else:
+            self.logger.debug("📍 No elevation file found - saving without elevation data")
+
         for var_name, dataset in daily_datasets.items():
             try:
+                self.logger.debug(f"Saving {var_name} dataset...")
+
+                # 🔧 FIRST: Apply coordinate flipping to meteorological data
+                self.logger.debug(f"Checking coordinate orientation for {var_name} before saving...")
+                dataset_corrected = self._check_and_fix_coordinate_flipping(dataset)
+
+                # 🏔️ ADD ELEVATION: Now both datasets should have matching coordinates
+                elevation_added = False
+                if elevation_dataset is not None:
+                    try:
+                        self.logger.debug(f"Adding elevation data to {var_name}...")
+
+                        # Get coordinates from both datasets
+                        dataset_lat = dataset_corrected.coords.get('latitude', dataset_corrected.coords.get('lat'))
+                        dataset_lon = dataset_corrected.coords.get('longitude', dataset_corrected.coords.get('lon'))
+                        elev_lat = elevation_dataset.coords.get('latitude', elevation_dataset.coords.get('lat'))
+                        elev_lon = elevation_dataset.coords.get('longitude', elevation_dataset.coords.get('lon'))
+
+                        if (dataset_lat is not None and dataset_lon is not None and
+                            elev_lat is not None and elev_lon is not None):
+
+                            # 🔧 DEBUG: Log coordinate values for comparison
+                            self.logger.debug(f"Meteorological data coordinates (after flip):")
+                            self.logger.debug(f"  Lat: {dataset_lat.values[0]:.6f} to {dataset_lat.values[-1]:.6f} ({len(dataset_lat)} points)")
+                            self.logger.debug(f"  Lon: {dataset_lon.values[0]:.6f} to {dataset_lon.values[-1]:.6f} ({len(dataset_lon)} points)")
+
+                            self.logger.debug(f"Elevation data coordinates (after flip):")
+                            self.logger.debug(f"  Lat: {elev_lat.values[0]:.6f} to {elev_lat.values[-1]:.6f} ({len(elev_lat)} points)")
+                            self.logger.debug(f"  Lon: {elev_lon.values[0]:.6f} to {elev_lon.values[-1]:.6f} ({len(elev_lon)} points)")
+
+                            # Check if coordinates match with reasonable tolerance
+                            lat_match = (len(dataset_lat) == len(elev_lat)) and np.allclose(dataset_lat.values, elev_lat.values, rtol=1e-8, atol=1e-8)
+                            lon_match = (len(dataset_lon) == len(elev_lon)) and np.allclose(dataset_lon.values, elev_lon.values, rtol=1e-8, atol=1e-8)
+
+                            if lat_match and lon_match:
+                                # Add elevation variable to the dataset
+                                dataset_corrected['elevation'] = elevation_dataset['elevation']
+                                elevation_added = True
+
+                                self.logger.debug(f"✅ Successfully added elevation to {var_name}")
+                                self.logger.debug(f"   Final dataset variables: {list(dataset_corrected.data_vars)}")
+
+                            else:
+                                # 🔧 INTERPOLATE elevation if shapes do not match
+                                self.logger.warning("⚠️ Elevation grid does not match meteo grid - interpolating elevation data")
+                                try:
+                                    elev_interp = elevation_dataset['elevation'].interp(
+                                        latitude=dataset_lat,
+                                        longitude=dataset_lon
+                                    )
+                                    dataset_corrected['elevation'] = elev_interp
+                                    elevation_added = True
+                                    self.logger.info("✅ Successfully interpolated elevation to meteo grid")
+                                except Exception as e:
+                                    self.logger.error(f"❌ Error interpolating elevation: {e}")
+                                    elevation_added = False
+
+                        else:
+                            self.logger.warning(f"⚠️ Cannot find matching coordinates - skipping elevation for {var_name}")
+
+                    except Exception as e:
+                        self.logger.error(f"❌ Error adding elevation to {var_name}: {e}")
+                        import traceback
+                        self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+
+                # 🔧 CRITICAL FIX: Ensure we actually have data variables before saving
+                if len(list(dataset_corrected.data_vars)) == 0:
+                    self.logger.error(f"❌ Dataset {var_name} has no data variables! Skipping save.")
+                    continue
+
                 # Simplified filename without date range
                 filename = f"era5_land_{var_name}.nc"
                 output_file_path = self.output_path / filename
-                
-                # Add metadata
-                dataset.attrs.update({
+
+                # 🔧 FIX: Convert boolean to string for NetCDF compatibility
+                elevation_status = "true" if elevation_added else "false"  # Convert boolean to string
+
+                # Add metadata with proper data types
+                dataset_corrected.attrs.update({
                     'title': f'ERA5-Land {var_name} daily data',
-                    'gauge_id': self.gauge_id,
+                    'gauge_id': str(self.gauge_id),  # Ensure string type
                     'time_range': f"{self.start_date.date()} to {self.end_date.date()}",
                     'processed_by': 'ERA5LandAnalyzer',
                     'creation_date': pd.Timestamp.now().isoformat(),
-                    'model_type': self.model_type,
-                    'catchment': f'catchment_{self.gauge_id}'
+                    'model_type': str(self.model_type),  # Ensure string type
+                    'catchment': f'catchment_{self.gauge_id}',
+                    'coordinate_orientation': 'Corrected for consistent north-up orientation',
+                    'elevation_included': elevation_status  # Use string instead of boolean
                 })
-                
-                # Save dataset
-                dataset.to_netcdf(output_file_path)
+
+                # Log what we're about to save
+                self.logger.debug(f"About to save {var_name}:")
+                self.logger.debug(f"  Data variables: {list(dataset_corrected.data_vars)}")
+                self.logger.debug(f"  Dimensions: {dict(dataset_corrected.dims)}")
+                self.logger.debug(f"  Coordinates: {list(dataset_corrected.coords)}")
+
+                # Save corrected dataset
+                dataset_corrected.to_netcdf(output_file_path)
                 saved_files.append(output_file_path)
-                
-                self.logger.info(f"Saved {var_name}: {filename}")
+
+                elevation_status_msg = "with elevation" if elevation_added else "without elevation"
+                self.logger.info(f"Saved {var_name}: {filename} ({elevation_status_msg})")
                 self.logger.debug(f"Full path: {output_file_path}")
-                
-                # Close dataset to free memory
+
+                # Close datasets to free memory
                 dataset.close()
-                
+                dataset_corrected.close()
+
             except Exception as e:
                 self.logger.error(f"Error saving {var_name}: {str(e)}")
-        
+                import traceback
+                self.logger.error(f"Full traceback: {traceback.format_exc()}")
+
+        # Close elevation dataset if it was loaded
+        if elevation_dataset is not None:
+            elevation_dataset.close()
+            self.logger.debug("Closed elevation dataset")
+
         return saved_files
 
     #---------------------------------------------------------------------------------
@@ -714,6 +1287,7 @@ class ERA5LandAnalyzer:
     def _find_and_process_monthly_files(self) -> List[Path]:
         """
         Main method to find monthly files, combine them, filter time range, and aggregate to daily
+        INCLUDING geopotential processing for elevation data
         
         Returns
         -------
@@ -729,9 +1303,18 @@ class ERA5LandAnalyzer:
             self.logger.error("No monthly files found!")
             return []
         
+        # 🏔️ Step 2: Process geopotential to elevation FIRST (before meteorological processing)
+        self.logger.info("🏔️ Processing geopotential to elevation...")
+        elevation_file = self.process_geopotential_to_elevation()
+        
+        if elevation_file is not None:
+            self.logger.info(f"✅ Elevation processing successful: {elevation_file.name}")
+        else:
+            self.logger.warning("⚠️ Elevation processing failed - meteorological files will be saved without elevation data")
+        
         all_daily_files = []
         
-        # Step 2: Process temperature files
+        # Step 3: Process temperature files
         if monthly_files['temperature']:
             self.logger.info("Processing temperature files...")
             
@@ -745,7 +1328,7 @@ class ERA5LandAnalyzer:
                 # Aggregate to daily
                 temp_daily = self._aggregate_to_daily(temp_filtered, 'temperature')
                 
-                # Save daily files
+                # Save daily files (elevation will be added automatically if available)
                 if temp_daily:
                     temp_files = self._save_daily_files(temp_daily)
                     all_daily_files.extend(temp_files)
@@ -754,7 +1337,7 @@ class ERA5LandAnalyzer:
                 temp_combined.close()
                 temp_filtered.close()
         
-        # Step 3: Process precipitation files
+        # Step 4: Process precipitation files
         if monthly_files['precipitation']:
             self.logger.info("Processing precipitation files...")
             
@@ -768,7 +1351,7 @@ class ERA5LandAnalyzer:
                 # Aggregate to daily
                 precip_daily = self._aggregate_to_daily(precip_filtered, 'precipitation')
                 
-                # Save daily files
+                # Save daily files (elevation will be added automatically if available)
                 if precip_daily:
                     precip_files = self._save_daily_files(precip_daily)
                     all_daily_files.extend(precip_files)
@@ -777,7 +1360,7 @@ class ERA5LandAnalyzer:
                 precip_combined.close()
                 precip_filtered.close()
         
-        # Step 4: Process PET files
+        # Step 5: Process PET files
         if monthly_files['potential_evaporation']:
             self.logger.info("Processing potential evaporation files...")
             
@@ -791,7 +1374,7 @@ class ERA5LandAnalyzer:
                 # Aggregate to daily
                 pet_daily = self._aggregate_to_daily(pet_filtered, 'potential_evaporation')
                 
-                # Save daily files
+                # Save daily files (elevation will be added automatically if available)
                 if pet_daily:
                     pet_files = self._save_daily_files(pet_daily)
                     all_daily_files.extend(pet_files)
@@ -1802,14 +2385,8 @@ class GridWeightsGenerator:
             self.gauge_id = namelist_config['gauge_id']
             main_dir = Path(namelist_config['main_dir'])
             coupled = namelist_config.get('coupled', False)
-            model_dirs = namelist_config['model_dirs']
+            self.model_dir = main_dir / namelist_config['config_dir'] / f'catchment_{self.gauge_id}'
             self.model_type = namelist_config['model_type']
-            
-            # CONSTRUCT MODEL_DIR THE SAME WAY AS OTHER CLASSES
-            if coupled:
-                self.model_dir = main_dir / model_dirs["coupled"] / f'catchment_{self.gauge_id}'
-            else:
-                self.model_dir = main_dir / model_dirs["uncoupled"] / f'catchment_{self.gauge_id}'
             
             # Optional parameters from namelist or defaults
             self.cell_size = namelist_config.get('cell_size')
@@ -1939,8 +2516,29 @@ class GridWeightsGenerator:
         else:
             raise ValueError("Cannot find latitude/longitude coordinates in ERA5-Land netCDF")
         
-        self.logger.debug(f"Latitude range: {lat_coords.min():.4f} to {lat_coords.max():.4f}")
-        self.logger.debug(f"Longitude range: {lon_coords.min():.4f} to {lon_coords.max():.4f}")
+        self.logger.debug(f"Original latitude range: {lat_coords.min():.4f} to {lat_coords.max():.4f}")
+        self.logger.debug(f"Original longitude range: {lon_coords.min():.4f} to {lon_coords.max():.4f}")
+        
+        # 🔧 FIX: Check if latitude coordinates are decreasing (indicating flip needed)
+        lat_decreasing = lat_coords[0] > lat_coords[-1]
+        
+        if lat_decreasing:
+            self.logger.warning("⚠️  Latitude coordinates are decreasing - data appears to be vertically flipped!")
+            self.logger.warning("🔄 Flipping latitude coordinates and data array to correct orientation")
+            
+            # Flip latitude coordinates
+            lat_coords = np.flipud(lat_coords)
+            
+            # Also flip the data array along the latitude dimension
+            if 'latitude' in xarr.dims:
+                xarr = xarr.sel(latitude=slice(None, None, -1))  # Reverse latitude dimension
+            elif 'lat' in xarr.dims:
+                xarr = xarr.sel(lat=slice(None, None, -1))  # Reverse lat dimension
+            
+            self.logger.info(f"✅ Corrected latitude range: {lat_coords.min():.4f} to {lat_coords.max():.4f}")
+            self.logger.info("🗺️  Data orientation corrected - latitudes now increase northward")
+        else:
+            self.logger.debug("✅ Latitude coordinates are already correctly oriented")
         
         # Create meshgrid for all coordinate combinations
         LON, LAT = np.meshgrid(lon_coords, lat_coords)
@@ -1971,7 +2569,15 @@ class GridWeightsGenerator:
             crs="EPSG:4326"  # ERA5-Land is in WGS84
         )
         
-        self.logger.debug(f"Created GeoDataFrame with {len(grid_points)} points")
+        self.logger.info(f"Created GeoDataFrame with {len(grid_points)} points")
+        
+        # 🔍 VERIFICATION: Log some sample coordinates for verification
+        if lat_decreasing:
+            self.logger.debug("📍 Sample corrected coordinates (first 3 points):")
+            for i in range(min(3, len(grid_points))):
+                point = grid_points.iloc[i]
+                self.logger.debug(f"  Point {i}: Lat={point.geometry.y:.4f}, Lon={point.geometry.x:.4f}, Value={point[main_var]:.3f}")
+        
         return grid_points
 
     #---------------------------------------------------------------------------------
@@ -2377,7 +2983,57 @@ class GridWeightsGenerator:
         # Write gridweights file
         self.write_gridWeights(HRU, era5_grid_polygons, relative_area)
         
+        # 🔍 VERIFICATION: Add detailed verification after generating grid weights
+        if self.debug:
+            self.logger.info("🔍 Verifying grid orientation with HRU bounds...")
+            
+            # Get bounds of HRU in WGS84
+            HRU_wgs84 = HRU.to_crs('EPSG:4326')
+            hru_bounds = HRU_wgs84.total_bounds  # [minx, miny, maxx, maxy]
+            
+            # Get bounds of ERA5 grid
+            grid_bounds = era5_grid_polygons.total_bounds
+            
+            self.logger.info(f"HRU bounds: Lat [{hru_bounds[1]:.4f}, {hru_bounds[3]:.4f}], Lon [{hru_bounds[0]:.4f}, {hru_bounds[2]:.4f}]")
+            self.logger.info(f"Grid bounds: Lat [{grid_bounds[1]:.4f}, {grid_bounds[3]:.4f}], Lon [{grid_bounds[0]:.4f}, {grid_bounds[2]:.4f}]")
+            
+            # Check for reasonable overlap
+            lat_overlap = not (hru_bounds[3] < grid_bounds[1] or hru_bounds[1] > grid_bounds[3])
+            lon_overlap = not (hru_bounds[2] < grid_bounds[0] or hru_bounds[0] > grid_bounds[2])
+            
+            if lat_overlap and lon_overlap:
+                self.logger.info("✅ HRU and grid bounds overlap - orientation looks correct")
+            else:
+                self.logger.error("❌ HRU and grid bounds DO NOT overlap - possible orientation error!")
+                self.logger.error("🚨 Check your data orientation - HRUs might be mapped to wrong grid cells!")
+                
+                # Additional debugging information
+                lat_gap = max(0, max(hru_bounds[1] - grid_bounds[3], grid_bounds[1] - hru_bounds[3]))
+                lon_gap = max(0, max(hru_bounds[0] - grid_bounds[2], grid_bounds[0] - hru_bounds[2]))
+                
+                if lat_gap > 0:
+                    self.logger.error(f"  Latitude gap: {lat_gap:.4f} degrees")
+                if lon_gap > 0:
+                    self.logger.error(f"  Longitude gap: {lon_gap:.4f} degrees")
+            
+            # Check grid weight statistics
+            self.logger.info("📊 Grid weights statistics:")
+            self.logger.info(f"  Total grid cells: {len(era5_grid_polygons)}")
+            self.logger.info(f"  Total HRUs: {len(HRU)}")
+            self.logger.info(f"  Total weight entries: {len(relative_area)}")
+            self.logger.info(f"  Sum of all weights: {relative_area['normalized_relative_area'].sum():.6f}")
+            
+            # Check if weights sum to number of HRUs (should be close to len(HRU))
+            expected_sum = len(HRU)
+            actual_sum = relative_area['normalized_relative_area'].sum()
+            if abs(actual_sum - expected_sum) > 0.01:
+                self.logger.warning(f"⚠️ Weight sum ({actual_sum:.6f}) differs from expected ({expected_sum})")
+            else:
+                self.logger.info(f"✅ Weight sum verification passed")
+        
         self.logger.info("ERA5-Land grid weights generation completed successfully")
+        
+        # 🔧 FIX: Return the relative_area GeoDataFrame
         return relative_area
 
 #--------------------------------------------------------------------------------

@@ -41,12 +41,7 @@ class GloGEMProcessor:
         self.end_date = config['end_date']
         self.debug = config.get('debug', False)
         self.coupled = config.get('coupled', False)
-        
-        # Set model directory based on coupled/uncoupled
-        if self.coupled:
-            self.model_dir = self.main_dir / config['model_dirs']['coupled']
-        else:
-            self.model_dir = self.main_dir / config['model_dirs']['uncoupled']
+        self.model_dir = self.main_dir / config.get('config_dir')
         
         # GloGEM specific parameters (you may need to add these to your namelist)
         self.glogem_dir = config.get('glogem_dir')  # Add this to your namelist
@@ -133,13 +128,17 @@ class GloGEMProcessor:
     def build_glogem_melt_from_multiple_files(self):
         """
         If the expected GloGEM files for the catchment are missing, 
-        search all .dat files in the GloGEM directory, extract glacier melt data 
-        for glacier IDs present in the catchment shapefile, and build GloGEM_melt.csv.
+        search all .dat files in the GloGEM directory, extract glacier data 
+        for glacier IDs present in the catchment shapefile, and build separate CSV files:
+        - GloGEM_icemelt.csv
+        - GloGEM_snowmelt.csv  
+        - GloGEM_rain.csv
+        - GloGEM_melt.csv (total/output)
         """
         from datetime import datetime, timedelta
         import pickle
         
-        self.logger.info(f"Building GloGEM melt data from multiple files for gauge {self.gauge_id}")
+        self.logger.info(f"Building GloGEM component data from multiple files for gauge {self.gauge_id}")
         
         # Get glacier IDs from catchment shapefile
         catchment_shape_file = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
@@ -178,7 +177,7 @@ class GloGEMProcessor:
         
         self.logger.info(f"Looking for {len(glacier_ids_needed)} glacier IDs: {list(glacier_ids_needed)[:5]}...")
         
-        # FIX: Get the base directory properly
+        # Get the base directory properly
         if self.glogem_dir.is_file() or str(self.glogem_dir).endswith('.dat'):
             # If glogem_dir points to a file, use its parent directory
             glogem_base_dir = self.glogem_dir.parent
@@ -186,134 +185,185 @@ class GloGEMProcessor:
             # If glogem_dir is already a directory, use it as is
             glogem_base_dir = self.glogem_dir
         
-        # Look for all GloGEM files with different patterns
-        file_patterns = [
-            "GloGEM_icemelt_*.dat",
-            "GloGEM_snowmelt_*.dat", 
-            "GloGEM_output_*.dat"
-        ]
+        # Define file patterns and corresponding component names
+        file_patterns = {
+            'icemelt': "GloGEM_icemelt_*.dat",
+            'snowmelt': "GloGEM_snowmelt_*.dat", 
+            'output': "GloGEM_output_*.dat",
+            'rain': "GloGEM_rain_*.dat"  # Added rain component
+        }
         
-        all_glogem_files = []
-        for pattern in file_patterns:
-            files = list(glogem_base_dir.glob(pattern))
-            all_glogem_files.extend(files)
-        
-        self.logger.info(f"Found {len(all_glogem_files)} GloGEM files to search through")
-        
-        if not all_glogem_files:
-            raise FileNotFoundError(f"No GloGEM .dat files found in directory: {glogem_base_dir}")
-        
-        # CHANGED: Store records by glacier ID to maintain individual glacier data
-        glacier_records = {}  # Will store {glacier_id: {date: melt_value}}
+        # Store records by component and glacier ID
+        component_records = {
+            'icemelt': {},  # {glacier_id: {date: value}}
+            'snowmelt': {},
+            'output': {},
+            'rain': {}
+        }
         glacier_areas = {}
         
-        # Search through all files - focus on output files for total melt
-        for dat_file in all_glogem_files:
-            # Only process output files for the final melt data
-            if 'output' not in dat_file.name:
+        # Process each component type
+        for component, pattern in file_patterns.items():
+            self.logger.info(f"Processing {component} files...")
+            
+            component_files = list(glogem_base_dir.glob(pattern))
+            self.logger.info(f"Found {len(component_files)} {component} files")
+            
+            if not component_files:
+                self.logger.warning(f"No {component} files found with pattern: {pattern}")
                 continue
             
-            self.logger.debug(f"Searching output file: {dat_file.name}")
-            
-            # Read and parse the file
-            try:
-                with open(dat_file, 'r') as f:
-                    for line_num, line in enumerate(f, 1):
-                        if line.startswith("ID") or line.startswith("//") or line.strip() == "":
-                            continue
-                        
-                        parts = line.strip().split()
-                        if len(parts) < 5:
-                            continue
-                        
-                        glacier_id = parts[0]
-                        
-                        # Check if this glacier ID is needed
-                        if glacier_id not in glacier_ids_needed:
-                            continue
-                        
-                        try:
-                            year = int(parts[1])
-                            area = float(parts[2])
-                            glacier_areas[glacier_id] = area  # Store area for later use
+            # Search through all files for this component
+            for dat_file in component_files:
+                self.logger.debug(f"Searching {component} file: {dat_file.name}")
+                
+                # Read and parse the file
+                try:
+                    with open(dat_file, 'r') as f:
+                        for line_num, line in enumerate(f, 1):
+                            if line.startswith("ID") or line.startswith("//") or line.strip() == "":
+                                continue
                             
-                            # Parse daily values (replace '*' with 0.0)
-                            daily_values = []
-                            for val in parts[3:]:
-                                try:
-                                    daily_values.append(float(val) if val != '*' else 0.0)
-                                except ValueError:
-                                    daily_values.append(0.0)
+                            parts = line.strip().split()
+                            if len(parts) < 5:
+                                continue
                             
-                            # Create date range for hydrological year (Oct 1 to Sep 30)
-                            start_date_hydro = datetime(year-1, 10, 1)
+                            glacier_id = parts[0]
                             
-                            # Initialize glacier record if not exists
-                            if glacier_id not in glacier_records:
-                                glacier_records[glacier_id] = {}
+                            # Check if this glacier ID is needed
+                            if glacier_id not in glacier_ids_needed:
+                                continue
                             
-                            # Store daily values for this glacier
-                            for day, value in enumerate(daily_values):
-                                date = start_date_hydro + timedelta(days=day)
-                                glacier_records[glacier_id][date] = value
+                            try:
+                                year = int(parts[1])
+                                area = float(parts[2])
+                                glacier_areas[glacier_id] = area  # Store area for later use
                                 
-                        except (ValueError, IndexError) as e:
-                            self.logger.warning(f"Error parsing line {line_num} in {dat_file.name}: {e}")
-                            continue
-                            
-            except Exception as e:
-                self.logger.error(f"Error reading file {dat_file}: {e}")
-                continue
+                                # Parse daily values (replace '*' with 0.0)
+                                daily_values = []
+                                for val in parts[3:]:
+                                    try:
+                                        daily_values.append(float(val) if val != '*' else 0.0)
+                                    except ValueError:
+                                        daily_values.append(0.0)
+                                
+                                # Create date range for hydrological year (Oct 1 to Sep 30)
+                                start_date_hydro = datetime(year-1, 10, 1)
+                                
+                                # Initialize glacier record if not exists
+                                if glacier_id not in component_records[component]:
+                                    component_records[component][glacier_id] = {}
+                                
+                                # Store daily values for this glacier
+                                for day, value in enumerate(daily_values):
+                                    if day < len(daily_values):  # Safety check
+                                        date = start_date_hydro + timedelta(days=day)
+                                        component_records[component][glacier_id][date] = value
+                                        
+                            except (ValueError, IndexError) as e:
+                                self.logger.warning(f"Error parsing line {line_num} in {dat_file.name}: {e}")
+                                continue
+                                
+                except Exception as e:
+                    self.logger.error(f"Error reading file {dat_file}: {e}")
+                    continue
         
         # Check if we found any data
-        if not glacier_records:
-            raise ValueError(f"No glacier data found for glacier IDs: {glacier_ids_needed}")
+        total_components_found = sum(1 for records in component_records.values() if records)
+        if total_components_found == 0:
+            raise ValueError(f"No glacier data found for any component for glacier IDs: {glacier_ids_needed}")
         
-        self.logger.info(f"Found data for glaciers: {list(glacier_records.keys())}")
+        self.logger.info(f"Found data for components: {[comp for comp, records in component_records.items() if records]}")
         
         # Filter for the specified date range
         start = datetime.strptime(self.start_date, '%Y-%m-%d')
         end = datetime.strptime(self.end_date, '%Y-%m-%d')
         
-        # CHANGED: Create final records in the exact same format as the original
-        final_records = []
+        # Create output directory
+        topo_dir = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files"
+        topo_dir.mkdir(parents=True, exist_ok=True)
         
-        for glacier_id, date_values in glacier_records.items():
-            for date, value in date_values.items():
-                if start <= date <= end:
-                    final_records.append({
-                        'id': glacier_id,  # Keep individual glacier IDs
-                        'date': date,
-                        'q': value
-                    })
+        # Define output file paths
+        output_files = {
+            'icemelt': topo_dir / 'GloGEM_icemelt.csv',
+            'snowmelt': topo_dir / 'GloGEM_snowmelt.csv',
+            'output': topo_dir / 'GloGEM_melt.csv',  # Keep original name for backward compatibility
+            'rain': topo_dir / 'GloGEM_rain.csv'
+        }
         
-        if not final_records:
-            self.logger.warning("No records found within the specified date range")
-            # Create empty dataframe with correct structure
-            final_df = pd.DataFrame(columns=['id', 'date', 'q'])
-        else:
-            # Create DataFrame with individual glacier records
-            final_df = pd.DataFrame(final_records)
+        # Process each component and create CSV files
+        component_dataframes = {}
+        
+        for component, glacier_records in component_records.items():
+            if not glacier_records:
+                self.logger.warning(f"No data found for {component} component, skipping...")
+                continue
+                
+            self.logger.info(f"Creating {component} CSV file...")
             
-            # Sort by glacier ID and date for consistency
-            final_df = final_df.sort_values(['id', 'date']).reset_index(drop=True)
+            # Create final records for this component
+            final_records = []
+            
+            for glacier_id, date_values in glacier_records.items():
+                for date, value in date_values.items():
+                    if start <= date <= end:
+                        final_records.append({
+                            'id': glacier_id,
+                            'date': date,
+                            'q': value
+                        })
+            
+            if not final_records:
+                self.logger.warning(f"No {component} records found within the specified date range")
+                # Create empty dataframe with correct structure
+                final_df = pd.DataFrame(columns=['id', 'date', 'q'])
+            else:
+                # Create DataFrame with individual glacier records
+                final_df = pd.DataFrame(final_records)
+                
+                # Sort by glacier ID and date for consistency
+                final_df = final_df.sort_values(['id', 'date']).reset_index(drop=True)
+            
+            # Save the component CSV file
+            final_df.to_csv(output_files[component], index=False)
+            component_dataframes[component] = final_df
+            
+            self.logger.info(f"✅ {component.capitalize()} file created: {output_files[component]} ({len(final_df)} records)")
+            
+            if not final_df.empty:
+                num_glaciers = final_df['id'].nunique()
+                date_range_str = f"{final_df['date'].min()} to {final_df['date'].max()}"
+                self.logger.info(f"   Found {num_glaciers} individual glaciers, Date range: {date_range_str}")
         
-        # Save the result
-        self.glogem_path.parent.mkdir(parents=True, exist_ok=True)
-        final_df.to_csv(self.glogem_path, index=False)
+        # Create summary report
+        self.logger.info("\n" + "="*60)
+        self.logger.info("GLOGEM COMPONENT PROCESSING SUMMARY")
+        self.logger.info("="*60)
         
-        self.logger.info(f"✅ GloGEM melt file created from multiple sources: {self.glogem_path} ({len(final_df)} records)")
-        self.logger.info(f"   Found {len(glacier_records)} individual glaciers")
-        self.logger.info(f"   Date range: {final_df['date'].min()} to {final_df['date'].max()}")
+        for component, df in component_dataframes.items():
+            if not df.empty:
+                num_records = len(df)
+                num_glaciers = df['id'].nunique()
+                mean_value = df['q'].mean()
+                max_value = df['q'].max()
+                total_value = df['q'].sum()
+                
+                self.logger.info(f"{component.upper()}:")
+                self.logger.info(f"  📁 File: {output_files[component].name}")
+                self.logger.info(f"  📊 Records: {num_records}")
+                self.logger.info(f"  🏔️  Glaciers: {num_glaciers}")
+                self.logger.info(f"  📈 Stats: Mean={mean_value:.3f}, Max={max_value:.3f}, Total={total_value:.1f}")
+            else:
+                self.logger.info(f"{component.upper()}: No data available")
         
-        # CHANGED: For the return value, still create the aggregated format for plotting/analysis
-        # but the CSV file now contains individual glacier records
-        if not final_df.empty:
+        # For backward compatibility, return the total output (melt) dataframe in aggregated format
+        if 'output' in component_dataframes and not component_dataframes['output'].empty:
+            output_df = component_dataframes['output']
             # Convert to datetime for processing
-            final_df['date'] = pd.to_datetime(final_df['date'])
+            output_df['date'] = pd.to_datetime(output_df['date'])
             
             # Create aggregated data for return (for backwards compatibility with plotting functions)
-            daily_totals = final_df.groupby('date')['q'].sum().reset_index()
+            daily_totals = output_df.groupby('date')['q'].sum().reset_index()
             daily_totals.columns = ['date', 'glacier_melt']
             daily_totals['snowmelt'] = 0.0  # Placeholder
             daily_totals['total_output'] = daily_totals['glacier_melt']
@@ -378,10 +428,81 @@ class GloGEMProcessor:
             self.logger.info(f"Loading cached final result from {cache_files['final_result']}")
             with open(cache_files['final_result'], 'rb') as f:
                 scaled_df = pickle.load(f)
+            
+            # ✅ NEW: Create individual CSV files even when loading from cache
+            if not self.glogem_path.exists() or force_reprocess:
+                self.logger.info("Creating missing CSV files from cached data...")
+                
+                # Create output directory
+                topo_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Try to load individual glacier data from cache
+                component_cache_exists = all(cache_files[comp].exists() for comp in ['icemelt', 'snowmelt', 'output'])
+                
+                if component_cache_exists:
+                    # Load cached component data
+                    with open(cache_files['icemelt'], 'rb') as f:
+                        icemelt_df, icemelt_areas = pickle.load(f)
+                    with open(cache_files['snowmelt'], 'rb') as f:
+                        snowmelt_df, snowmelt_areas = pickle.load(f)
+                    with open(cache_files['output'], 'rb') as f:
+                        output_df, output_areas = pickle.load(f)
+                    
+                    # Filter for date range
+                    start = datetime.strptime(self.start_date, '%Y-%m-%d')
+                    end = datetime.strptime(self.end_date, '%Y-%m-%d')
+                    icemelt_df = icemelt_df[(icemelt_df['date'] >= start) & (icemelt_df['date'] <= end)]
+                    snowmelt_df = snowmelt_df[(snowmelt_df['date'] >= start) & (snowmelt_df['date'] <= end)]
+                    output_df = output_df[(output_df['date'] >= start) & (output_df['date'] <= end)]
+                    
+                    # Define output file paths for individual components
+                    output_files = {
+                        'icemelt': topo_dir / 'GloGEM_icemelt.csv',
+                        'snowmelt': topo_dir / 'GloGEM_snowmelt.csv',
+                        'output': topo_dir / 'GloGEM_melt.csv',  # Keep original name for backward compatibility
+                    }
+                    
+                    # Create individual component CSV files
+                    component_dfs = {
+                        'icemelt': icemelt_df,
+                        'snowmelt': snowmelt_df,
+                        'output': output_df
+                    }
+                    
+                    for component, df in component_dfs.items():
+                        if not df.empty:
+                            # Create final records for this component
+                            final_records = []
+                            for _, row in df.iterrows():
+                                final_records.append({
+                                    'id': row['glacier_id'],
+                                    'date': row['date'],
+                                    'q': row['value']
+                                })
+                            
+                            # Create DataFrame and save to CSV
+                            if final_records:
+                                final_df = pd.DataFrame(final_records)
+                                final_df = final_df.sort_values(['id', 'date']).reset_index(drop=True)
+                                
+                                # Save the component CSV file
+                                final_df.to_csv(output_files[component], index=False)
+                                
+                                self.logger.info(f"✅ {component.capitalize()} file created from cache: {output_files[component].name} ({len(final_df)} records)")
+                            else:
+                                self.logger.warning(f"No records found for {component} component in cache")
+                        else:
+                            self.logger.warning(f"No data found for {component} component in cache")
+                else:
+                    self.logger.warning("Cannot create individual CSV files - component cache missing, will build from multiple files")
+                    scaled_df = self.build_glogem_melt_from_multiple_files()
+                    if plot:
+                        self.create_glogem_plots(scaled_df)
+                    return scaled_df
+            
             if plot:
                 self.create_glogem_plots(scaled_df)
             return scaled_df
-        
 
         # Helper to parse large GloGEM file in chunks and cache the result
         def parse_glogem_file_chunked(file_path, cache_file, file_type):
@@ -482,29 +603,55 @@ class GloGEMProcessor:
             scaled_df['snowmelt'] = scaled_df['snowmelt'] * catchment_area_m2 / 1000
             scaled_df['total_output'] = scaled_df['total_output'] * catchment_area_m2 / 1000
 
-        # NEW: Create individual glacier records for CSV output (same format as build_glogem_melt_from_multiple_files)
-        final_records = []
+        # ✅ CRITICAL FIX: CREATE INDIVIDUAL COMPONENT CSV FILES BEFORE CACHING
+        self.logger.info("Creating individual component CSV files...")
         
-        # Use output_df for individual glacier records (total melt per glacier)
-        for _, row in output_df.iterrows():
-            final_records.append({
-                'id': row['glacier_id'],
-                'date': row['date'], 
-                'q': row['value']
-            })
+        # Create output directory
+        topo_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create DataFrame and save to CSV
-        if final_records:
-            final_df = pd.DataFrame(final_records)
-            final_df = final_df.sort_values(['id', 'date']).reset_index(drop=True)
-            
-            # Save the result
-            self.glogem_path.parent.mkdir(parents=True, exist_ok=True)
-            final_df.to_csv(self.glogem_path, index=False)
-            
-            self.logger.info(f"✅ GloGEM melt file created: {self.glogem_path} ({len(final_df)} records)")
-            self.logger.info(f"   Found {len(output_df['glacier_id'].unique())} individual glaciers")
-            self.logger.info(f"   Date range: {final_df['date'].min()} to {final_df['date'].max()}")
+        # Define output file paths for individual components
+        output_files = {
+            'icemelt': topo_dir / 'GloGEM_icemelt.csv',
+            'snowmelt': topo_dir / 'GloGEM_snowmelt.csv',
+            'output': topo_dir / 'GloGEM_melt.csv',  # Keep original name for backward compatibility
+        }
+        
+        # Create individual component CSV files
+        component_dfs = {
+            'icemelt': icemelt_df,
+            'snowmelt': snowmelt_df,
+            'output': output_df
+        }
+        
+        for component, df in component_dfs.items():
+            if not df.empty:
+                # Create final records for this component
+                final_records = []
+                for _, row in df.iterrows():
+                    final_records.append({
+                        'id': row['glacier_id'],
+                        'date': row['date'],
+                        'q': row['value']
+                    })
+                
+                # Create DataFrame and save to CSV
+                if final_records:
+                    final_df = pd.DataFrame(final_records)
+                    final_df = final_df.sort_values(['id', 'date']).reset_index(drop=True)
+                    
+                    # Save the component CSV file
+                    final_df.to_csv(output_files[component], index=False)
+                    
+                    self.logger.info(f"✅ {component.capitalize()} file created: {output_files[component].name} ({len(final_df)} records)")
+                    
+                    if not final_df.empty:
+                        num_glaciers = final_df['id'].nunique()
+                        date_range_str = f"{final_df['date'].min()} to {final_df['date'].max()}"
+                        self.logger.info(f"   Found {num_glaciers} individual glaciers, Date range: {date_range_str}")
+                else:
+                    self.logger.warning(f"No records found for {component} component")
+            else:
+                self.logger.warning(f"No data found for {component} component")
 
         # Cache the final result
         with open(cache_files['final_result'], 'wb') as f:

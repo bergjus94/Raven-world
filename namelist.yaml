@@ -1,8 +1,7 @@
-gauge_id: '0620'
-start_date: '1981-01-01'
-end_date: '2009-12-31'
-cali_end_date: '1995-12-31'
-#cell_size: 1000
+gauge_id: '0667'
+start_date: '2011-01-01'
+end_date: '2015-12-31'
+cali_end_date: '2013-12-31'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'
@@ -23,15 +22,17 @@ raster_dir: '01_data/topo/catchment_dem/dem_{gauge_id}.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_{gauge_id}.tif'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_15.rgi60.SouthAsiaEast/15_rgi60_SouthAsiaEast.shp'
+#glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
 glogem_dir: '01_data/GloGEM/Ganges/GloGEM_output_{gauge_id}.dat'
+#glogem_dir: '01_data/GloGEM/Indus/geodetic_mass_balance/GloGEM_output_{gauge_id}.dat'
 swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
 params_dir: 'config/default_params.yaml'
 
-model_dirs:
-  coupled: '03_model_setups_coupled'
-  uncoupled: '03_model_setups'
+#model_dirs:
+#  coupled: '03_model_setups_coupled'
+#  uncoupled: '03_model_setups'
 
-config_dir: '02_model_setups_coupled'
+config_dir: '03_model_setups_coupled'
 
 
 # Forcing files (can be empty or filled as needed)

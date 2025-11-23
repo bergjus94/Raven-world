@@ -27,7 +27,7 @@ class CatchmentDelineator:
         self.country = country
         
         # Create directory structure
-        self.data_dir = self.base_dir / "data"
+        self.data_dir = self.base_dir / "catchment_delineation_data"
         self.srtm_dir = self.data_dir / "srtm_tiles"
         self.processed_dir = self.data_dir / "processed"
         self.catchments_dir = self.data_dir / "catchments"
@@ -231,6 +231,7 @@ class CatchmentDelineator:
         self.processed_dem_path = filled_dem
         print(f"✅ Preprocessed DEM: {self.processed_dem_path}")
         return self.processed_dem_path
+    
     
     def calculate_flow_accumulation(self):
         """Calculate D8 flow direction and accumulation; verify outputs exist."""
@@ -476,11 +477,11 @@ class CatchmentDelineator:
         
 def main():
     # Your existing main function
-    stations_file = "/home/jberg/OneDrive/Raven_worldwide/01_data/topo/gauging_stations/Pakistan_stations.shp"
+    stations_file = "/home/jberg/OneDrive/Raven_worldwide/01_data/topo/gauging_stations/Nepal_stations_mideast.shp"
     base_dir = "/home/jberg/OneDrive/Raven_worldwide/01_data"
     
     try:
-        delineator = CatchmentDelineator(base_dir=base_dir, country="Pakistan")
+        delineator = CatchmentDelineator(base_dir=base_dir, country="Nepal")
         
         stations_gdf = delineator.load_gauge_stations(stations_file=stations_file)
         dem_path = delineator.download_srtm_in_chunks()

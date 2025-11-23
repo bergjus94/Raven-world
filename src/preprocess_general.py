@@ -17,7 +17,8 @@ def create_folder(namelist_path):
         config = yaml.safe_load(f)
 
     # Extract variables
-    model_dir = config.get('config_dir')
+    main_dir = Path(config.get('main_dir'))
+    model_dir = main_dir / config.get('config_dir')
     gauge_id = config.get('gauge_id')
     model_type = config.get('model_type')
     scenario_id = config.get('scenario_id', None)

@@ -10,6 +10,8 @@ import sys
 import traceback
 from pathlib import Path
 import yaml
+import matplotlib
+matplotlib.use('Agg')  # Prevent plots from showing in image viewer
 
 # Import your modules
 import preprocess_general
@@ -30,22 +32,9 @@ def main(namelist_path):
     print(f"🔄 Reading namelist: {namelist_path}")
     with open(namelist_path, "r") as f:
         nml = yaml.safe_load(f)
-
+    
     # Extract variables
-    gauge_id = nml["gauge_id"]
     coupled = nml["coupled"]
-    main_dir = nml["main_dir"]
-    model_dirs = nml["model_dirs"]
-    model_type = nml["model_type"]
-    params_dir = nml["params_dir"]
-    start_date = nml["start_date"]
-    end_date = nml["end_date"]
-    cali_end_date = nml["cali_end_date"]
-
-    if coupled:
-        model_dir = Path(main_dir, model_dirs["coupled"])
-    else:
-        model_dir = Path(main_dir, model_dirs["uncoupled"])
 
     # 1. Create folder structure
     print("📁 Creating folder structure...")
@@ -93,21 +82,19 @@ def main(namelist_path):
     generator = GridWeightsGenerator(namelist_path)
     grid_weights = generator.generate()
 
-    # 7. Process GloGEM glacier data
-    print("❄️ Processing GloGEM glacier data...")
-    glogem_processor = GloGEMProcessor(namelist_path)
-    results_glogem = glogem_processor.prepare_coupled_forcing()
-    print(f"🎉 GloGEM processing completed successfully!")
-    print(f"   - Precipitation data shape: {results_glogem['precipitation'].shape}")
-    print(f"   - Temperature data files: {len(results_glogem['temperature'])}")
-    print(f"📁 Files created in: {glogem_processor.model_dir}/catchment_{glogem_processor.gauge_id}/{glogem_processor.model_type}/data_obs/")
+    # 7. Process GloGEM glacier data (only if coupled mode)
+    if coupled:
+        print("❄️ Processing GloGEM glacier data...")
+        glogem_processor = GloGEMProcessor(namelist_path)
+        results_glogem = glogem_processor.prepare_coupled_forcing()
+        print(f"🎉 GloGEM processing completed successfully!")
+        print(f"   - Precipitation data shape: {results_glogem['precipitation'].shape}")
+        print(f"   - Temperature data files: {len(results_glogem['temperature'])}")
+        print(f"📁 Files created in: {glogem_processor.model_dir}/catchment_{glogem_processor.gauge_id}/{glogem_processor.model_type}/data_obs/")
+    else:
+        print("⏭️ Skipping GloGEM processing (coupled=False)")
 
-    # 8. Load default parameters
-    print("⚙️ Loading default parameters...")
-    with open(params_dir, "r") as f:
-        default_params = yaml.load(f, Loader=yaml.FullLoader)
-
-    # 9. Process HBV files
+    # 8. Process HBV files
     print("📝 Processing HBV files...")
     processor_hbv = HBVProcessor(namelist_path)
     processor_hbv.process_all_files(template=False)  # Regular files

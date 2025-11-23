@@ -7,7 +7,25 @@ import numpy as np
 import tempfile
 import shutil
 import traceback
+import yaml
 from scipy import stats
+
+def read_namelist(namelist_path):
+    """Read gauge_id, shape_dir, landuse_dir from namelist.yaml"""
+    with open(namelist_path, 'r') as f:
+        config = yaml.safe_load(f)
+    gauge_id = str(config.get('gauge_id'))
+    main_dir = config.get('main_dir', '')
+    shape_dir = config.get('shape_dir')
+    landuse_dir = config.get('landuse_dir')
+    # Build absolute paths if needed
+    shape_path = shape_dir.format(gauge_id=gauge_id)
+    landuse_path = landuse_dir.format(gauge_id=gauge_id)
+    if not os.path.isabs(shape_path):
+        shape_path = os.path.join(main_dir, shape_path)
+    if not os.path.isabs(landuse_path):
+        landuse_path = os.path.join(main_dir, landuse_path)
+    return gauge_id, shape_path, landuse_path
 
 def get_extent_from_shapefile(shapefile_path, buffer_degrees=0.01):
     """
@@ -330,64 +348,6 @@ def aggregate_to_30m_mode_parallel(input_path, output_path, n_jobs=-1):
         print(f"Error with parallel aggregation: {str(e)}")
         print("Falling back to sequential processing")
         return aggregate_to_30m_mode(input_path, output_path)
-    
-
-
-def download_esa_worldcover_for_catchment(gauge_id, shapefile_dir, output_dir, buffer_degrees=0.01):
-    """
-    Download and process ESA WorldCover for a specific catchment
-    Optimized workflow: Download -> Clip -> Aggregate (parallel)
-    """
-    print(f"\n{'='*80}")
-    print(f"PROCESSING ESA WORLDCOVER FOR GAUGE {gauge_id}")
-    print(f"{'='*80}")
-
-    shapefile_path = os.path.join(shapefile_dir, f"catchment_shape_{gauge_id}.shp")
-
-    if not os.path.exists(shapefile_path):
-        print(f"ERROR: Shapefile not found: {shapefile_path}")
-        return None
-    
-    print(f"Found shapefile: {shapefile_path}")
-    
-    bounds = get_extent_from_shapefile(shapefile_path, buffer_degrees)
-    if bounds is None:
-        print("ERROR: Could not extract extent from shapefile")
-        return None
-    
-    os.makedirs(output_dir, exist_ok=True)
-    temp_dir = tempfile.mkdtemp(prefix=f"esa_{gauge_id}_")
-    
-    try:
-        # Step 1: Download ESA WorldCover tile
-        temp_worldcover_path = os.path.join(temp_dir, f"worldcover_full_{gauge_id}.tif")
-        
-        if not download_esa_worldcover_direct(bounds, temp_worldcover_path):
-            print("ERROR: Failed to download ESA WorldCover")
-            return None
-        
-        # Step 2: Clip to catchment extent FIRST (much smaller area to process)
-        clipped_path = os.path.join(temp_dir, f"worldcover_clipped_{gauge_id}.tif")
-        
-        if not clip_raster_to_shapefile(temp_worldcover_path, shapefile_path, clipped_path):
-            print("ERROR: Failed to clip ESA WorldCover to catchment")
-            return None
-        
-        # Step 3: Aggregate the clipped area (parallel processing!)
-        final_landuse_path = os.path.join(output_dir, f"landuse_{gauge_id}.tif")
-        
-        if aggregate_to_30m_mode_parallel(clipped_path, final_landuse_path):
-            print(f"✅ Successfully created landuse raster: {final_landuse_path}")
-            return final_landuse_path
-        else:
-            print("ERROR: Failed to aggregate to 30m")
-            return None
-            
-    finally:
-        # Clean up temporary directory
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-            print(f"Cleaned up temporary directory")
 
 def print_landuse_info(landuse_path):
     """
@@ -434,27 +394,61 @@ def print_landuse_info(landuse_path):
         print(f"Could not read landuse info: {e}")
 
 if __name__ == "__main__":
-    # Parameters
-    gauge_id = "0620"  # Change this to your gauge ID
-    
-    # Directories
-    shapefile_dir = "/home/jberg/OneDrive/Raven_worldwide/01_data/topo/catchment_shapefile"
-    output_dir = "/home/jberg/OneDrive/Raven_worldwide/01_data/topo/catchment_landuse"
-    
-    # Buffer around shapefile extent (in degrees)
+    # Read parameters from namelist.yaml
+    namelist_path = "/home/jberg/OneDrive/Raven-world/namelist.yaml"
+    gauge_id, shapefile_path, landuse_path = read_namelist(namelist_path)
     buffer_degrees = 0.01  # ~1 km at equator
+
+    print(f"\n{'='*80}")
+    print(f"PROCESSING ESA WORLDCOVER FOR GAUGE {gauge_id}")
+    print(f"{'='*80}")
+    print(f"Gauge ID: {gauge_id}")
+    print(f"Shapefile: {shapefile_path}")
+    print(f"Landuse output: {landuse_path}")
+
+    # Check if shapefile exists
+    if not os.path.exists(shapefile_path):
+        print(f"ERROR: Shapefile not found: {shapefile_path}")
+        exit(1)
     
-    # Process the gauge
-    landuse_path = download_esa_worldcover_for_catchment(
-        gauge_id=gauge_id,
-        shapefile_dir=shapefile_dir,
-        output_dir=output_dir,
-        buffer_degrees=buffer_degrees
-    )
-    
-    if landuse_path:
-        print(f"\n🎉 ESA WorldCover processing complete for gauge {gauge_id}!")
-        print(f"Landuse raster saved as: {landuse_path}")
+    # Check if landuse already exists
+    if os.path.exists(landuse_path) and os.path.getsize(landuse_path) > 1000:
+        print(f"✅ Landuse raster already exists: {landuse_path}")
         print_landuse_info(landuse_path)
     else:
-        print(f"\n❌ ESA WorldCover processing failed for gauge {gauge_id}")
+        # Extract extent from shapefile
+        bounds = get_extent_from_shapefile(shapefile_path, buffer_degrees)
+        if bounds is None:
+            print("ERROR: Could not extract extent from shapefile")
+        else:
+            # Create output directory if needed
+            output_dir = os.path.dirname(landuse_path)
+            os.makedirs(output_dir, exist_ok=True)
+            
+            temp_dir = tempfile.mkdtemp(prefix=f"esa_{gauge_id}_")
+            
+            try:
+                # Step 1: Download ESA WorldCover tile
+                temp_worldcover_path = os.path.join(temp_dir, f"worldcover_full_{gauge_id}.tif")
+                
+                if not download_esa_worldcover_direct(bounds, temp_worldcover_path):
+                    print("ERROR: Failed to download ESA WorldCover")
+                else:
+                    # Step 2: Clip to catchment extent FIRST (much smaller area to process)
+                    clipped_path = os.path.join(temp_dir, f"worldcover_clipped_{gauge_id}.tif")
+                    
+                    if not clip_raster_to_shapefile(temp_worldcover_path, shapefile_path, clipped_path):
+                        print("ERROR: Failed to clip ESA WorldCover to catchment")
+                    else:
+                        # Step 3: Aggregate the clipped area (parallel processing!)
+                        if aggregate_to_30m_mode_parallel(clipped_path, landuse_path):
+                            print(f"✅ Successfully created landuse raster: {landuse_path}")
+                            print_landuse_info(landuse_path)
+                        else:
+                            print("ERROR: Failed to aggregate to 30m")
+                        
+            finally:
+                # Clean up temporary directory
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    print(f"Cleaned up temporary directory")
