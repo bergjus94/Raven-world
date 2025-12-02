@@ -1288,6 +1288,7 @@ class ERA5LandAnalyzer:
         """
         Main method to find monthly files, combine them, filter time range, and aggregate to daily
         INCLUDING geopotential processing for elevation data
+        MODIFIED: Skip processing for files that already exist (unless force_reprocess=True)
         
         Returns
         -------
@@ -1296,26 +1297,52 @@ class ERA5LandAnalyzer:
         """
         self.logger.info("Starting monthly file processing pipeline...")
         
+        # Check which files already exist
+        expected_files = {
+            'temperature_mean': 'era5_land_temp_mean.nc',
+            'temperature_min': 'era5_land_temp_min.nc',
+            'temperature_max': 'era5_land_temp_max.nc',
+            'precipitation': 'era5_land_precip.nc',
+            'potential_evaporation': 'era5_land_pet.nc'
+        }
+        
+        existing_files = {}
+        for var_type, filename in expected_files.items():
+            file_path = self.output_path / filename
+            if file_path.exists() and not self.force_reprocess:
+                existing_files[var_type] = file_path
+                self.logger.info(f"✅ Using existing file: {filename}")
+        
         # Step 1: Find monthly files
         monthly_files = self._find_monthly_files()
         
         if not any(monthly_files.values()):
             self.logger.error("No monthly files found!")
-            return []
+            return list(existing_files.values())  # Return existing files if any
         
-        # 🏔️ Step 2: Process geopotential to elevation FIRST (before meteorological processing)
-        self.logger.info("🏔️ Processing geopotential to elevation...")
-        elevation_file = self.process_geopotential_to_elevation()
+        # 🏔️ Step 2: Process geopotential to elevation FIRST (if it doesn't exist)
+        elevation_file = self.output_path / 'era5_land_elevation.nc'
         
-        if elevation_file is not None:
-            self.logger.info(f"✅ Elevation processing successful: {elevation_file.name}")
+        if not elevation_file.exists() or self.force_reprocess:
+            self.logger.info("🏔️ Processing geopotential to elevation...")
+            elevation_file_created = self.process_geopotential_to_elevation()
+            
+            if elevation_file_created is not None:
+                self.logger.info(f"✅ Elevation processing successful: {elevation_file_created.name}")
+            else:
+                self.logger.warning("⚠️ Elevation processing failed - meteorological files will be saved without elevation data")
         else:
-            self.logger.warning("⚠️ Elevation processing failed - meteorological files will be saved without elevation data")
+            self.logger.info(f"✅ Using existing elevation file: {elevation_file.name}")
         
-        all_daily_files = []
+        all_daily_files = list(existing_files.values())
         
-        # Step 3: Process temperature files
-        if monthly_files['temperature']:
+        # Step 3: Process temperature files (skip if all temp files exist)
+        temp_files_exist = all(
+            var_type in existing_files 
+            for var_type in ['temperature_mean', 'temperature_min', 'temperature_max']
+        )
+        
+        if monthly_files['temperature'] and not temp_files_exist:
             self.logger.info("Processing temperature files...")
             
             # Combine monthly files
@@ -1336,9 +1363,11 @@ class ERA5LandAnalyzer:
                 # Close datasets
                 temp_combined.close()
                 temp_filtered.close()
+        elif temp_files_exist:
+            self.logger.info("⏭️ Skipping temperature processing - files already exist")
         
-        # Step 4: Process precipitation files
-        if monthly_files['precipitation']:
+        # Step 4: Process precipitation files (skip if exists)
+        if monthly_files['precipitation'] and 'precipitation' not in existing_files:
             self.logger.info("Processing precipitation files...")
             
             # Combine monthly files
@@ -1359,9 +1388,11 @@ class ERA5LandAnalyzer:
                 # Close datasets
                 precip_combined.close()
                 precip_filtered.close()
+        elif 'precipitation' in existing_files:
+            self.logger.info("⏭️ Skipping precipitation processing - file already exists")
         
-        # Step 5: Process PET files
-        if monthly_files['potential_evaporation']:
+        # Step 5: Process PET files (skip if exists)
+        if monthly_files['potential_evaporation'] and 'potential_evaporation' not in existing_files:
             self.logger.info("Processing potential evaporation files...")
             
             # Combine monthly files
@@ -1382,8 +1413,12 @@ class ERA5LandAnalyzer:
                 # Close datasets
                 pet_combined.close()
                 pet_filtered.close()
+        elif 'potential_evaporation' in existing_files:
+            self.logger.info("⏭️ Skipping PET processing - file already exists")
         
-        self.logger.info(f"Processing pipeline complete! Created {len(all_daily_files)} daily files:")
+        self.logger.info(f"Processing pipeline complete! Total files available: {len(all_daily_files)}")
+        
+        # Show which files we have
         for file_path in all_daily_files:
             self.logger.info(f"  - {file_path.name}")
         

@@ -1,704 +1,587 @@
+# Default Parameters for Raven Hydrological Models
+# This file contains parameter definitions, initial values, and bounds for calibration
+# Author: Justine Berg
+# Date: November 2025
+
 GR4J:
+  # GR4J + CemaNeige snow model parameters
   names:
-    Airsnow_Coeff: Airsnow_Coeff #AIRSNOW_COEFF = 1.0 - CEMANEIGE_X2 (Raven) = 0-1 (Valery2010)
-    #0-1 (0.25) (cponc8 github)
-    Cemaneige_X1: Cemaneige_x1 #AVG_ANNUAL_SNOW  = Avg. annual snow as SWE, 0-100mm (Raven)
-    #0-20 (3.74) (cponc8 github)
-    GR4J_Cemaneige_X2: Cemaneige_x2
-    GR4J_X1: GR4J_x1
-    #100-1200 (350)mm (Perrin et al. 2003)
-    #1-1500 (350)mm (eWater wiki)
-    #1-3000 (350)mm (Pagano et al. 2010)
-    GR4J_Soil_0: Soil_0
-    GR4J_X2: GR4J_x2
-    #-5-3 (0)mm (Perrin et al. 2003)
-    #-10.0-5.0 (0)mm (eWater wiki)
-    #-27-27 (0)mm (Pagano et al. 2010)
-    GR4J_X3: GR4J_x3
-    #20-300 (90) (Perrin et al. 2003)
-    #1-500 (40)mm (eWater wiki)
-    #1-660 (150)mm (Pagano et al. 2010)
-    GR4J_X4: GR4J_x4
-    #1.1-2.9 (1.7)mm (Perrin et al. 2003)
-    #0.5-4.0 (0.5)days (eWater wiki)
-    #1-240 (40)days (Pagano et al. 2010)
+    GR4J_X1: Gr4j_x1                    # Production store capacity [mm]
+    GR4J_X2: Gr4j_x2                    # Groundwater exchange coefficient [mm]
+    GR4J_X3: Gr4j_x3                    # Routing store capacity [mm]
+    GR4J_X4: Gr4j_x4                    # Unit hydrograph time constant [days]
+    CEMANEIGE_X1: Cemaneige_X1          # avg annual snow as SWE [mm]
+    CEMANEIGE_X2: Cemaneige_X2          # Degree-day melt factor [mm/°C/day]
+    Airsnow_Coeff: Airsnow_Coeff        # air/snow heat transfer coefficient [1/d] Derived: 1.0 - CEMANEIGE_X2
+
   init:
-    GR4J_X1: '0.35'
-    GR4J_X2: '0.0'
-    GR4J_X3: '100'
-    GR4J_X4: '0.5'
-    Cemaneige_X1: '0.5'
-    GR4J_Cemaneige_X2: '0.5'
-    Airsnow_Coeff: '0.5'
-    GR4J_Soil_0: '350'
-    GR4J_X5: '0.5'
-    GR4J_X6: '0.5'
+    GR4J_X1: 0.529                      # Production store capacity
+    GR4J_X2: -3.396                     # Groundwater exchange coefficient
+    GR4J_X3: 407.29                     # Routing store capacity
+    GR4J_X4: 1.072                      # Unit hydrograph time constant
+    CEMANEIGE_X1: 16.9                  # avg annual snow as SWE
+    CEMANEIGE_X2: 0.947                 # Degree-day melt factor
+    Airsnow_Coeff: 0.053                # Derived: 1.0 - 0.947
+
   lower:
-    GR4J_X1: '0.1'
-    GR4J_X2: '-5.0'
-    GR4J_X3: '1'
-    GR4J_X4: '0.5'
-    Cemaneige_X1: '0.0'
-    GR4J_Cemaneige_X2: '0.0'
-    Airsnow_Coeff: '0.0'
-    GR4J_Soil_0: '500'
-    GR4J_X5: '0.01'
-    GR4J_X6: '1.0'
+      GR4J_X1: 0.01
+      GR4J_X2: -15.0
+      GR4J_X3: 10.0
+      GR4J_X4: 0.0
+      CEMANEIGE_X1: 1.0
+      CEMANEIGE_X2: 0.0
   upper:
-    GR4J_X1: '1.2'
-    GR4J_X2: '3'
-    GR4J_X3: '500'
-    GR4J_X4: '4.0'
-    Cemaneige_X1: '100'
-    GR4J_Cemaneige_X2: '1.0'
-    Airsnow_Coeff: '1.0'
-    GR4J_Soil_0: '500'
-    GR4J_X5: '2.0'
-    GR4J_X6: '5.0'
+      GR4J_X1: 2.5
+      GR4J_X2: 10.0
+      GR4J_X3: 700.0
+      GR4J_X4: 7.0
+      CEMANEIGE_X1: 30.0
+      CEMANEIGE_X2: 1.0
+
 HBV:
+  # HBV-EC (Environment Canada) model parameters
   names:
-    HBV_Param_01: HBV_RainSnow_Temp
-    #RAINSNOW_TEMP (C) -1-1 (-0.15) (RavenManual)
-    #RAINSNOW_TEMP (C) -3-3 (0)  (params.dat) 
-    #TT -2.5-2.5 (HBV)
-    HBV_Param_02: HBV_Melt_Fact
-    #MELT_FACTOR (mm/dC/d) (RavenManual)
-    # 3.5 (RavenManual)
-    # CFMAX (mm/dC/d) 1-10 (HBV)
-    HBV_Param_03: HBV_Refreeze_Fact
-    #REFREEZE_FACTOR: (mm/d/dC) 3 (RavenManual)
-    #REFREEZE_FACTOR (mm/d/dC) 0-10 (params.dat)
-    #CFR 0-0.1 (HBV), different unit
-    HBV_Param_04: HBV_Snow_SWI
-    #SNOW_SWI (-) 0.04-0.07 (RavenManual)
-    #SNOW_SWI (-) 0-0.5 (params.dat)
-    #CWH 0-0.2 (HBV)
-    HBV_Param_05: HBV_Porosity
-    #POROSITY (-) 0.1-0.6 (RavenManual)
-    #POROSITY (-) 0-1 (params.dat)
-    HBV_Param_06: HBV_Field_Cap
-    #FIELD_CAPACITY (-) 0.0-1.0 (0.0) (params.dat)
-    # FC 50-1000 (HBV), different unit
-    HBV_Param_07: HBV_Beta
-    #HBV_BETA (-) 0.0-7.0 (1) (RavenManual)
-    #BETA (-) 0.5-6 (HBV)
-    HBV_Param_08: HBV_Max_Perc_Rate_Fast_Res
-    #MAX_PERC_RATE(FAST_RES) (mm/d) 0.01-1000 (RavenManual)
-    #PERC (FAST_RES) (mm/d) 0-3 (HBV)
-    HBV_Param_09: HBV_BaseFlow_Coeff_Fast_Res
-    # BASEFLOW_COEFF(FAST_RES) (1/d) (RavenManual)
-    # K1 0.01-0.4 (HBV)
-    HBV_Param_10: HBV_BaseFlow_Coeff_Slow_Res
-    #BASEFLOW_COEFF(SLOW_RES) (1/d) (RavenManual)
-    # K2 0.001-0.15 (HBV)
-    HBV_Param_11: HBV_T_Conc_Max_Bas
-    #TIME_CONC 0-200 (d) (params.dat)
-    #MAXBAS 1-7 (HBV)
-    HBV_Param_12: HBV_Prec_Lapse_PCALT
-    #PRECIP_LAPSE (mm/d/km) 0-100 (RavenManual)
-    HBV_Param_13: HBV_Adiab_Lapse_TCALT
-    #ADIABATIC_LAPSE (dC/km) 0-7 (RavenManual)
-    HBV_Param_14: HBV_Sat_Wilt
-    #SAT_WILT (-) 0.3-1 (0.0) (RavenManual)
-    #SAT_WILT (-) 0-1 (params.dat)
-    #LP 0.3-1 (HBV)
-    HBV_Param_15: HBV_Baseflow_N
-    #BASEFLOW_N 0-10 (1/d) (RavenManual)
-    # Alpha+1=BASEFLOW_N(Raven) (-) 1.0-10.0
-    # Alpha usually between 0 and 1, so make range between 1-2
-    HBV_Param_16: HBV_Max_Cap_Rise_Rate
-    #MAX_CAP_RISE_RATE (mm)
-    #CFLUX 0-1 (HBV)
-    HBV_Param_17: HBV_Thickness_Topsoil
-    # no parameter in HBV and also not in Raven Manual ??
-    HBV_Param_18: HBV_Melt_For_Corr
-    #HBV_MELT_FOR_CORR=HBV snowmelt forest correction (-) <1
-    HBV_Param_19: HBV_Glac_Storage_Effect
-    #GLAC_STORAGE_EFFECT=max linear storage coefficient for glacial melt (-) 0-1 (params.dat)
-    HBV_Param_20: HBV_Rain_Correction_RFCF
-    #RainCorrection (-) 0.5-2 (1) (RavenManual)
-    # RFCF (HBV)
-    HBV_Param_21: HBV_Snow_Correction_SFCF
-    #SNOW_CORR 0.5-2  (params.dat)
-    #SFCF 0.4-1 (uzh) = Snowfall correction factor
-    HBV_Param_11b: HBV_Time_To_Peak
-    #derived from MAXBAS (HBV) (d) 1-7 (HBV)
-    #TIME_CONC/2  
-    HBV_Param_17b: HBV_Initial_Thickness_Topsoil
-    # derived from HBV_Thickness_Topsoil (HBV) (mm) 0-1000 (RavenManual)
-    # HBV_Thickness_Topsoil * 1000.0 / 2.0
+    X01: HBV_RainSnow_Temp              # Rain/snow transition temperature [°C]
+    X02: HBV_Melt_Factor                # Snow melt factor [mm/d/°C]
+    X03: HBV_Refreeze_Factor            # Refreeze factor [mm/d/°C]
+    X04: HBV_Snow_SWI                   # Snow water saturation [-]
+    X05: HBV_Porosity                   # Soil porosity [-]
+    X06: HBV_Field_Capacity             # Field capacity [-]
+    X07: HBV_Beta                       # Infiltration exponent [-]
+    X08: HBV_Max_Perc_Rate             # Percolation rate [mm/d]
+    X09: HBV_Baseflow_Coeff_Fast        # Fast reservoir baseflow [1/d]
+    X10: HBV_Baseflow_Coeff_Slow        # Slow reservoir baseflow [1/d]
+    X11: HBV_T_Conc_Max_Bas             # Time of concentration [d]
+    X12: HBV_Precip_Lapse               # Precipitation lapse rate [mm/d/km]
+    X13: HBV_Adiabatic_Lapse            # Temperature lapse rate [°C/km]
+    X14: HBV_Sat_Wilt                   # Wilting point saturation [-]
+    X15: HBV_Baseflow_N                  # Baseflow exponent [-]
+    X16: HBV_Max_Cap_Rise_Rate          # Capillary rise rate [mm/d]
+    X17: HBV_Thickness_Topsoil          # Topsoil thickness [m]
+    X18: HBV_Melt_For_Corr               # Forest melt correction [-]
+    #X19: HBV_Glac_Storage_Coeff        # Glacier storage coefficient [-]
+    #X20: HBV_Rain_Corr                   # Rain correction factor [-]
+    #X21: HBV_Snow_Corr                   # Snow correction factor [-]
+    HBV_Time_To_Peak: HBV_Time_To_Peak # Derived: X11 / 2
+    HBV_Initial_Thickness_Topsoil: HBV_Initial_Thickness_Topsoil  # Derived: X17 * 500
+
   init:
-    HBV_Param_01: '-0.15'
-    HBV_Param_02: '3.5'
-    HBV_Param_03: '3'
-    HBV_Param_04: '0.05'
-    HBV_Param_05: '0.5'
-    HBV_Param_06: '0.5'
-    HBV_Param_07: '3.0'
-    HBV_Param_08: '100'
-    HBV_Param_09: '0.5'
-    HBV_Param_10: '0.5'
-    HBV_Param_11: '1.1'
-    HBV_Param_12: '10'
-    HBV_Param_13: '5'
-    HBV_Param_14: '0.5'
-    HBV_Param_15: '1.5'
-    HBV_Param_16: '0.5'
-    HBV_Param_17: '0.5'
-    HBV_Param_18: '0.5'
-    HBV_Param_19: '0.5'
-    HBV_Param_20: '1.0'
-    HBV_Param_21: '1.0'
-    HBV_Param_11b: '0.5'
-    HBV_Param_17b: '500'
+    X01: 0.05984519                     # Rain/snow temp
+    X02: 4.072232                       # Melt factor
+    X03: 2.001574                       # Refreeze factor
+    X04: 0.03473693                     # Snow SWI
+    X05: 0.09985144                     # Porosity
+    X06: 0.506052                       # Field capacity
+    X07: 3.438486                       # Beta
+    X08: 38.32455                       # Max perc rate
+    X09: 0.4606565                      # Fast baseflow
+    X10: 0.06303738                     # Slow baseflow
+    X11: 2.277781                       # Time of concentration
+    X12: 4.873686                       # Precip lapse
+    X13: 0.5718813                      # Adiabatic lapse
+    X14: 0.04505643                     # Sat wilt
+    X15: 0.877607                       # Baseflow N
+    X16: 18.94145                       # Cap rise rate
+    X17: 2.036937                       # Topsoil thickness
+    X18: 0.4452843                      # Forest correction
+    #X19: 0.6771759                      # Glacier storage
+    #X20: 1.141608                       # Rain correction
+    #X21: 1.024278                       # Snow correction
+    HBV_Time_To_Peak: 1.1388905         # Derived: X11 / 2
+    HBV_Initial_Thickness_Topsoil: 1018.4685  # Derived: X17 * 500
+
+
   lower:
-    HBV_Param_01: '-2.5'
-    HBV_Param_02: '1.0'
-    HBV_Param_03: '0.0'
-    HBV_Param_04: '0.0'
-    HBV_Param_05: '0.1'
-    HBV_Param_06: '0.0'
-    HBV_Param_07: '0.5'
-    HBV_Param_08: '0.0'
-    HBV_Param_09: '0.01'
-    HBV_Param_10: '0.001'
-    HBV_Param_11: '1.0'
-    HBV_Param_12: '0.0'
-    HBV_Param_13: '0.0'
-    HBV_Param_14: '0.3'
-    HBV_Param_15: '1'
-    HBV_Param_16: '0.0'
-    HBV_Param_17: '0.1'
-    HBV_Param_18: '0.0'
-    HBV_Param_19: '0.0'
-    HBV_Param_20: '0.5'
-    HBV_Param_21: '0.4'
-    HBV_Param_11b: '0.5'
-    HBV_Param_17b: '100'
+      X01: -3.0
+      X02: 2.3
+      X03: 0.0
+      X04: 0.0
+      X05: 0.0
+      X06: 0.3
+      X07: 0.0
+      X08: 0.0
+      X09: 0.01
+      X10: 0.05
+      X11: 0.01
+      X12: 0.0
+      X13: 0.0
+      X14: 0.0
+      X15: 0.0
+      X16: 0.0
+      X17: 0.01
+      X18: 0.0
+      #X19: 0.05
+      #X20: 0.8
+      #X21: 0.8
   upper:
-    HBV_Param_01: '2.5'
-    HBV_Param_02: '10.0'
-    HBV_Param_03: '10.0'
-    HBV_Param_04: '0.2'
-    HBV_Param_05: '0.6'
-    HBV_Param_06: '1.0'
-    HBV_Param_07: '7.0'
-    HBV_Param_08: '10.0'
-    HBV_Param_09: '0.4'
-    HBV_Param_10: '0.15'
-    HBV_Param_11: '7.0'
-    HBV_Param_12: '100'
-    HBV_Param_13: '7.0'
-    HBV_Param_14: '1.0'
-    HBV_Param_15: '2'
-    HBV_Param_16: '1.0'
-    HBV_Param_17: '10.0'
-    HBV_Param_18: '0.99'
-    HBV_Param_19: '1.0'
-    HBV_Param_20: '2.0'
-    HBV_Param_21: '1.2'
-    HBV_Param_11b: '0.5'
-    HBV_Param_17b: '10000'
+      X01: 3.0
+      X02: 10.0
+      X03: 8.0
+      X04: 0.1
+      X05: 1.0
+      X06: 1.0
+      X07: 7.0
+      X08: 100.0
+      X09: 1.0
+      X10: 0.1
+      X11: 6.0
+      X12: 5.0
+      X13: 5.0
+      X14: 0.2
+      X15: 1.0
+      X16: 30.0
+      X17: 3.0
+      X18: 2.0
+      #X19: 1.0
+      #X20: 1.5
+      #X21: 1.5
+
 HMETS:
+  # HMETS (Hydrological Model - École de Technologie Supérieure) parameters
   names:
-    HMETS_Param_01: HMETS_alpha1 #GAMMA_SHAPE for surface UH
-    HMETS_Param_02: HMETS_beta1 #GAMMA_SCALE for surface UH
-    HMETS_Param_03: HMETS_alpha2 #GAMMA_SHAPE2 for delayed UH
-    HMETS_Param_04: HMETS_beta2 #GAMMA_SCALE2 for delayed UH
-    HMETS_Param_05a: HMETS_ddf_min #MIN_MELT_FACTOR = min. DDF
-    HMETS_Param_06: HMETS_ddf_plus #Difference btw min. & max. DDF
-    HMETS_Param_07: HMETS_T_bm #DD_MELT_TEMP = Base melting Temp.
-    HMETS_Param_08: HMETS_K_cum #DD_AGGRADATION = Empirical param. for calc of DDF
-    HMETS_Param_09a: HMETS_fc_min #SNOW_SWI_MIN = Min. fraction for snowpack water retention capacity
-    HMETS_Param_10: HMETS_fc_plus #Difference btw SNOW_SWI_MIN & SNOW_SWI_MAX
-    HMETS_Param_11: HMETS_C_cum #SWI_REDUCT_COEFF = Param. for calc. of water retention capacity
-    HMETS_Param_12: HMETS_T_bf #DD_REFREEZE_TEMP = Base refreezing Temp.
-    HMETS_Param_13: HMETS_K_f #REFREEZE_FACTOR
-    HMETS_Param_14: HMETS_F_e #REFREEZE_EXP
-    HMETS_Param_15: HMETS_ET_eff #Fraction of PET
-    HMETS_Param_16: HMETS_c_r #HMETS_RUNOFF_COEFF = Fraction of water for surface & delayed runoff
-    HMETS_Param_17: HMETS_c_vp #PERC_COEFF_TOPSOIL = Fraction of water for GW recharge
-    HMETS_Param_18: HMETS_c_va #BASEFLOW_COEFF_TOPSOIL = Fraction of water for hypodermic flow
-    HMETS_Param_19: HMETS_c_p #BASEFLOW_COEFF_PHREATIC = Fraction of water for GW flow
-    HMETS_Param_20b: HMETS_Thick_TOP #Same as HMETS_Param_20a, but divided by 1000 = in m
-    HMETS_Param_21b: HMETS_Thick_PHREATIC #Same as HMETS_Param_21a, but divided by 1000 = in m
-    HMETS_Param_05b: HMETS_ddf_max #MAX_MELT_FACTOR = max. DDF
-    HMETS_Param_09b: HMETS_fc_max #SNOW_SWI_MAX = Max. fraction for snowpack water retention capacity
-    HMETS_Param_20a: HMETS_half_Thick_TOP #Thickness TOPSOIL half
-    HMETS_Param_21a: HMETS_half_Thick_PHREATIC #Thickness PHREATIC half
+    X01: Hmets_gamma_shape              # Surface runoff gamma distribution shape [-]
+    X02: Hmets_gamma_scale              # Surface runoff gamma distribution scale [1/d]
+    X03: Hmets_gamma_shape2             # Delayed runoff gamma distribution shape [-]
+    X04: Hmets_gamma_scale2             # Delayed runoff gamma distribution scale [1/d]
+    X05: Hmets_min_melt_factor          # Minimum melt factor [mm/d/°C]
+    X06: Hmets_max_melt_factor          # Maximum melt factor [mm/d/°C]
+    X07: Hmets_dd_melt_temp             # Degree-day melt temperature [°C]
+    X08: Hmets_dd_aggradation           # Snow density increase rate [1/mm]
+    X09: Hmets_snow_swi_min             # Minimum snow water index [-]
+    X10: Hmets_snow_swi_max             # Maximum snow water index [-]
+    X11: Hmets_swi_reduct_coeff         # SWI reduction coefficient [-]
+    X12: Hmets_dd_refreeze_temp         # Refreeze temperature [°C]
+    X13: Hmets_refreeze_factor          # Refreeze factor [mm/d/°C]
+    X14: Hmets_refreeze_exp             # Refreeze exponent [-]
+    X15: Hmets_pet_correction           # PET correction factor [-]
+    X16: Hmets_runoff_coeff             # Runoff coefficient [-]
+    X17: Hmets_perc_coeff               # Percolation coefficient [1/d]
+    X18: Hmets_baseflow_coeff_1         # Topsoil baseflow coefficient [1/d]
+    X19: Hmets_baseflow_coeff_2         # Phreatic baseflow coefficient [1/d]
+    X20: Hmets_topsoil_thickness        # Topsoil thickness [m]
+    X21: Hmets_phreatic_thickness       # Phreatic layer thickness [m]
+
   init:
-    HMETS_Param_01: '1.0'
-    HMETS_Param_02: '1.0'
-    HMETS_Param_03: '1.0'
-    HMETS_Param_04: '1.0'
-    HMETS_Param_05a: '1.5'
-    HMETS_Param_06: '0.5'
-    HMETS_Param_07: '0.0'
-    HMETS_Param_08: '0.1'
-    HMETS_Param_09a: '0.0'
-    HMETS_Param_10: '0.5'
-    HMETS_Param_11: '0.005'
-    HMETS_Param_12: '0.0'
-    HMETS_Param_13: '1.0'
-    HMETS_Param_14: '1.0'
-    HMETS_Param_15: '0.0'
-    HMETS_Param_16: '0.5'
-    HMETS_Param_17: '0.01'
-    HMETS_Param_18: '-2.0'
-    HMETS_Param_19: '-3.0'
-    HMETS_Param_20b: '0.1'
-    HMETS_Param_21b: '0.1'
-    HMETS_Param_05b: '1.0'
-    HMETS_Param_09b: '0.01'
-    HMETS_Param_20a: '100'
-    HMETS_Param_21a: '100'
+    X01: 9.5019                 # Surface gamma shape
+    X02: 0.2774                 # Surface gamma scale
+    X03: 6.3942                 # Delayed gamma shape
+    X04: 0.6884                 # Delayed gamma scale
+    X05: 1.2875                 # Min melt factor
+    X06: 5.4134                 # Max melt factor
+    X07: 2.3641                 # Melt temperature
+    X08: 0.0973                 # Snow aggradation
+    X09: 0.0464                 # Min SWI
+    X10: 0.1998                 # Max SWI
+    X11: 0.0222                 # SWI reduction
+    X12: -1.0919                # Refreeze temp
+    X13: 2.6851                 # Refreeze factor
+    X14: 0.3740                 # Refreeze exponent
+    X15: 1.0000                 # PET correction
+    X16: 0.4739                 # Runoff coefficient
+    X17: 0.0114                 # Percolation
+    X18: 0.0243                 # Topsoil baseflow
+    X19: 0.0069                 # Phreatic baseflow
+    X20: 310.7211               # Topsoil thickness
+    X21: 916.1947               # Phreatic thickness
+
+  
   lower:
-    HMETS_Param_01: '0.3'
-    HMETS_Param_02: '0.01'
-    HMETS_Param_03: '0.5'
-    HMETS_Param_04: '0.15'
-    HMETS_Param_05a: '1.5'
-    HMETS_Param_06: '0.0'
-    HMETS_Param_07: '-1.0'
-    HMETS_Param_08: '0.01'
-    HMETS_Param_09a: '0.0'
-    HMETS_Param_10: '0.01'
-    HMETS_Param_11: '0.005'
-    HMETS_Param_12: '-5.0'
-    HMETS_Param_13: '0.0'
-    HMETS_Param_14: '0.0'
-    HMETS_Param_15: '0.0'
-    HMETS_Param_16: '0.0'
-    HMETS_Param_17: '0.00001'
-    HMETS_Param_18: '-5.0'
-    HMETS_Param_19: '-5.0'
-    HMETS_Param_20b: '0.0'
-    HMETS_Param_21b: '0.0'
-    HMETS_Param_05b: '0.0'
-    HMETS_Param_09b: '0.01'
-    HMETS_Param_20a: '0.0'
-    HMETS_Param_21a: '0.0'
+      X01: 0.3
+      X02: 0.01
+      X03: 0.5
+      X04: 0.15
+      X05: 0.0
+      X06: 0.0
+      X07: -2.0
+      X08: 0.01
+      X09: 0.0
+      X10: 0.01
+      X11: 0.005
+      X12: -5.0
+      X13: 0.0
+      X14: 0.0
+      X15: 0.0
+      X16: 0.0
+      X17: 0.00001
+      X18: 0.0
+      X19: 0.00001
+      X20: 0.0
+      X21: 0.0
   upper:
-    HMETS_Param_01: '20.0'
-    HMETS_Param_02: '5.0'
-    HMETS_Param_03: '13.0'
-    HMETS_Param_04: '1.5'
-    HMETS_Param_05a: '3.0'
-    HMETS_Param_06: '20.0'
-    HMETS_Param_07: '1.0'
-    HMETS_Param_08: '0.2'
-    HMETS_Param_09a: '0.1'
-    HMETS_Param_10: '0.2'
-    HMETS_Param_11: '0.1'
-    HMETS_Param_12: '2.0'
-    HMETS_Param_13: '5.0'
-    HMETS_Param_14: '1.0'
-    HMETS_Param_15: '3.0'
-    HMETS_Param_16: '1.0'
-    HMETS_Param_17: '0.02'
-    HMETS_Param_18: '-1.0'
-    HMETS_Param_19: '-2.0'
-    HMETS_Param_20b: '0.5'
-    HMETS_Param_21b: '2.0'
-    HMETS_Param_05b: '5.0'
-    HMETS_Param_09b: '0.3'
-    HMETS_Param_20a: '500'
-    HMETS_Param_21a: '2000'
-HYMOD:
-  names:
-    HYMOD_Param_01: HYMOD_K_q
-    #(orig) RES_CONSTANT = Nash UH linear reservoir const./residence time of reservoir series/of quick release reservoir
-    #R_q (d) 0.1-0.99 (Vrugt) = Residence time of linear quick reservoir
-    #K_q (d-1) 0-0.9 (BastolaMurphy) = Residence time of quick release reservoir
-    #Rq (1/d) 0-1 (Bastola) = Residence time of quick release reservoir
-    #K_f (1/d) 0-1 (KnobenSupplement) = Runoff coeff/Fast reservoir time scale
-    HYMOD_Param_02: HYMOD_C_max
-    #(orig) Thickness TOPSOIL(of Default_P SoilProfile)/Max. storage capacity
-    #C_max (mm or L) 1-500 (Vrugt) = Max storage capacity in ctm
-    #C_max (mm or L) 200-500 (bastolaMurphy) = Max storage capacity in basin
-    #Cmax (L) 1-500 (Bastola) = Max. storage capacity in basin
-    #S_max (mm) 1-2000 (KnobenSupplement) = Max. SM storage
-    HYMOD_Param_03: HYMOD_T_zero
-    #RAINSNOW_TEMP (dC) -3-3 (-0.15)= Rain/Snow halfway transition temp (Raven)/Threshold temp. (Moore1993)
-    #TT (dC) -3-5 (KnobenSupplement) = Thresh. temp. for snowfall (and melt, if not specified otherwise)
-    HYMOD_Param_04: HYMOD_K_s
-    #(orig) BASEFLOW_COEFF(GWSOIL) = Residence time single reservoir/slow release reservoirs
-    #R_s (d or T) 0-0.1 (Vrugt) = Residence time of linear slow reservoir
-    #K_s (d-1) 0-0.1 (BastolaMurphy) = Residence time of slow release reservoir
-    #Rs (1/d) 0.0001-0.1 (Bastola) = Residence time of slow release reservoir
-    #k_s (1/d) 0-1 (KnobenSupplement) = Runoff coeff/Slow reservoir time scale
-    HYMOD_Param_05: HYMOD_C_melt
-    #max. MELT_FACTOR for DD pot. melt (Raven)
-    #CFMAX (mm(dC/d) 0-20 (KnobenSupplement) = Degree-day factor for snowmelt
-    HYMOD_Param_06: HYMOD_T_melt
-    #DD_MELT_TEMP for DD pot. melt (Raven) = melt temp.
-    #TTM (dC) -3-3 (KnobenSupplement) = Thresh. temp. for snowmelt
-    HYMOD_Param_07: HYMOD_B_exp
-    #(orig) PDM_B = Degree of spat. variability of soil moisture capacity
-    #b_exp (-) 0.1-2 (Vrugt) = degree of spat. variability of SMC within ctm.
-    #B_exp (-) 0.1-2 (BastolaMurphy) = Spatial variability of SM distribution within basin
-    #Bexp (-) 0-2 (Bastola) = Spat. variability of SM distribution within basin
-    #b (-) 0-10 (KnobenSupplement) = Contributing area curve shape parameter/ Soil Depth distribution
-    HYMOD_Param_08: HYMOD_PET_Corr
-    #PET_CORRECTION(Topsoil) 0-1 (1) (Raven) = /PET modified by soil param PET_CORRECTION
-    HYMOD_Param_09: HYMOD_Alpha
-    #(orig) Distribution ratio slow vs. quick release reservoir
-    #Alpha (-) 0.1-0.99 (Vrugt) = Factor distributing flow bt. two series of reservoirs
-    #A (-) 0.2-1 (BastolaMurphy) = Flow distribution btw quick & slow linear reservoirs
-    #Alpha (-) 0-1 (Bastola) = Flow distribution btw. quick & slow linear reservoirs
-    #a (-) 0-1 (KnobenSupplement) = Fraction of effective precipitation that is fast flow /fast and slow flow distribution
-  init:
-    HYMOD_Param_01: '1.0'
-    HYMOD_Param_02: '0.5'
-    HYMOD_Param_03: '0.5'
-    HYMOD_Param_04: '0.25'
-    HYMOD_Param_05: '0.0'
-    HYMOD_Param_06: '0.0'
-    HYMOD_Param_07: '0.5'
-    HYMOD_Param_08: '1.0'
-    HYMOD_Param_09: '0.5'
-  lower:
-    HYMOD_Param_01: '0'
-    HYMOD_Param_02: '1'
-    HYMOD_Param_03: '-3'
-    HYMOD_Param_04: '0'
-    HYMOD_Param_05: '0'
-    HYMOD_Param_06: '-3'
-    HYMOD_Param_07: '0'
-    HYMOD_Param_08: '0.0'
-    HYMOD_Param_09: '0'
-  upper:
-    HYMOD_Param_01: '1'
-    HYMOD_Param_02: '2000'
-    HYMOD_Param_03: '3'
-    HYMOD_Param_04: '1'
-    HYMOD_Param_05: '20'
-    HYMOD_Param_06: '3'
-    HYMOD_Param_07: '10'
-    HYMOD_Param_08: '1.0'
-    HYMOD_Param_09: '1'
+      X01: 20.0
+      X02: 5.0
+      X03: 13.0
+      X04: 1.5
+      X05: 20.0
+      X06: 20.0
+      X07: 3.0
+      X08: 0.2
+      X09: 0.1
+      X10: 0.3
+      X11: 0.1
+      X12: 2.0
+      X13: 5.0
+      X14: 1.0
+      X15: 3.0
+      X16: 1.0
+      X17: 0.02
+      X18: 0.1
+      X19: 0.01
+      X20: 0.5
+      X21: 2.0
+
 MOHYSE:
   names:
-    MOHYSE_Param_01: MOHYSE_Pet_Coeff #c_ETP = coeff. d'ajustement de l'evapo potentielle (Fortin & Turcotte2007) 0.5-2 (Hamaoui2019)
-    #0-9999 (-9999) RAVEN
-    MOHYSE_Param_02: MOHYSE_Aet_Coeff #c_TR = coeff. dâjustement de la transpiration (Fortin & Turcotte2007) 0.5-1 (Hamaoui2019)
-    #AET_COEFF RAVEN 0-1 (0.5 or 0.05) (- or 1/d)
-    MOHYSE_Param_03: MOHYSE_Melt_Factor #c_f = taux de fonte (Fortin & Turcotte2007) 2-4 (Hamaoui2019)
-    #MELT_FACTOR RAven -9999-9999 (5.04 or 3.5) (mm/d/dC)
-    MOHYSE_Param_04: MOHYSE_DD_Melt_Temp #T_f = temp seuil pour la fonte -4-4 (dC) (Fortin & Turcotte2007) 0-0 (Hamaoui2019)
-    #DD_MELT_TEMP RAVEN -5-5 (0) (dC)
-    MOHYSE_Param_05: MOHYSE_Thickness_Topsoil #V_max = niveau max. de la zone vadose (Fortin & Turcotte2007) 5-15 (Hamaoui2019)
-    #Raven no
-    MOHYSE_Param_06: MOHYSE_Perc_Coeff_Topsoil #c_VA = coefficient de vidange de la zone vadose vers l’aquifère min 0.01 (1/d) (Fortin & Turcotte2007) 0.48-0.96 (mm/d) (Hamaoui2019)
-    #PERC_COEFF RAVEN 0-9999 (-9999) (1/d)
-    MOHYSE_Param_07: MOHYSE_Baseflow_Coeff_Topsoil #c_V = coefficient de vidange de la zone vadose vers le cours d’eau min 0.01 (1/d) (Fortin & Turcotte2007) 0.24-1.2 (1/d)(Hamaoui2019)
-    #BASEFLOW_COEFF RAVEN -9999-9999 (0.1) (1/d)
-    MOHYSE_Param_08: MOHYSE_Baseflow_Coeff_Gwsoil #c_A = coefficient de vidange de l’aquifère vers le cours d’eau min 0.01 (1/d) (Fortin & Turcotte2007) 0.48-1.2 (1/d) (Hamaoui2019)
-    #BASEFLOW_COEFF RAVEN -9999-9999 (0.1) (1/d)
-    #    MOHYSE_Param_08b: MOHYSE_sum_06_07_08 # This sum must not exceed 1.0 (Fortin & Turcotte2007)
-    MOHYSE_Param_09: MOHYSE_Gamma_Shape_Alpha #alpha = param. de forme de l'hydrogramme unitaire (Fortin & Turcotte2007) 3-3 (Hamaoui2019)
-    #GAMMA_SHAPE RAVEN 0.5-5 (-) from manual or 0.5-5 (1) (d) from params.dat or 0.1-10 (3) (1) from params.dat
-    MOHYSE_Param_10: MOHYSE_Gamma_Scale_Beta #beta = param. d'échelle de l'hydrogramme unitaire (Fortin & Turcotte2007) 3-3 (Hamaoui2019)
-    #GAMMA_SCALE RAVEN 0.0001-100000 (1) (1) params.dat or 0.1-20 (1/d) from manual
+    X01: MOHYSE_Pet_Coeff                             # PET multiplication coefficient [-]
+    X02: MOHYSE_AET_Coeff                             # actual evapotranspiration coeff [-] (used in LandUseParameterList)
+    X03: MOHYSE_Melt_Fact                             # snow melt factor [mm/d/°C]
+    X04: MOHYSE_DD_Melt_Temp                          # degree-day melt temperature [°C]
+    X05: MOHYSE_Topsoil_Thickness                     # topsoil thickness (same unit as emulator expects; inserted directly)
+    X06: MOHYSE_Topsoil_Perc_Coeff                    # percolation coeff TOPSOIL [1/d]
+    X07: MOHYSE_Topsoil_Baseflow_Coeff                # baseflow coeff TOPSOIL [1/d]
+    X08: MOHYSE_GwSoil_Baseflow_Coeff                 # baseflow coeff GWSOIL [1/d]
+    X09: MOHYSE_Gamma_Shape                           # gamma kernel shape (unitless)
+    X10: MOHYSE_Gamma_Scale_Aux                       # auxiliary: emulator uses GAMMA_SCALE = 1 / X10 (X10 must be > 0)
+    Mohyse_Gamma_Scale: Mohyse_Gamma_Scale            # Derived: 1 / X10
+
   init:
-    MOHYSE_Param_01: '1'
-    MOHYSE_Param_02: '0.5'
-    MOHYSE_Param_03: '3.5'
-    MOHYSE_Param_04: '0'
-    MOHYSE_Param_05: '2'
-    MOHYSE_Param_06: '0.5'
-    MOHYSE_Param_07: '0.1'
-    MOHYSE_Param_08: '0.1'
-    #    MOHYSE_Param_08b: '0.5'
-    MOHYSE_Param_09: '1.0'
-    MOHYSE_Param_10: '1'
+    X01: 1.0                            
+    X02: 0.0468                         
+    X03: 4.2952                         
+    X04: 2.658                          
+    X05: 0.4038                         
+    X06: 0.0621                         
+    X07: 0.0273                         
+    X08: 0.0453                         
+    X09: 0.9039                         
+    X10: 5.6167
+    Mohyse_Gamma_Scale: 0.178                        
+
   lower:
-    MOHYSE_Param_01: '0.5'
-    MOHYSE_Param_02: '0.5'
-    MOHYSE_Param_03: '2'
-    MOHYSE_Param_04: '-5'
-    MOHYSE_Param_05: '0.5'
-    MOHYSE_Param_06: '0.01' #~24h*(0.0004/h) (Fortin & Turcotte2007)
-    MOHYSE_Param_07: '0.01' #~24h*(0.0004/h) (Fortin & Turcotte2007)
-    MOHYSE_Param_08: '0.01' #~24h*(0.0004/h) (Fortin & Turcotte2007)
-    #    MOHYSE_Param_08b: '0.01'
-    MOHYSE_Param_09: '0.5'
-    MOHYSE_Param_10: '0.01'
+      X01: 0.01
+      X02: 0.01
+      X03: 0.01
+      X04: -5.0
+      X05: 0.01
+      X06: 0.01
+      X07: 0.01
+      X08: 0.01
+      X09: 0.01
+      X10: 0.01
   upper:
-    MOHYSE_Param_01: '2'
-    MOHYSE_Param_02: '1'
-    MOHYSE_Param_03: '4'
-    MOHYSE_Param_04: '5'
-    MOHYSE_Param_05: '10'
-    MOHYSE_Param_06: '0.99'
-    MOHYSE_Param_07: '0.99'
-    MOHYSE_Param_08: '0.99'
-    #    MOHYSE_Param_08b: '0.99'
-    MOHYSE_Param_09: '5'
-    MOHYSE_Param_10: '20'
+      X01: 20.0
+      X02: 1.0
+      X03: 20.0
+      X04: 5.0
+      X05: 0.5
+      X06: 1.0
+      X07: 1.0
+      X08: 1.0
+      X09: 15.0
+      X10: 15.0
+
+HYMOD:
+  # HYMOD (Probability Distributed Model) parameters
+  names:
+    X01: HYMOD_RES_CONSTANT             # Reservoir routing constant [1/d]
+    X02: HYMOD_TOPSOIL_THICKNESS        # Topsoil thickness [m]
+    X03: HYMOD_RAINSNOW_TEMP            # Rain/snow transition temperature [°C]
+    X04: HYMOD_BASEFLOW_COEFF           # Linear baseflow coefficient [1/d]
+    X05: HYMOD_MELT_FACTOR              # Degree-day melt factor [mm/d/°C]
+    X06: HYMOD_DD_MELT_TEMP             # Degree-day melt temperature [°C]
+    X07: HYMOD_PDM_B                    # PDM distribution exponent [-]
+    X08: HYMOD_PET_CORRECTION           # PET correction factor [-]
+
+  init:
+    X01: 0.1                   # Routing constant (placeholder)
+    X02: 1.0                   # Topsoil thickness (placeholder)
+    X03: 0.0                   # Rain/snow temp (placeholder)
+    X04: 0.05                  # Baseflow coefficient (placeholder)
+    X05: 3.0                   # Melt factor (placeholder)
+    X06: 0.0                   # Melt temp (placeholder)
+    X07: 2.0                   # PDM exponent (placeholder)
+    X08: 1.0                   # PET correction (placeholder)
+
+
+  lower:
+      X01: 0.01
+      X02: 0.1
+      X03: -3.0
+      X04: 0.001
+      X05: 0.5
+      X06: -2.0
+      X07: 0.5
+      X08: 0.5
+  upper:
+      X01: 1.0
+      X02: 5.0
+      X03: 3.0
+      X04: 0.5
+      X05: 10.0
+      X06: 3.0
+      X07: 5.0
+      X08: 2.0
+
 
 UBCWM:
+  # UBCWM (UBC Watershed Model) parameters
+  # Comprehensive parameter set for mountain hydrology with orographic corrections
   names:
-    UBCWM_Param_01: A0STAB
-    # Precipiatation gradient modification factor
-    UBCWM_Param_02: E0LHI
-    # Elevation above which the precipiation gradient P0GRADU applies
-    UBCWM_Param_03: E0LMID
-    # Elevation above which the precipiation gradient P0GRADM applies
-    UBCWM_Param_04: E0LLOW
-    # Elevation above which the precipiation gradient P0GRADM applies
-    UBCWM_Param_05: P0GRADU
-    # Precipiation gradient factor (%) for elevations above E0LHI
-    UBCWM_Param_06: P0PADJ
-    # Precipiation adjustment factor for each band
-    UBCWM_Param_07: A0TLNM
-    # Lapse rate for minimum temperatures 
-    # when the station elevation is less than 2000m;°C / 1000m
-    UBCWM_Param_08: A0TLXM
-    # Lapse rate for maximum temperatures
-    # when the station elevation is less than 2000m;°C / 1000m
-    UBCWM_Param_09: P0GRADM
-    # Precipiation gradient factor (%) for elevations above E0LHI
-    UBCWM_Param_10: A0TLNH
-    # Lapse rate for minimum temperatures
-    # when the station elevation is greater than 2000m
-    UBCWM_Param_11: A0TLXH
-    # Lapse rate for maximum temperatures
-    # when the station elevation is greater than 2000m
-    UBCWM_Param_12: P0TEDL
-    # Lapse rate of maximum temperature range for elevations below 2000m
-    # °C / 1000m
-    UBCWM_Param_13: P0TEDU
-    # Lapse rate of maximum temperature range for elevations above 2000m
-    # °C / 1000m
-    UBCWM_Param_14: A0TLZZ
-    # adiabatic lapse rate
-    UBCWM_Param_15: A0TLZP
-    # wet adiabatic lapse rate
-    UBCWM_Param_16: A0PPTP
-    # wet adiabatic lapse rate
-    UBCWM_Param_17: A0PPT
-    # Precipitation threshold for snowfall
-    UBCWM_Param_18: A0TERM
-    # maximum temperature range parameter
-    UBCWM_Param_19: A0PELA
-    # PET Lapse rate 
-    # °C/km
-    UBCWM_Param_20: F0ERGY
-    # Exposure factor for energy balance
-    UBCWM_Param_21: P0CAST
-    # Cloud penetration factor
-    UBCWM_Param_22: P0BLUE
-    # Forest correction factor
-    UBCWM_Param_23: V0FLAS
-    # Flash ponding
-    UBCWM_Param_24: V0NOTH
-    #Radiation correction
-    UBCWM_Param_25: V0SOTH
-    #Radiation correction
-    UBCWM_Param_26: A0FORM
-    # rain snow transition
-    UBCWM_Param_27: P0TASR
-    # rain snow transition
-    UBCWM_Param_28: P0ALBMIN
-    # Albedo of a very aged snwopack (0.3)
-    UBCWM_Param_29: P0ALBMAX
-    # albedo of fresh snow (0.95)
-    UBCWM_Param_30: P0ALBREC
-    # recessional constant for albedo decay of new snow
-    UBCWM_Param_31: P0ALBASE
-    #albedo initial decay value (0.65)
-    UBCWM_Param_32: P0ALBSNW
-    # daily snowfall required to bring albedo to that of new snow
-    UBCWM_Param_33: P0ALBMLX
-    # constant on the order of snowmelt in one year
-    UBCWM_Param_34: P0EGEN
-    # the soil deficit at which the actual ET depletes to 0.1 PET
-    UBCWM_Param_35: P0AGEN
-    # soil parameter deficit for infiltration
-    UBCWM_Param_36: P0FSTK
-    # soil parameter
-    UBCWM_Param_37: P0UGTK
-    # soil parameter
-    UBCWM_Param_38: P0DZTK
-    # soil parameter
-    UBCWM_Param_39: P0ISTK
-    # soil parameter
-    UBCWM_Param_40: POPINT
-    # vegetation parameter rain and snwo fraction
-    UBCWM_Param_41: P0PINX
-    # maximum intercept rate
-    UBCWM_Param_42: P0CLDG
-    # decay coefficient
-    UBCWM_Param_43: A0PEFO
-    # PET lapse rate for forest
-    UBCWM_Param_44: P0GLTK
-    # glacier storage coefficient
-    UBCWM_Param_45: S0PATS
-    # snow patch limit
-    UBCWM_Param_46: P0PERC
-    # Groundwater percolation (Maximum capacity of sub-surface storage)
-    # Excess runoff goes to interflow; mm
-    UBCWM_Param_47: P0DZSH
-    # Deep zone share (lower fraction) of groundwater
-    UBCWM_Param_48: P0UGTK
-    # Upper groundwater runoff time constant (days)
-    UBCWM_Param_49: C0ELEM
-    # precipiation lapse rate
-    UBWM_Param_50: P0GRADL
-    # precipaition lapse rate
+    # Orographic Temperature Corrections
+    A0TLZZ: UBC_Adiabatic_Lapse          # Adiabatic lapse rate [°C/km]
+    A0TLZP: UBC_Wet_Adiabatic_Low        # Wet adiabatic lapse (low precip) [°C/km]
+    A0PPTP: UBC_Wet_Adiabatic_High       # Wet adiabatic lapse (high precip) [°C/km]
+    A0TERM: UBC_Ref_Max_Temp_Range       # Reference max temperature range [°C]
+    A0TLXM: UBC_Temp_Lapse_XM            # Temperature lapse rate parameter XM [°C/km]
+    A0TLNM: UBC_Temp_Lapse_NM            # Temperature lapse rate parameter NM [°C/km]
+    A0TLXH: UBC_Temp_Lapse_XH            # Temperature lapse rate parameter XH [°C/km]
+    A0TLNH: UBC_Temp_Lapse_NH            # Temperature lapse rate parameter NH [°C]
+    P0TEDL: UBC_Temp_Elev_Low            # Temperature-elevation parameter low [°C]
+    P0TEDU: UBC_Temp_Elev_Up             # Temperature-elevation parameter upper [°C/m]
+    
+    # Orographic Precipitation Corrections
+    C0ELEM1: UBC_Precip_Elev_Low         # Precipitation elevation low [m]
+    E0LMID: UBC_Precip_Elev_Mid          # Precipitation elevation mid [m]
+    E0LHI: UBC_Precip_Elev_High          # Precipitation elevation high [m]
+    P0GRADL: UBC_Precip_Grad_Low         # Precipitation gradient low [mm/100m]
+    P0GRADM: UBC_Precip_Grad_Mid         # Precipitation gradient mid [mm/100m]
+    P0GRADU: UBC_Precip_Grad_High        # Precipitation gradient high [mm/100m]
+    A0STAB: UBC_Precip_Stability         # Precipitation stability parameter [-]
+    A0PELA: UBC_Evap_Lapse               # Evaporation lapse rate [-]
+    
+    # Radiation and Energy Balance
+    F0ERGY: UBC_Exposure_Factor          # Exposure factor [-]
+    P0CAST: UBC_Cloud_Penetration        # Cloud penetration factor [-]
+    P0BLUE_LWVF: UBC_LW_Forest_Factor    # Longwave forest factor [-]
+    V0FLAS: UBC_Flash_Ponding            # Flash ponding parameter [mm]
+    
+    # Snow Parameters
+    RAINSNOW_LOW: UBC_RainSnow_Low       # Rain/snow transition low [°C]
+    RAINSNOW_HIGH: UBC_RainSnow_High     # Rain/snow transition high [°C]
+    P0ALBMIN: UBC_Snow_Alb_Min           # Minimum snow albedo [-]
+    P0ALBMAX: UBC_Snow_Alb_Max           # Maximum snow albedo [-]
+    P0ALBREC: UBC_Snow_Alb_Rec           # Snow albedo recession [-]
+    P0ALBASE: UBC_Snow_Alb_Base          # Base snow albedo [-]
+    P0ALBSNW: UBC_Snow_Alb_Param1        # Snow albedo parameter 1 [mm]
+    P0ALBMLX: UBC_Snow_Alb_Param2        # Snow albedo parameter 2 [mm]
+    A0WEHO: UBC_Irreducible_Snow_Sat     # Irreducible snow saturation [-]
+    
+    # Soil Parameters
+    P0PERC: UBC_Max_Perc_Rate            # Maximum percolation rate [mm/d]
+    P0EGEN: UBC_Evap_Soil_Def            # Evaporation soil deficit [mm]
+    P0AGEN: UBC_Infil_Soil_Def           # Infiltration soil deficit [mm]
+    P0DZSH: UBC_Groundwater_Split        # Groundwater split parameter [-]
+    
+    # Baseflow and Percolation Coefficients
+    PERC_INT_SOIL: UBC_Perc_Int_Soil     # Percolation coefficient INT_SOIL [1/d]
+    PERC_INT_SOIL2: UBC_Perc_Int_Soil2   # Percolation coefficient INT_SOIL2 [1/d]
+    BASE_INT_SOIL3: UBC_Base_Int_Soil3   # Baseflow coefficient INT_SOIL3 [1/d]
+    BASE_GWU: UBC_Base_GW_Upper          # Baseflow coefficient upper GW [1/d]
+    BASE_GWL: UBC_Base_GW_Lower          # Baseflow coefficient lower GW [1/d]
+    
+    # Vegetation Parameters
+    TFRAIN: UBC_Throughfall_Rain         # Throughfall fraction rain [-]
+    TFSNOW: UBC_Throughfall_Snow         # Throughfall fraction snow [-]
+    MAX_INTERCEPT_RATE: UBC_Max_Intercept # Maximum interception rate [mm/d]
+    
+    # Land Use Parameters
+    CC_DECAY: UBC_Cloud_Cover_Decay      # Cloud cover decay coefficient [1/d]
+    FOREST_PET_CORR: UBC_Forest_PET_Corr # Forest PET correction [-]
+    GLAC_STORAGE: UBC_Glacier_Storage    # Glacier storage coefficient [1/d]
+    SNOW_PATCH_LIMIT: UBC_Snow_Patch_Lim # Snow patch limit [mm]
+    UBC_ICEPT_FACTOR: UBC_Intercept_Factor # Interception factor [-]
 
   init:
-    UBCWM_Param_01: '0'
-    UBCWM_Param_02: '1035.3'
-    UBCWM_Param_03: '775.119'
-    UBCWM_Param_04: ''
-    UBCWM_Param_05: '2.87033'
-    UBCWM_Param_06: ''
-    UBCWM_Param_07: '0.344441'
-    UBCWM_Param_08: '6.49446'
-    UBCWM_Param_09: '4.69927'
-    UBCWM_Param_10: '2'
-    UBCWM_Param_11: '6.4'
-    UBCWM_Param_12: '4.52405'
-    UBCWM_Param_13: '0.0260184'
-    UBCWM_Param_14: '4'
-    UBCWM_Param_15: '4.4684'
-    UBCWM_Param_16: '5'
-    UBCWM_Param_17: ''
-    UBCWM_Param_18: '20'
-    UBCWM_Param_19: '0.9'
-    UBCWM_Param_20: '0.01'
-    UBCWM_Param_21: '0.25'
-    UBCWM_Param_22: '0.76'
-    UBCWM_Param_23: '40.4914'
-    UBCWM_Param_24: '0.4'
-    UBCWM_Param_25: ''
-    UBCWM_Param_26: ''
-    UBCWM_Param_27: ''
-    UBCWM_Param_28: ''
-    UBCWM_Param_29: ''
-    UBCWM_Param_30: ''
-    UBCWM_Param_31: ''
-    UBCWM_Param_32: ''
-    UBCWM_Param_33: ''
-    UBCWM_Param_34: ''
-    UBCWM_Param_35: ''
-    UBCWM_Param_36: ''
-    UBCWM_Param_37: ''
-    UBCWM_Param_38: ''
-    UBCWM_Param_39: ''
-    UBCWM_Param_40: ''
-    UBCWM_Param_41: ''
-    UBCWM_Param_42: ''
-    UBCWM_Param_43: ''
-    UBCWM_Param_44: ''
-    UBCWM_Param_45: ''
-    UBCWM_Param_46: ''
-    UBCWM_Param_47: ''
-    UBCWM_Param_48: ''
-    UBCWM_Param_49: '161'
-    UBCWM_Param_50: '1.59857'
-
+    # Orographic Temperature (reasonable defaults for Swiss Alps)
+    A0TLZZ: 6.4                # Standard adiabatic lapse
+    A0TLZP: 4.89               # Wet adiabatic (low precip)
+    A0PPTP: 5.0                # Wet adiabatic (high precip)
+    A0TERM: 20.0               # Reference max temp range
+    A0TLXM: 8.31               # Temp lapse XM
+    A0TLNM: 0.44               # Temp lapse NM
+    A0TLXH: 6.4                # Temp lapse XH
+    A0TLNH: 2.0                # Temp lapse NH
+    P0TEDL: 13.05              # Temp-elevation low
+    P0TEDU: 0.018              # Temp-elevation upper
+    
+    # Orographic Precipitation (Swiss Alps typical)
+    C0ELEM1: 568.0             # Precip elevation low
+    E0LMID: 1598.0             # Precip elevation mid
+    E0LHI: 1951.0              # Precip elevation high
+    P0GRADL: 7.71              # Precip gradient low
+    P0GRADM: 7.23              # Precip gradient mid
+    P0GRADU: 18.97             # Precip gradient high
+    A0STAB: 0.01               # Precip stability
+    A0PELA: 0.9                # Evap lapse
+    
+    # Energy Balance
+    F0ERGY: 0.01               # Exposure factor
+    P0CAST: 0.25               # Cloud penetration
+    P0BLUE_LWVF: 0.76          # LW forest factor
+    V0FLAS: 23.17              # Flash ponding
+    
+    # Snow Parameters
+    RAINSNOW_LOW: 1.0          # Rain/snow low
+    RAINSNOW_HIGH: 2.0         # Rain/snow high
+    P0ALBMIN: 0.209            # Min snow albedo
+    P0ALBMAX: 0.95             # Max snow albedo
+    P0ALBREC: 0.9              # Snow alb recession
+    P0ALBASE: 0.65             # Base snow albedo
+    P0ALBSNW: 15.0             # Snow alb param1
+    P0ALBMLX: 4000.0           # Snow alb param2
+    A0WEHO: 0.05               # Irreducible snow sat
+    
+    # Soil Parameters
+    P0PERC: 27.07              # Max percolation rate
+    P0EGEN: 100.0              # Evap soil deficit
+    P0AGEN: 160.0              # Infil soil deficit
+    P0DZSH: 0.405              # Groundwater split
+    
+    # Flow Coefficients
+    PERC_INT_SOIL: 0.24        # Perc INT_SOIL
+    PERC_INT_SOIL2: 0.96       # Perc INT_SOIL2
+    BASE_INT_SOIL3: 0.96       # Base INT_SOIL3
+    BASE_GWU: 0.025            # Base GW upper
+    BASE_GWL: 0.006            # Base GW lower
+    
+    # Vegetation
+    TFRAIN: 0.88               # Throughfall rain
+    TFSNOW: 0.88               # Throughfall snow
+    MAX_INTERCEPT_RATE: 10.0   # Max interception
+    
+    # Land Use
+    CC_DECAY: 10000.0          # Cloud cover decay (large = no decay)
+    FOREST_PET_CORR: 1.0       # Forest PET correction
+    GLAC_STORAGE: 0.73         # Glacier storage
+    SNOW_PATCH_LIMIT: 400.0    # Snow patch limit
+    UBC_ICEPT_FACTOR: 0.1      # Interception factor
 
   lower:
-    UBCWM_Param_01: ''
-    UBCWM_Param_02: ''
-    UBCWM_Param_03: ''
-    UBCWM_Param_04: ''
-    UBCWM_Param_05: ''
-    UBCWM_Param_06: ''
-    UBCWM_Param_07: ''
-    UBCWM_Param_08: ''
-    UBCWM_Param_09: ''
-    UBCWM_Param_10: ''
-    UBCWM_Param_11: ''
-    UBCWM_Param_12: ''
-    UBCWM_Param_13: ''
-    UBCWM_Param_14: ''
-    UBCWM_Param_15: ''
-    UBCWM_Param_16: ''
-    UBCWM_Param_17: ''
-    UBCWM_Param_18: ''
-    UBCWM_Param_19: ''
-    UBCWM_Param_20: ''
-    UBCWM_Param_21: ''
-    UBCWM_Param_22: ''
-    UBCWM_Param_23: ''
-    UBCWM_Param_24: ''
-    UBCWM_Param_25: ''
-    UBCWM_Param_26: ''
-    UBCWM_Param_27: ''
-    UBCWM_Param_28: ''
-    UBCWM_Param_29: ''
-    UBCWM_Param_30: ''
-    UBCWM_Param_31: ''
-    UBCWM_Param_32: ''
-    UBCWM_Param_33: ''
-    UBCWM_Param_34: ''
-    UBCWM_Param_35: ''
-    UBCWM_Param_36: ''
-    UBCWM_Param_37: ''
-    UBCWM_Param_38: ''
-    UBCWM_Param_39: ''
-    UBCWM_Param_40: ''
-    UBCWM_Param_41: ''
-    UBCWM_Param_42: ''
-    UBCWM_Param_43: ''
-    UBCWM_Param_44: ''
-    UBCWM_Param_45: ''
-    UBCWM_Param_46: ''
-    UBCWM_Param_47: ''
-    UBCWM_Param_48: ''
-    UBCWM_Param_49: ''
+    # Orographic Temperature Bounds
+    A0TLZZ: 4.0                # Min adiabatic lapse
+    A0TLZP: 3.0                # Min wet adiabatic (low)
+    A0PPTP: 3.0                # Min wet adiabatic (high)
+    A0TERM: 10.0               # Min temp range
+    A0TLXM: 4.0                # Min temp lapse XM
+    A0TLNM: 0.2                # Min temp lapse NM
+    A0TLXH: 4.0                # Min temp lapse XH
+    A0TLNH: 0.5                # Min temp lapse NH
+    P0TEDL: 8.0                # Min temp-elev low
+    P0TEDU: 0.005              # Min temp-elev upper
+    
+    # Orographic Precipitation Bounds
+    C0ELEM1: 300.0             # Min precip elev low
+    E0LMID: 1000.0             # Min precip elev mid
+    E0LHI: 1500.0              # Min precip elev high
+    P0GRADL: 3.0               # Min precip grad low
+    P0GRADM: 3.0               # Min precip grad mid
+    P0GRADU: 10.0              # Min precip grad high
+    A0STAB: 0.001              # Min precip stability
+    A0PELA: 0.5                # Min evap lapse
+    
+    # Energy Balance Bounds
+    F0ERGY: 0.001              # Min exposure
+    P0CAST: 0.1                # Min cloud penetration
+    P0BLUE_LWVF: 0.5           # Min LW forest
+    V0FLAS: 10.0               # Min flash ponding
+    
+    # Snow Parameter Bounds
+    RAINSNOW_LOW: -1.0         # Min rain/snow low
+    RAINSNOW_HIGH: 0.0         # Min rain/snow high
+    P0ALBMIN: 0.1              # Min snow albedo min
+    P0ALBMAX: 0.8              # Min snow albedo max
+    P0ALBREC: 0.7              # Min alb recession
+    P0ALBASE: 0.4              # Min base albedo
+    P0ALBSNW: 5.0              # Min snow alb param1
+    P0ALBMLX: 1000.0           # Min snow alb param2
+    A0WEHO: 0.01               # Min irreducible sat
+    
+    # Soil Parameter Bounds
+    P0PERC: 5.0                # Min percolation
+    P0EGEN: 50.0               # Min evap deficit
+    P0AGEN: 80.0               # Min infil deficit
+    P0DZSH: 0.1                # Min GW split
+    
+    # Flow Coefficient Bounds
+    PERC_INT_SOIL: 0.05        # Min perc INT_SOIL
+    PERC_INT_SOIL2: 0.2        # Min perc INT_SOIL2
+    BASE_INT_SOIL3: 0.2        # Min base INT_SOIL3
+    BASE_GWU: 0.005            # Min base GW upper
+    BASE_GWL: 0.001            # Min base GW lower
+    
+    # Vegetation Bounds
+    TFRAIN: 0.6                # Min throughfall rain
+    TFSNOW: 0.6                # Min throughfall snow
+    MAX_INTERCEPT_RATE: 2.0    # Min interception
+    
+    # Land Use Bounds
+    CC_DECAY: 1000.0           # Min cloud decay
+    FOREST_PET_CORR: 0.5       # Min forest PET
+    GLAC_STORAGE: 0.2          # Min glacier storage
+    SNOW_PATCH_LIMIT: 100.0    # Min snow patch
+    UBC_ICEPT_FACTOR: 0.01     # Min intercept factor
 
   upper:
-    UBCWM_Param_01: ''
-    UBCWM_Param_02: ''
-    UBCWM_Param_03: ''
-    UBCWM_Param_04: ''
-    UBCWM_Param_05: ''
-    UBCWM_Param_06: ''
-    UBCWM_Param_07: ''
-    UBCWM_Param_08: ''
-    UBCWM_Param_09: ''
-    UBCWM_Param_10: ''
-    UBCWM_Param_11: ''
-    UBCWM_Param_12: ''
-    UBCWM_Param_13: ''
-    UBCWM_Param_14: ''
-    UBCWM_Param_15: ''
-    UBCWM_Param_16: ''
-    UBCWM_Param_17: ''
-    UBCWM_Param_18: ''
-    UBCWM_Param_19: ''
-    UBCWM_Param_20: ''
-    UBCWM_Param_21: ''
-    UBCWM_Param_22: ''
-    UBCWM_Param_23: ''
-    UBCWM_Param_24: ''
-    UBCWM_Param_25: ''
-    UBCWM_Param_26: ''
-    UBCWM_Param_27: ''
-    UBCWM_Param_28: ''
-    UBCWM_Param_29: ''
-    UBCWM_Param_30: ''
-    UBCWM_Param_31: ''
-    UBCWM_Param_32: ''
-    UBCWM_Param_33: ''
-    UBCWM_Param_34: ''
-    UBCWM_Param_35: ''
-    UBCWM_Param_36: ''
-    UBCWM_Param_37: ''
-    UBCWM_Param_38: ''
-    UBCWM_Param_39: ''
-    UBCWM_Param_40: ''
-    UBCWM_Param_41: ''
-    UBCWM_Param_42: ''
-    UBCWM_Param_43: ''
-    UBCWM_Param_44: ''
-    UBCWM_Param_45: ''
-    UBCWM_Param_46: ''
-    UBCWM_Param_47: ''
-    UBCWM_Param_48: ''
-    UBCWM_Param_49: ''
+    # Orographic Temperature Bounds
+    A0TLZZ: 10.0               # Max adiabatic lapse
+    A0TLZP: 7.0                # Max wet adiabatic (low)
+    A0PPTP: 8.0                # Max wet adiabatic (high)
+    A0TERM: 30.0               # Max temp range
+    A0TLXM: 15.0               # Max temp lapse XM
+    A0TLNM: 1.0                # Max temp lapse NM
+    A0TLXH: 10.0               # Max temp lapse XH
+    A0TLNH: 5.0                # Max temp lapse NH
+    P0TEDL: 20.0               # Max temp-elev low
+    P0TEDU: 0.05               # Max temp-elev upper
+    
+    # Orographic Precipitation Bounds
+    C0ELEM1: 1000.0            # Max precip elev low
+    E0LMID: 2500.0             # Max precip elev mid
+    E0LHI: 3000.0              # Max precip elev high
+    P0GRADL: 15.0              # Max precip grad low
+    P0GRADM: 15.0              # Max precip grad mid
+    P0GRADU: 30.0              # Max precip grad high
+    A0STAB: 0.1                # Max precip stability
+    A0PELA: 1.5                # Max evap lapse
+    
+    # Energy Balance Bounds
+    F0ERGY: 0.1                # Max exposure
+    P0CAST: 0.5                # Max cloud penetration
+    P0BLUE_LWVF: 1.0           # Max LW forest
+    V0FLAS: 50.0               # Max flash ponding
+    
+    # Snow Parameter Bounds
+    RAINSNOW_LOW: 2.0          # Max rain/snow low
+    RAINSNOW_HIGH: 4.0         # Max rain/snow high
+    P0ALBMIN: 0.4              # Max snow albedo min
+    P0ALBMAX: 1.0              # Max snow albedo max
+    P0ALBREC: 1.0              # Max alb recession
+    P0ALBASE: 0.9              # Max base albedo
+    P0ALBSNW: 30.0             # Max snow alb param1
+    P0ALBMLX: 8000.0           # Max snow alb param2
+    A0WEHO: 0.15               # Max irreducible sat
+    
+    # Soil Parameter Bounds
+    P0PERC: 100.0              # Max percolation
+    P0EGEN: 200.0              # Max evap deficit
+    P0AGEN: 300.0              # Max infil deficit
+    P0DZSH: 0.8                # Max GW split
+    
+    # Flow Coefficient Bounds
+    PERC_INT_SOIL: 1.0         # Max perc INT_SOIL
+    PERC_INT_SOIL2: 2.0        # Max perc INT_SOIL2
+    BASE_INT_SOIL3: 2.0        # Max base INT_SOIL3
+    BASE_GWU: 0.1              # Max base GW upper
+    BASE_GWL: 0.02             # Max base GW lower
+    
+    # Vegetation Bounds
+    TFRAIN: 0.99               # Max throughfall rain
+    TFSNOW: 0.99               # Max throughfall snow
+    MAX_INTERCEPT_RATE: 20.0   # Max interception
+    
+    # Land Use Bounds
+    CC_DECAY: 50000.0          # Max cloud decay
+    FOREST_PET_CORR: 2.0       # Max forest PET
+    GLAC_STORAGE: 1.5          # Max glacier storage
+    SNOW_PATCH_LIMIT: 800.0    # Max snow patch
+    UBC_ICEPT_FACTOR: 0.5      # Max intercept factor

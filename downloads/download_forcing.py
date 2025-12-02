@@ -13,7 +13,7 @@ import traceback
 from pathlib import Path
 
 # Import functions from individual download scripts
-from download_SRTM import (
+from downloads.download_SRTM import (
     read_namelist as read_namelist_srtm,
     get_extent_from_shapefile as get_extent_srtm,
     download_dem,

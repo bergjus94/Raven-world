@@ -1,0 +1,704 @@
+GR4J:
+  names:
+    Airsnow_Coeff: Airsnow_Coeff #AIRSNOW_COEFF = 1.0 - CEMANEIGE_X2 (Raven) = 0-1 (Valery2010)
+    #0-1 (0.25) (cponc8 github)
+    Cemaneige_X1: Cemaneige_x1 #AVG_ANNUAL_SNOW  = Avg. annual snow as SWE, 0-100mm (Raven)
+    #0-20 (3.74) (cponc8 github)
+    GR4J_Cemaneige_X2: Cemaneige_x2
+    GR4J_X1: GR4J_x1
+    #100-1200 (350)mm (Perrin et al. 2003)
+    #1-1500 (350)mm (eWater wiki)
+    #1-3000 (350)mm (Pagano et al. 2010)
+    GR4J_Soil_0: Soil_0
+    GR4J_X2: GR4J_x2
+    #-5-3 (0)mm (Perrin et al. 2003)
+    #-10.0-5.0 (0)mm (eWater wiki)
+    #-27-27 (0)mm (Pagano et al. 2010)
+    GR4J_X3: GR4J_x3
+    #20-300 (90) (Perrin et al. 2003)
+    #1-500 (40)mm (eWater wiki)
+    #1-660 (150)mm (Pagano et al. 2010)
+    GR4J_X4: GR4J_x4
+    #1.1-2.9 (1.7)mm (Perrin et al. 2003)
+    #0.5-4.0 (0.5)days (eWater wiki)
+    #1-240 (40)days (Pagano et al. 2010)
+  init:
+    GR4J_X1: '0.35'
+    GR4J_X2: '0.0'
+    GR4J_X3: '100'
+    GR4J_X4: '0.5'
+    Cemaneige_X1: '0.5'
+    GR4J_Cemaneige_X2: '0.5'
+    Airsnow_Coeff: '0.5'
+    GR4J_Soil_0: '350'
+    GR4J_X5: '0.5'
+    GR4J_X6: '0.5'
+  lower:
+    GR4J_X1: '0.1'
+    GR4J_X2: '-5.0'
+    GR4J_X3: '1'
+    GR4J_X4: '0.5'
+    Cemaneige_X1: '0.0'
+    GR4J_Cemaneige_X2: '0.0'
+    Airsnow_Coeff: '0.0'
+    GR4J_Soil_0: '500'
+    GR4J_X5: '0.01'
+    GR4J_X6: '1.0'
+  upper:
+    GR4J_X1: '1.2'
+    GR4J_X2: '3'
+    GR4J_X3: '500'
+    GR4J_X4: '4.0'
+    Cemaneige_X1: '100'
+    GR4J_Cemaneige_X2: '1.0'
+    Airsnow_Coeff: '1.0'
+    GR4J_Soil_0: '500'
+    GR4J_X5: '2.0'
+    GR4J_X6: '5.0'
+HBV:
+  names:
+    HBV_Param_01: HBV_RainSnow_Temp
+    #RAINSNOW_TEMP (C) -1-1 (-0.15) (RavenManual)
+    #RAINSNOW_TEMP (C) -3-3 (0)  (params.dat) 
+    #TT -2.5-2.5 (HBV)
+    HBV_Param_02: HBV_Melt_Fact
+    #MELT_FACTOR (mm/dC/d) (RavenManual)
+    # 3.5 (RavenManual)
+    # CFMAX (mm/dC/d) 1-10 (HBV)
+    HBV_Param_03: HBV_Refreeze_Fact
+    #REFREEZE_FACTOR: (mm/d/dC) 3 (RavenManual)
+    #REFREEZE_FACTOR (mm/d/dC) 0-10 (params.dat)
+    #CFR 0-0.1 (HBV), different unit
+    HBV_Param_04: HBV_Snow_SWI
+    #SNOW_SWI (-) 0.04-0.07 (RavenManual)
+    #SNOW_SWI (-) 0-0.5 (params.dat)
+    #CWH 0-0.2 (HBV)
+    HBV_Param_05: HBV_Porosity
+    #POROSITY (-) 0.1-0.6 (RavenManual)
+    #POROSITY (-) 0-1 (params.dat)
+    HBV_Param_06: HBV_Field_Cap
+    #FIELD_CAPACITY (-) 0.0-1.0 (0.0) (params.dat)
+    # FC 50-1000 (HBV), different unit
+    HBV_Param_07: HBV_Beta
+    #HBV_BETA (-) 0.0-7.0 (1) (RavenManual)
+    #BETA (-) 0.5-6 (HBV)
+    HBV_Param_08: HBV_Max_Perc_Rate_Fast_Res
+    #MAX_PERC_RATE(FAST_RES) (mm/d) 0.01-1000 (RavenManual)
+    #PERC (FAST_RES) (mm/d) 0-3 (HBV)
+    HBV_Param_09: HBV_BaseFlow_Coeff_Fast_Res
+    # BASEFLOW_COEFF(FAST_RES) (1/d) (RavenManual)
+    # K1 0.01-0.4 (HBV)
+    HBV_Param_10: HBV_BaseFlow_Coeff_Slow_Res
+    #BASEFLOW_COEFF(SLOW_RES) (1/d) (RavenManual)
+    # K2 0.001-0.15 (HBV)
+    HBV_Param_11: HBV_T_Conc_Max_Bas
+    #TIME_CONC 0-200 (d) (params.dat)
+    #MAXBAS 1-7 (HBV)
+    HBV_Param_12: HBV_Prec_Lapse_PCALT
+    #PRECIP_LAPSE (mm/d/km) 0-100 (RavenManual)
+    HBV_Param_13: HBV_Adiab_Lapse_TCALT
+    #ADIABATIC_LAPSE (dC/km) 0-7 (RavenManual)
+    HBV_Param_14: HBV_Sat_Wilt
+    #SAT_WILT (-) 0.3-1 (0.0) (RavenManual)
+    #SAT_WILT (-) 0-1 (params.dat)
+    #LP 0.3-1 (HBV)
+    HBV_Param_15: HBV_Baseflow_N
+    #BASEFLOW_N 0-10 (1/d) (RavenManual)
+    # Alpha+1=BASEFLOW_N(Raven) (-) 1.0-10.0
+    # Alpha usually between 0 and 1, so make range between 1-2
+    HBV_Param_16: HBV_Max_Cap_Rise_Rate
+    #MAX_CAP_RISE_RATE (mm)
+    #CFLUX 0-1 (HBV)
+    HBV_Param_17: HBV_Thickness_Topsoil
+    # no parameter in HBV and also not in Raven Manual ??
+    HBV_Param_18: HBV_Melt_For_Corr
+    #HBV_MELT_FOR_CORR=HBV snowmelt forest correction (-) <1
+    HBV_Param_19: HBV_Glac_Storage_Effect
+    #GLAC_STORAGE_EFFECT=max linear storage coefficient for glacial melt (-) 0-1 (params.dat)
+    HBV_Param_20: HBV_Rain_Correction_RFCF
+    #RainCorrection (-) 0.5-2 (1) (RavenManual)
+    # RFCF (HBV)
+    HBV_Param_21: HBV_Snow_Correction_SFCF
+    #SNOW_CORR 0.5-2  (params.dat)
+    #SFCF 0.4-1 (uzh) = Snowfall correction factor
+    HBV_Param_11b: HBV_Time_To_Peak
+    #derived from MAXBAS (HBV) (d) 1-7 (HBV)
+    #TIME_CONC/2  
+    HBV_Param_17b: HBV_Initial_Thickness_Topsoil
+    # derived from HBV_Thickness_Topsoil (HBV) (mm) 0-1000 (RavenManual)
+    # HBV_Thickness_Topsoil * 1000.0 / 2.0
+  init:
+    HBV_Param_01: '-0.15'
+    HBV_Param_02: '3.5'
+    HBV_Param_03: '3'
+    HBV_Param_04: '0.05'
+    HBV_Param_05: '0.5'
+    HBV_Param_06: '0.5'
+    HBV_Param_07: '3.0'
+    HBV_Param_08: '100'
+    HBV_Param_09: '0.5'
+    HBV_Param_10: '0.5'
+    HBV_Param_11: '1.1'
+    HBV_Param_12: '10'
+    HBV_Param_13: '5'
+    HBV_Param_14: '0.5'
+    HBV_Param_15: '1.5'
+    HBV_Param_16: '0.5'
+    HBV_Param_17: '0.5'
+    HBV_Param_18: '0.5'
+    HBV_Param_19: '0.5'
+    HBV_Param_20: '1.0'
+    HBV_Param_21: '1.0'
+    HBV_Param_11b: '0.5'
+    HBV_Param_17b: '500'
+  lower:
+    HBV_Param_01: '-2.5'
+    HBV_Param_02: '1.0'
+    HBV_Param_03: '0.0'
+    HBV_Param_04: '0.0'
+    HBV_Param_05: '0.1'
+    HBV_Param_06: '0.0'
+    HBV_Param_07: '0.5'
+    HBV_Param_08: '0.0'
+    HBV_Param_09: '0.01'
+    HBV_Param_10: '0.001'
+    HBV_Param_11: '1.0'
+    HBV_Param_12: '0.0'
+    HBV_Param_13: '0.0'
+    HBV_Param_14: '0.3'
+    HBV_Param_15: '1'
+    HBV_Param_16: '0.0'
+    HBV_Param_17: '0.1'
+    HBV_Param_18: '0.0'
+    HBV_Param_19: '0.0'
+    HBV_Param_20: '0.5'
+    HBV_Param_21: '0.4'
+    HBV_Param_11b: '0.5'
+    HBV_Param_17b: '100'
+  upper:
+    HBV_Param_01: '2.5'
+    HBV_Param_02: '10.0'
+    HBV_Param_03: '10.0'
+    HBV_Param_04: '0.2'
+    HBV_Param_05: '0.6'
+    HBV_Param_06: '1.0'
+    HBV_Param_07: '7.0'
+    HBV_Param_08: '10.0'
+    HBV_Param_09: '0.4'
+    HBV_Param_10: '0.15'
+    HBV_Param_11: '7.0'
+    HBV_Param_12: '100'
+    HBV_Param_13: '7.0'
+    HBV_Param_14: '1.0'
+    HBV_Param_15: '2'
+    HBV_Param_16: '1.0'
+    HBV_Param_17: '10.0'
+    HBV_Param_18: '0.99'
+    HBV_Param_19: '1.0'
+    HBV_Param_20: '2.0'
+    HBV_Param_21: '1.2'
+    HBV_Param_11b: '0.5'
+    HBV_Param_17b: '10000'
+HMETS:
+  names:
+    HMETS_Param_01: HMETS_alpha1 #GAMMA_SHAPE for surface UH
+    HMETS_Param_02: HMETS_beta1 #GAMMA_SCALE for surface UH
+    HMETS_Param_03: HMETS_alpha2 #GAMMA_SHAPE2 for delayed UH
+    HMETS_Param_04: HMETS_beta2 #GAMMA_SCALE2 for delayed UH
+    HMETS_Param_05a: HMETS_ddf_min #MIN_MELT_FACTOR = min. DDF
+    HMETS_Param_06: HMETS_ddf_plus #Difference btw min. & max. DDF
+    HMETS_Param_07: HMETS_T_bm #DD_MELT_TEMP = Base melting Temp.
+    HMETS_Param_08: HMETS_K_cum #DD_AGGRADATION = Empirical param. for calc of DDF
+    HMETS_Param_09a: HMETS_fc_min #SNOW_SWI_MIN = Min. fraction for snowpack water retention capacity
+    HMETS_Param_10: HMETS_fc_plus #Difference btw SNOW_SWI_MIN & SNOW_SWI_MAX
+    HMETS_Param_11: HMETS_C_cum #SWI_REDUCT_COEFF = Param. for calc. of water retention capacity
+    HMETS_Param_12: HMETS_T_bf #DD_REFREEZE_TEMP = Base refreezing Temp.
+    HMETS_Param_13: HMETS_K_f #REFREEZE_FACTOR
+    HMETS_Param_14: HMETS_F_e #REFREEZE_EXP
+    HMETS_Param_15: HMETS_ET_eff #Fraction of PET
+    HMETS_Param_16: HMETS_c_r #HMETS_RUNOFF_COEFF = Fraction of water for surface & delayed runoff
+    HMETS_Param_17: HMETS_c_vp #PERC_COEFF_TOPSOIL = Fraction of water for GW recharge
+    HMETS_Param_18: HMETS_c_va #BASEFLOW_COEFF_TOPSOIL = Fraction of water for hypodermic flow
+    HMETS_Param_19: HMETS_c_p #BASEFLOW_COEFF_PHREATIC = Fraction of water for GW flow
+    HMETS_Param_20b: HMETS_Thick_TOP #Same as HMETS_Param_20a, but divided by 1000 = in m
+    HMETS_Param_21b: HMETS_Thick_PHREATIC #Same as HMETS_Param_21a, but divided by 1000 = in m
+    HMETS_Param_05b: HMETS_ddf_max #MAX_MELT_FACTOR = max. DDF
+    HMETS_Param_09b: HMETS_fc_max #SNOW_SWI_MAX = Max. fraction for snowpack water retention capacity
+    HMETS_Param_20a: HMETS_half_Thick_TOP #Thickness TOPSOIL half
+    HMETS_Param_21a: HMETS_half_Thick_PHREATIC #Thickness PHREATIC half
+  init:
+    HMETS_Param_01: '1.0'
+    HMETS_Param_02: '1.0'
+    HMETS_Param_03: '1.0'
+    HMETS_Param_04: '1.0'
+    HMETS_Param_05a: '1.5'
+    HMETS_Param_06: '0.5'
+    HMETS_Param_07: '0.0'
+    HMETS_Param_08: '0.1'
+    HMETS_Param_09a: '0.0'
+    HMETS_Param_10: '0.5'
+    HMETS_Param_11: '0.005'
+    HMETS_Param_12: '0.0'
+    HMETS_Param_13: '1.0'
+    HMETS_Param_14: '1.0'
+    HMETS_Param_15: '0.0'
+    HMETS_Param_16: '0.5'
+    HMETS_Param_17: '0.01'
+    HMETS_Param_18: '-2.0'
+    HMETS_Param_19: '-3.0'
+    HMETS_Param_20b: '0.1'
+    HMETS_Param_21b: '0.1'
+    HMETS_Param_05b: '1.0'
+    HMETS_Param_09b: '0.01'
+    HMETS_Param_20a: '100'
+    HMETS_Param_21a: '100'
+  lower:
+    HMETS_Param_01: '0.3'
+    HMETS_Param_02: '0.01'
+    HMETS_Param_03: '0.5'
+    HMETS_Param_04: '0.15'
+    HMETS_Param_05a: '1.5'
+    HMETS_Param_06: '0.0'
+    HMETS_Param_07: '-1.0'
+    HMETS_Param_08: '0.01'
+    HMETS_Param_09a: '0.0'
+    HMETS_Param_10: '0.01'
+    HMETS_Param_11: '0.005'
+    HMETS_Param_12: '-5.0'
+    HMETS_Param_13: '0.0'
+    HMETS_Param_14: '0.0'
+    HMETS_Param_15: '0.0'
+    HMETS_Param_16: '0.0'
+    HMETS_Param_17: '0.00001'
+    HMETS_Param_18: '-5.0'
+    HMETS_Param_19: '-5.0'
+    HMETS_Param_20b: '0.0'
+    HMETS_Param_21b: '0.0'
+    HMETS_Param_05b: '0.0'
+    HMETS_Param_09b: '0.01'
+    HMETS_Param_20a: '0.0'
+    HMETS_Param_21a: '0.0'
+  upper:
+    HMETS_Param_01: '20.0'
+    HMETS_Param_02: '5.0'
+    HMETS_Param_03: '13.0'
+    HMETS_Param_04: '1.5'
+    HMETS_Param_05a: '3.0'
+    HMETS_Param_06: '20.0'
+    HMETS_Param_07: '1.0'
+    HMETS_Param_08: '0.2'
+    HMETS_Param_09a: '0.1'
+    HMETS_Param_10: '0.2'
+    HMETS_Param_11: '0.1'
+    HMETS_Param_12: '2.0'
+    HMETS_Param_13: '5.0'
+    HMETS_Param_14: '1.0'
+    HMETS_Param_15: '3.0'
+    HMETS_Param_16: '1.0'
+    HMETS_Param_17: '0.02'
+    HMETS_Param_18: '-1.0'
+    HMETS_Param_19: '-2.0'
+    HMETS_Param_20b: '0.5'
+    HMETS_Param_21b: '2.0'
+    HMETS_Param_05b: '5.0'
+    HMETS_Param_09b: '0.3'
+    HMETS_Param_20a: '500'
+    HMETS_Param_21a: '2000'
+HYMOD:
+  names:
+    HYMOD_Param_01: HYMOD_K_q
+    #(orig) RES_CONSTANT = Nash UH linear reservoir const./residence time of reservoir series/of quick release reservoir
+    #R_q (d) 0.1-0.99 (Vrugt) = Residence time of linear quick reservoir
+    #K_q (d-1) 0-0.9 (BastolaMurphy) = Residence time of quick release reservoir
+    #Rq (1/d) 0-1 (Bastola) = Residence time of quick release reservoir
+    #K_f (1/d) 0-1 (KnobenSupplement) = Runoff coeff/Fast reservoir time scale
+    HYMOD_Param_02: HYMOD_C_max
+    #(orig) Thickness TOPSOIL(of Default_P SoilProfile)/Max. storage capacity
+    #C_max (mm or L) 1-500 (Vrugt) = Max storage capacity in ctm
+    #C_max (mm or L) 200-500 (bastolaMurphy) = Max storage capacity in basin
+    #Cmax (L) 1-500 (Bastola) = Max. storage capacity in basin
+    #S_max (mm) 1-2000 (KnobenSupplement) = Max. SM storage
+    HYMOD_Param_03: HYMOD_T_zero
+    #RAINSNOW_TEMP (dC) -3-3 (-0.15)= Rain/Snow halfway transition temp (Raven)/Threshold temp. (Moore1993)
+    #TT (dC) -3-5 (KnobenSupplement) = Thresh. temp. for snowfall (and melt, if not specified otherwise)
+    HYMOD_Param_04: HYMOD_K_s
+    #(orig) BASEFLOW_COEFF(GWSOIL) = Residence time single reservoir/slow release reservoirs
+    #R_s (d or T) 0-0.1 (Vrugt) = Residence time of linear slow reservoir
+    #K_s (d-1) 0-0.1 (BastolaMurphy) = Residence time of slow release reservoir
+    #Rs (1/d) 0.0001-0.1 (Bastola) = Residence time of slow release reservoir
+    #k_s (1/d) 0-1 (KnobenSupplement) = Runoff coeff/Slow reservoir time scale
+    HYMOD_Param_05: HYMOD_C_melt
+    #max. MELT_FACTOR for DD pot. melt (Raven)
+    #CFMAX (mm(dC/d) 0-20 (KnobenSupplement) = Degree-day factor for snowmelt
+    HYMOD_Param_06: HYMOD_T_melt
+    #DD_MELT_TEMP for DD pot. melt (Raven) = melt temp.
+    #TTM (dC) -3-3 (KnobenSupplement) = Thresh. temp. for snowmelt
+    HYMOD_Param_07: HYMOD_B_exp
+    #(orig) PDM_B = Degree of spat. variability of soil moisture capacity
+    #b_exp (-) 0.1-2 (Vrugt) = degree of spat. variability of SMC within ctm.
+    #B_exp (-) 0.1-2 (BastolaMurphy) = Spatial variability of SM distribution within basin
+    #Bexp (-) 0-2 (Bastola) = Spat. variability of SM distribution within basin
+    #b (-) 0-10 (KnobenSupplement) = Contributing area curve shape parameter/ Soil Depth distribution
+    HYMOD_Param_08: HYMOD_PET_Corr
+    #PET_CORRECTION(Topsoil) 0-1 (1) (Raven) = /PET modified by soil param PET_CORRECTION
+    HYMOD_Param_09: HYMOD_Alpha
+    #(orig) Distribution ratio slow vs. quick release reservoir
+    #Alpha (-) 0.1-0.99 (Vrugt) = Factor distributing flow bt. two series of reservoirs
+    #A (-) 0.2-1 (BastolaMurphy) = Flow distribution btw quick & slow linear reservoirs
+    #Alpha (-) 0-1 (Bastola) = Flow distribution btw. quick & slow linear reservoirs
+    #a (-) 0-1 (KnobenSupplement) = Fraction of effective precipitation that is fast flow /fast and slow flow distribution
+  init:
+    HYMOD_Param_01: '1.0'
+    HYMOD_Param_02: '0.5'
+    HYMOD_Param_03: '0.5'
+    HYMOD_Param_04: '0.25'
+    HYMOD_Param_05: '0.0'
+    HYMOD_Param_06: '0.0'
+    HYMOD_Param_07: '0.5'
+    HYMOD_Param_08: '1.0'
+    HYMOD_Param_09: '0.5'
+  lower:
+    HYMOD_Param_01: '0'
+    HYMOD_Param_02: '1'
+    HYMOD_Param_03: '-3'
+    HYMOD_Param_04: '0'
+    HYMOD_Param_05: '0'
+    HYMOD_Param_06: '-3'
+    HYMOD_Param_07: '0'
+    HYMOD_Param_08: '0.0'
+    HYMOD_Param_09: '0'
+  upper:
+    HYMOD_Param_01: '1'
+    HYMOD_Param_02: '2000'
+    HYMOD_Param_03: '3'
+    HYMOD_Param_04: '1'
+    HYMOD_Param_05: '20'
+    HYMOD_Param_06: '3'
+    HYMOD_Param_07: '10'
+    HYMOD_Param_08: '1.0'
+    HYMOD_Param_09: '1'
+MOHYSE:
+  names:
+    MOHYSE_Param_01: MOHYSE_Pet_Coeff #c_ETP = coeff. d'ajustement de l'evapo potentielle (Fortin & Turcotte2007) 0.5-2 (Hamaoui2019)
+    #0-9999 (-9999) RAVEN
+    MOHYSE_Param_02: MOHYSE_Aet_Coeff #c_TR = coeff. dâjustement de la transpiration (Fortin & Turcotte2007) 0.5-1 (Hamaoui2019)
+    #AET_COEFF RAVEN 0-1 (0.5 or 0.05) (- or 1/d)
+    MOHYSE_Param_03: MOHYSE_Melt_Factor #c_f = taux de fonte (Fortin & Turcotte2007) 2-4 (Hamaoui2019)
+    #MELT_FACTOR RAven -9999-9999 (5.04 or 3.5) (mm/d/dC)
+    MOHYSE_Param_04: MOHYSE_DD_Melt_Temp #T_f = temp seuil pour la fonte -4-4 (dC) (Fortin & Turcotte2007) 0-0 (Hamaoui2019)
+    #DD_MELT_TEMP RAVEN -5-5 (0) (dC)
+    MOHYSE_Param_05: MOHYSE_Thickness_Topsoil #V_max = niveau max. de la zone vadose (Fortin & Turcotte2007) 5-15 (Hamaoui2019)
+    #Raven no
+    MOHYSE_Param_06: MOHYSE_Perc_Coeff_Topsoil #c_VA = coefficient de vidange de la zone vadose vers l’aquifère min 0.01 (1/d) (Fortin & Turcotte2007) 0.48-0.96 (mm/d) (Hamaoui2019)
+    #PERC_COEFF RAVEN 0-9999 (-9999) (1/d)
+    MOHYSE_Param_07: MOHYSE_Baseflow_Coeff_Topsoil #c_V = coefficient de vidange de la zone vadose vers le cours d’eau min 0.01 (1/d) (Fortin & Turcotte2007) 0.24-1.2 (1/d)(Hamaoui2019)
+    #BASEFLOW_COEFF RAVEN -9999-9999 (0.1) (1/d)
+    MOHYSE_Param_08: MOHYSE_Baseflow_Coeff_Gwsoil #c_A = coefficient de vidange de l’aquifère vers le cours d’eau min 0.01 (1/d) (Fortin & Turcotte2007) 0.48-1.2 (1/d) (Hamaoui2019)
+    #BASEFLOW_COEFF RAVEN -9999-9999 (0.1) (1/d)
+    #    MOHYSE_Param_08b: MOHYSE_sum_06_07_08 # This sum must not exceed 1.0 (Fortin & Turcotte2007)
+    MOHYSE_Param_09: MOHYSE_Gamma_Shape_Alpha #alpha = param. de forme de l'hydrogramme unitaire (Fortin & Turcotte2007) 3-3 (Hamaoui2019)
+    #GAMMA_SHAPE RAVEN 0.5-5 (-) from manual or 0.5-5 (1) (d) from params.dat or 0.1-10 (3) (1) from params.dat
+    MOHYSE_Param_10: MOHYSE_Gamma_Scale_Beta #beta = param. d'échelle de l'hydrogramme unitaire (Fortin & Turcotte2007) 3-3 (Hamaoui2019)
+    #GAMMA_SCALE RAVEN 0.0001-100000 (1) (1) params.dat or 0.1-20 (1/d) from manual
+  init:
+    MOHYSE_Param_01: '1'
+    MOHYSE_Param_02: '0.5'
+    MOHYSE_Param_03: '3.5'
+    MOHYSE_Param_04: '0'
+    MOHYSE_Param_05: '2'
+    MOHYSE_Param_06: '0.5'
+    MOHYSE_Param_07: '0.1'
+    MOHYSE_Param_08: '0.1'
+    #    MOHYSE_Param_08b: '0.5'
+    MOHYSE_Param_09: '1.0'
+    MOHYSE_Param_10: '1'
+  lower:
+    MOHYSE_Param_01: '0.5'
+    MOHYSE_Param_02: '0.5'
+    MOHYSE_Param_03: '2'
+    MOHYSE_Param_04: '-5'
+    MOHYSE_Param_05: '0.5'
+    MOHYSE_Param_06: '0.01' #~24h*(0.0004/h) (Fortin & Turcotte2007)
+    MOHYSE_Param_07: '0.01' #~24h*(0.0004/h) (Fortin & Turcotte2007)
+    MOHYSE_Param_08: '0.01' #~24h*(0.0004/h) (Fortin & Turcotte2007)
+    #    MOHYSE_Param_08b: '0.01'
+    MOHYSE_Param_09: '0.5'
+    MOHYSE_Param_10: '0.01'
+  upper:
+    MOHYSE_Param_01: '2'
+    MOHYSE_Param_02: '1'
+    MOHYSE_Param_03: '4'
+    MOHYSE_Param_04: '5'
+    MOHYSE_Param_05: '10'
+    MOHYSE_Param_06: '0.99'
+    MOHYSE_Param_07: '0.99'
+    MOHYSE_Param_08: '0.99'
+    #    MOHYSE_Param_08b: '0.99'
+    MOHYSE_Param_09: '5'
+    MOHYSE_Param_10: '20'
+
+UBCWM:
+  names:
+    UBCWM_Param_01: A0STAB
+    # Precipiatation gradient modification factor
+    UBCWM_Param_02: E0LHI
+    # Elevation above which the precipiation gradient P0GRADU applies
+    UBCWM_Param_03: E0LMID
+    # Elevation above which the precipiation gradient P0GRADM applies
+    UBCWM_Param_04: E0LLOW
+    # Elevation above which the precipiation gradient P0GRADM applies
+    UBCWM_Param_05: P0GRADU
+    # Precipiation gradient factor (%) for elevations above E0LHI
+    UBCWM_Param_06: P0PADJ
+    # Precipiation adjustment factor for each band
+    UBCWM_Param_07: A0TLNM
+    # Lapse rate for minimum temperatures 
+    # when the station elevation is less than 2000m;°C / 1000m
+    UBCWM_Param_08: A0TLXM
+    # Lapse rate for maximum temperatures
+    # when the station elevation is less than 2000m;°C / 1000m
+    UBCWM_Param_09: P0GRADM
+    # Precipiation gradient factor (%) for elevations above E0LHI
+    UBCWM_Param_10: A0TLNH
+    # Lapse rate for minimum temperatures
+    # when the station elevation is greater than 2000m
+    UBCWM_Param_11: A0TLXH
+    # Lapse rate for maximum temperatures
+    # when the station elevation is greater than 2000m
+    UBCWM_Param_12: P0TEDL
+    # Lapse rate of maximum temperature range for elevations below 2000m
+    # °C / 1000m
+    UBCWM_Param_13: P0TEDU
+    # Lapse rate of maximum temperature range for elevations above 2000m
+    # °C / 1000m
+    UBCWM_Param_14: A0TLZZ
+    # adiabatic lapse rate
+    UBCWM_Param_15: A0TLZP
+    # wet adiabatic lapse rate
+    UBCWM_Param_16: A0PPTP
+    # wet adiabatic lapse rate
+    UBCWM_Param_17: A0PPT
+    # Precipitation threshold for snowfall
+    UBCWM_Param_18: A0TERM
+    # maximum temperature range parameter
+    UBCWM_Param_19: A0PELA
+    # PET Lapse rate 
+    # °C/km
+    UBCWM_Param_20: F0ERGY
+    # Exposure factor for energy balance
+    UBCWM_Param_21: P0CAST
+    # Cloud penetration factor
+    UBCWM_Param_22: P0BLUE
+    # Forest correction factor
+    UBCWM_Param_23: V0FLAS
+    # Flash ponding
+    UBCWM_Param_24: V0NOTH
+    #Radiation correction
+    UBCWM_Param_25: V0SOTH
+    #Radiation correction
+    UBCWM_Param_26: A0FORM
+    # rain snow transition
+    UBCWM_Param_27: P0TASR
+    # rain snow transition
+    UBCWM_Param_28: P0ALBMIN
+    # Albedo of a very aged snwopack (0.3)
+    UBCWM_Param_29: P0ALBMAX
+    # albedo of fresh snow (0.95)
+    UBCWM_Param_30: P0ALBREC
+    # recessional constant for albedo decay of new snow
+    UBCWM_Param_31: P0ALBASE
+    #albedo initial decay value (0.65)
+    UBCWM_Param_32: P0ALBSNW
+    # daily snowfall required to bring albedo to that of new snow
+    UBCWM_Param_33: P0ALBMLX
+    # constant on the order of snowmelt in one year
+    UBCWM_Param_34: P0EGEN
+    # the soil deficit at which the actual ET depletes to 0.1 PET
+    UBCWM_Param_35: P0AGEN
+    # soil parameter deficit for infiltration
+    UBCWM_Param_36: P0FSTK
+    # soil parameter
+    UBCWM_Param_37: P0UGTK
+    # soil parameter
+    UBCWM_Param_38: P0DZTK
+    # soil parameter
+    UBCWM_Param_39: P0ISTK
+    # soil parameter
+    UBCWM_Param_40: POPINT
+    # vegetation parameter rain and snwo fraction
+    UBCWM_Param_41: P0PINX
+    # maximum intercept rate
+    UBCWM_Param_42: P0CLDG
+    # decay coefficient
+    UBCWM_Param_43: A0PEFO
+    # PET lapse rate for forest
+    UBCWM_Param_44: P0GLTK
+    # glacier storage coefficient
+    UBCWM_Param_45: S0PATS
+    # snow patch limit
+    UBCWM_Param_46: P0PERC
+    # Groundwater percolation (Maximum capacity of sub-surface storage)
+    # Excess runoff goes to interflow; mm
+    UBCWM_Param_47: P0DZSH
+    # Deep zone share (lower fraction) of groundwater
+    UBCWM_Param_48: P0UGTK
+    # Upper groundwater runoff time constant (days)
+    UBCWM_Param_49: C0ELEM
+    # precipiation lapse rate
+    UBWM_Param_50: P0GRADL
+    # precipaition lapse rate
+
+  init:
+    UBCWM_Param_01: '0'
+    UBCWM_Param_02: '1035.3'
+    UBCWM_Param_03: '775.119'
+    UBCWM_Param_04: ''
+    UBCWM_Param_05: '2.87033'
+    UBCWM_Param_06: ''
+    UBCWM_Param_07: '0.344441'
+    UBCWM_Param_08: '6.49446'
+    UBCWM_Param_09: '4.69927'
+    UBCWM_Param_10: '2'
+    UBCWM_Param_11: '6.4'
+    UBCWM_Param_12: '4.52405'
+    UBCWM_Param_13: '0.0260184'
+    UBCWM_Param_14: '4'
+    UBCWM_Param_15: '4.4684'
+    UBCWM_Param_16: '5'
+    UBCWM_Param_17: ''
+    UBCWM_Param_18: '20'
+    UBCWM_Param_19: '0.9'
+    UBCWM_Param_20: '0.01'
+    UBCWM_Param_21: '0.25'
+    UBCWM_Param_22: '0.76'
+    UBCWM_Param_23: '40.4914'
+    UBCWM_Param_24: '0.4'
+    UBCWM_Param_25: ''
+    UBCWM_Param_26: ''
+    UBCWM_Param_27: ''
+    UBCWM_Param_28: ''
+    UBCWM_Param_29: ''
+    UBCWM_Param_30: ''
+    UBCWM_Param_31: ''
+    UBCWM_Param_32: ''
+    UBCWM_Param_33: ''
+    UBCWM_Param_34: ''
+    UBCWM_Param_35: ''
+    UBCWM_Param_36: ''
+    UBCWM_Param_37: ''
+    UBCWM_Param_38: ''
+    UBCWM_Param_39: ''
+    UBCWM_Param_40: ''
+    UBCWM_Param_41: ''
+    UBCWM_Param_42: ''
+    UBCWM_Param_43: ''
+    UBCWM_Param_44: ''
+    UBCWM_Param_45: ''
+    UBCWM_Param_46: ''
+    UBCWM_Param_47: ''
+    UBCWM_Param_48: ''
+    UBCWM_Param_49: '161'
+    UBCWM_Param_50: '1.59857'
+
+
+  lower:
+    UBCWM_Param_01: ''
+    UBCWM_Param_02: ''
+    UBCWM_Param_03: ''
+    UBCWM_Param_04: ''
+    UBCWM_Param_05: ''
+    UBCWM_Param_06: ''
+    UBCWM_Param_07: ''
+    UBCWM_Param_08: ''
+    UBCWM_Param_09: ''
+    UBCWM_Param_10: ''
+    UBCWM_Param_11: ''
+    UBCWM_Param_12: ''
+    UBCWM_Param_13: ''
+    UBCWM_Param_14: ''
+    UBCWM_Param_15: ''
+    UBCWM_Param_16: ''
+    UBCWM_Param_17: ''
+    UBCWM_Param_18: ''
+    UBCWM_Param_19: ''
+    UBCWM_Param_20: ''
+    UBCWM_Param_21: ''
+    UBCWM_Param_22: ''
+    UBCWM_Param_23: ''
+    UBCWM_Param_24: ''
+    UBCWM_Param_25: ''
+    UBCWM_Param_26: ''
+    UBCWM_Param_27: ''
+    UBCWM_Param_28: ''
+    UBCWM_Param_29: ''
+    UBCWM_Param_30: ''
+    UBCWM_Param_31: ''
+    UBCWM_Param_32: ''
+    UBCWM_Param_33: ''
+    UBCWM_Param_34: ''
+    UBCWM_Param_35: ''
+    UBCWM_Param_36: ''
+    UBCWM_Param_37: ''
+    UBCWM_Param_38: ''
+    UBCWM_Param_39: ''
+    UBCWM_Param_40: ''
+    UBCWM_Param_41: ''
+    UBCWM_Param_42: ''
+    UBCWM_Param_43: ''
+    UBCWM_Param_44: ''
+    UBCWM_Param_45: ''
+    UBCWM_Param_46: ''
+    UBCWM_Param_47: ''
+    UBCWM_Param_48: ''
+    UBCWM_Param_49: ''
+
+  upper:
+    UBCWM_Param_01: ''
+    UBCWM_Param_02: ''
+    UBCWM_Param_03: ''
+    UBCWM_Param_04: ''
+    UBCWM_Param_05: ''
+    UBCWM_Param_06: ''
+    UBCWM_Param_07: ''
+    UBCWM_Param_08: ''
+    UBCWM_Param_09: ''
+    UBCWM_Param_10: ''
+    UBCWM_Param_11: ''
+    UBCWM_Param_12: ''
+    UBCWM_Param_13: ''
+    UBCWM_Param_14: ''
+    UBCWM_Param_15: ''
+    UBCWM_Param_16: ''
+    UBCWM_Param_17: ''
+    UBCWM_Param_18: ''
+    UBCWM_Param_19: ''
+    UBCWM_Param_20: ''
+    UBCWM_Param_21: ''
+    UBCWM_Param_22: ''
+    UBCWM_Param_23: ''
+    UBCWM_Param_24: ''
+    UBCWM_Param_25: ''
+    UBCWM_Param_26: ''
+    UBCWM_Param_27: ''
+    UBCWM_Param_28: ''
+    UBCWM_Param_29: ''
+    UBCWM_Param_30: ''
+    UBCWM_Param_31: ''
+    UBCWM_Param_32: ''
+    UBCWM_Param_33: ''
+    UBCWM_Param_34: ''
+    UBCWM_Param_35: ''
+    UBCWM_Param_36: ''
+    UBCWM_Param_37: ''
+    UBCWM_Param_38: ''
+    UBCWM_Param_39: ''
+    UBCWM_Param_40: ''
+    UBCWM_Param_41: ''
+    UBCWM_Param_42: ''
+    UBCWM_Param_43: ''
+    UBCWM_Param_44: ''
+    UBCWM_Param_45: ''
+    UBCWM_Param_46: ''
+    UBCWM_Param_47: ''
+    UBCWM_Param_48: ''
+    UBCWM_Param_49: ''

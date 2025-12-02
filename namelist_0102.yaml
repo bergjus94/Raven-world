@@ -1,8 +1,8 @@
-gauge_id: '0647'
-start_date: '2002-01-01'
-end_date: '2019-12-31'
-cali_end_date: '2011-12-31'
-model_type: 'HBV'
+gauge_id: '0102'
+start_date: '1995-01-01'
+end_date: '2010-12-31'
+cali_end_date: '2002-12-31'
+model_type: 'HYMOD'
 template: true
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'
 coupled: true
@@ -21,11 +21,11 @@ shape_dir: '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp'
 raster_dir: '01_data/topo/catchment_dem/dem_{gauge_id}.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_{gauge_id}.tif'
-glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_15.rgi60.SouthAsiaEast/15_rgi60_SouthAsiaEast.shp'
-#glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
-glogem_dir: '01_data/GloGEM/Ganges/GloGEM_output_{gauge_id}.dat'
-#glogem_dir: '01_data/GloGEM/Indus/geodetic_mass_balance_Hunza/GloGEM_output_{gauge_id}.dat'
-#swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
+#glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_15.rgi60.SouthAsiaEast/15_rgi60_SouthAsiaEast.shp'
+glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
+#glogem_dir: '01_data/GloGEM/Ganges/GloGEM_output_{gauge_id}.dat'
+glogem_dir: '01_data/GloGEM/Indus/geodetic_mass_balance_Hunza/GloGEM_output_{gauge_id}.dat'
+swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
 params_dir: 'src/config/default_params.yaml'
 
 config_dir: '03_model_setups_coupled'
@@ -44,8 +44,7 @@ calibration:
      secondary: ['NSE', 'PBIAS', 'RMSE']  # Secondary metrics to report
    iterations: 5          # Number of iterations for calibration
    ngs: 2 
-   cali_end_date: '2011-12-31' 
-   vali_end_date: '2019-12-31'    
+   cali_end_date: '2002-12-31' 
+   vali_end_date: '2010-12-31'    
 
 raven_executable: '/home/jberg/RavenHydroFramework/build/Raven'
-

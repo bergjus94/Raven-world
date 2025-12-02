@@ -372,6 +372,165 @@ class GloGEMProcessor:
         else:
             # Return empty dataframe with expected columns
             return pd.DataFrame(columns=['date', 'glacier_melt', 'snowmelt', 'total_output'])
+        
+    def prepare_irrigation_coupled(self, force_reprocess: bool = False) -> pd.DataFrame:
+            """
+            Prepare irrigation data (GloGEM melt on glacier HRUs, zeros elsewhere) as a NetCDF file.
+            This creates an irrigation forcing file with the same structure as precipitation/temperature.
+            
+            Parameters
+            ----------
+            force_reprocess : bool, optional
+                If True, force reprocessing even if the output file exists (default is False).
+            
+            Returns
+            -------
+            pd.DataFrame
+                DataFrame with irrigation values for each HRU
+            """
+            try:
+                self.logger.info("Preparing coupled irrigation data (GloGEM melt as irrigation)")
+
+                # Check if output file already exists
+                out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
+                output_path = Path(out_dir, 'irrigation.nc')
+                
+                if output_path.exists() and not force_reprocess:
+                    self.logger.info(f"✅ Irrigation file already exists: {output_path}")
+                    self.logger.info("⏭️ Skipping processing. Set force_reprocess=True to reprocess.")
+                    # Load and return existing data
+                    ds = xr.open_dataset(output_path)
+                    # Convert to DataFrame if needed
+                    return pd.DataFrame()  # Or extract data from ds
+                
+                # Check if required fields are available
+                required_fields = ['model_type', 'start_date', 'end_date']
+                for field in required_fields:
+                    if not getattr(self, field):
+                        raise ValueError(f"Missing required field for coupled forcing: {field}")
+                
+                # Load GloGEM data
+                glogem_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'GloGEM_melt.csv')
+                if not glogem_dir.exists():
+                    raise FileNotFoundError(f"GloGEM melt file not found: {glogem_dir}")
+                    
+                glogem = pd.read_csv(glogem_dir, dtype={'id': str})[['id', 'date', 'q']]
+                glogem['date'] = pd.to_datetime(glogem['date'])
+
+                # Load HRU data
+                hru_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+                HRU = gpd.read_file(hru_dir)
+                HRU = HRU.sort_values(by='HRU_ID').reset_index(drop=True)
+                HRU['HRU ID'] = range(1, len(HRU) + 1)
+                
+                # Auto-detect RGI region code from glacier IDs
+                rgi_region_code = None
+                if 'Glacier_Cl' in HRU.columns:
+                    glacier_series = HRU['Glacier_Cl'].dropna()
+                    if not glacier_series.empty:
+                        for glacier_id in glacier_series.unique():
+                            if isinstance(glacier_id, str) and glacier_id.startswith('RGI60-'):
+                                parts = glacier_id.split('.')
+                                if len(parts) >= 2:
+                                    rgi_region_code = parts[0]
+                                    break
+                        self.logger.info(f"Auto-detected RGI region code: {rgi_region_code}")
+                
+                # Generate the full date range
+                full_date_range = pd.date_range(self.start_date, self.end_date)
+                
+                # Initialize result dataframe with zeros for all HRUs
+                num_hrus = len(HRU)
+                result_df = pd.DataFrame(
+                    np.zeros((len(full_date_range), num_hrus)),
+                    columns=range(1, num_hrus + 1)
+                )
+                
+                # Fill in GloGEM data for glacier HRUs
+                unique_ids = glogem['id'].unique()
+                self.logger.info(f"Processing {len(unique_ids)} glacier HRUs for irrigation")
+                
+                for glogem_id in unique_ids:
+                    # Create the full glacier ID string
+                    full_glacier_id = f"{rgi_region_code}.{glogem_id}" if rgi_region_code else str(glogem_id)
+                    
+                    # Check if this glacier exists in the HRU DataFrame
+                    mask = HRU['Glacier_Cl'].notna() & (HRU['Glacier_Cl'] == full_glacier_id)
+                    if not mask.any():
+                        self.logger.warning(f"Warning: Glacier ID {full_glacier_id} from GloGEM not found in HRU data")
+                        continue
+                    
+                    # Filter glogem time series for this ID
+                    filtered_glogem = glogem[glogem['id'] == glogem_id].copy()
+                    filtered_glogem['date'] = pd.to_datetime(filtered_glogem['date'])
+                    
+                    # Reindex to match the full date range (fill missing dates with 0)
+                    filtered_glogem = filtered_glogem.set_index('date').reindex(full_date_range, fill_value=0).reset_index()
+                    filtered_glogem.rename(columns={'index': 'date'}, inplace=True)
+                    
+                    # Identify the HRU ID
+                    hru_id = HRU.loc[mask, 'HRU ID'].iloc[0]
+                    
+                    # Assign glogem values (irrigation) to the corresponding HRU
+                    result_df[hru_id] = filtered_glogem['q'].values
+                    
+                    self.logger.debug(f"Assigned irrigation to HRU {hru_id} for glacier {full_glacier_id}")
+                
+                # Create time index
+                time_index = full_date_range
+                
+                # Format to numpy array
+                result_array = result_df.to_numpy()
+                
+                # Create the dimension variables
+                x_values = np.arange(1, result_array.shape[1] + 1)
+                y_values = np.arange(1, 2)
+                
+                # Create xarray Dataset
+                ds_new = xr.Dataset(
+                    {'data': (['time', 'x', 'y'], result_array.reshape(len(time_index), -1, 1))},
+                    coords={'time': time_index, 'x': x_values, 'y': y_values}
+                )
+                
+                # Add elevation data
+                elevation_values = HRU['Elev_Mean'].values
+                elevation_da = xr.DataArray(
+                    elevation_values.reshape(-1, 1),
+                    dims=['x', 'y'], 
+                    coords={'x': ds_new['x'], 'y': ds_new['y']}
+                )
+                ds_new['elevation'] = elevation_da
+                
+                # Save to NetCDF
+                out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
+                out_dir.mkdir(parents=True, exist_ok=True)
+                output_path = Path(out_dir, 'irrigation.nc')
+                ds_new.to_netcdf(output_path)
+                
+                self.logger.info(f"✅ Saved irrigation data to {output_path}")
+                
+                # Log statistics
+                glacier_hrus_count = (result_df != 0).any(axis=0).sum()
+                non_zero_count = (result_array != 0).sum()
+                total_count = result_array.size
+                
+                self.logger.info(f"Irrigation statistics:")
+                self.logger.info(f"  Glacier HRUs with irrigation: {glacier_hrus_count}/{num_hrus}")
+                self.logger.info(f"  Non-zero values: {non_zero_count}/{total_count} ({non_zero_count/total_count*100:.2f}%)")
+                self.logger.info(f"  Mean irrigation (glacier HRUs only): {result_array[result_array != 0].mean():.3f} mm/day")
+                self.logger.info(f"  Max irrigation: {result_array.max():.3f} mm/day")
+                
+                # Create plot if debug mode
+                if self.debug:
+                    self._plot_irrigation_timeseries_and_regime(ds_new, title="Irrigation (GloGEM Melt)")
+                
+                return result_df
+                
+            except Exception as e:
+                self.logger.error(f"Error in prepare_irrigation_coupled: {str(e)}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                raise
     
     def process_glogem_data_optimized(self, force_reprocess: bool = False, chunk_size: int = 10000, plot: bool = True) -> pd.DataFrame:
         """
@@ -736,126 +895,105 @@ class GloGEMProcessor:
         
         return hru_id, hru_values
     
-    def prepare_precip_coupled(self) -> pd.DataFrame:
-        try:
-            self.logger.info("Preparing coupled precipitation data")
-            
-            # Check if required fields are available
-            required_fields = ['model_type', 'start_date', 'end_date']
-            for field in required_fields:
-                if not getattr(self, field):
-                    raise ValueError(f"Missing required field for coupled forcing: {field}")
-                    
-            # Load necessary files
-            self.logger.debug("Loading shapefile")
-            shapefile_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
-            gdf = gpd.read_file(shapefile_path)
-            gdf['ID'] = gdf.reset_index().index
-
-            self.logger.debug("Loading NetCDF file")
-            out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
-            # CHANGE: Use ERA5-Land precipitation file instead of Meteoswiss
-            netcdf_path = Path(out_dir, 'era5_land_precip.nc')
-            
-            # Add debug message before opening NetCDF file
-            self.logger.debug(f"Opening NetCDF file: {netcdf_path}")
-            ds = xr.open_mfdataset(netcdf_path)
-            
-            # Debug: Print NetCDF structure
-            self.logger.debug(f"NetCDF dimensions: {ds.dims}")
-            self.logger.debug(f"NetCDF variables: {list(ds.data_vars)}")
-            self.logger.debug(f"NetCDF coordinates: {list(ds.coords)}")
-
-            self.logger.debug("Loading GloGEM data")
-            glogem_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'GloGEM_melt.csv')
-            glogem = pd.read_csv(glogem_dir, dtype={'id': str})[['id', 'date', 'q']]
-            glogem['date'] = pd.to_datetime(glogem['date'])
-
-            self.logger.debug("Loading HRU data")
-            hru_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
-            HRU = gpd.read_file(hru_dir)
-            HRU = HRU.sort_values(by='HRU_ID').reset_index(drop=True)
-            HRU['HRU ID'] = range(1, len(HRU) + 1)
-            
-            # Print first few rows of HRU data to help diagnose issues
-            self.logger.debug(f"HRU data first few rows: {HRU.head()}")
-            self.logger.debug(f"HRU columns: {HRU.columns}")
-
-            # Safely extract glacier IDs from HRU
-            self.logger.debug("Extracting glacier IDs")
-            glacier_ids_hru = []
-            rgi_region_code = None
-            if 'Glacier_Cl' in HRU.columns:
-                # First filter out NaN values
-                glacier_series = HRU['Glacier_Cl'].dropna()
-                # Only then apply string operations
-                if not glacier_series.empty:
-                    # Auto-detect RGI region code from the first glacier ID
-                    for glacier_id in glacier_series.unique():
-                        if isinstance(glacier_id, str) and glacier_id.startswith('RGI60-'):
-                            parts = glacier_id.split('.')
-                            if len(parts) >= 2:
-                                rgi_region_code = parts[0]  # e.g., 'RGI60-15'
-                                break
-                    
-                    if rgi_region_code:
-                        glacier_ids_hru = glacier_series.astype(str).str.replace(f'{rgi_region_code}.', '').tolist()
-                        self.logger.info(f"Auto-detected RGI region code: {rgi_region_code}")
-                    else:
-                        # Fallback if no region code detected
-                        glacier_ids_hru = glacier_series.astype(str).tolist()
-                
-                self.logger.debug(f"Found {len(glacier_ids_hru)} glaciers in HRU shapefile")
-            else:
-                self.logger.warning("No 'Glacier_Cl' column found in HRU shapefile")
-            
-            # Get GloGEM IDs
-            glacier_ids_glogem = glogem['id'].unique()
-            
-            # Find missing glaciers (in HRU but not in GloGEM)
-            missing_glaciers = set(glacier_ids_hru) - set(glacier_ids_glogem)
-            
-            if len(missing_glaciers) == 0:
-                self.logger.info("No glaciers missing - all HRU glaciers are present in GloGEM data")
-            else:
-                self.logger.warning("The following glacier IDs are missing from GloGEM data:")
-                for glacier_id in missing_glaciers:
-                    full_glacier_id = f"{rgi_region_code}.{glacier_id}" if rgi_region_code else glacier_id
-                    self.logger.warning(f"{full_glacier_id}")
-
-            # Import GridWeightsGenerator with detailed error handling
-            self.logger.debug("Importing GridWeightsGenerator")
+    def prepare_precip_coupled(self, force_reprocess: bool = False) -> pd.DataFrame:
             try:
-                from preprocess_meteo import GridWeightsGenerator
-            except ImportError as e:
-                self.logger.error(f"Failed to import GridWeightsGenerator: {e}")
-                raise
-            
-            # CHANGE: Use namelist-based configuration for GridWeightsGenerator
-            self.logger.debug("Creating grid weights generator")
-            # Create a temporary namelist-like config
-            
-            # Generate grid weights using the updated method
-            self.logger.debug("Generating grid weights")
-            grid_weights_generator = GridWeightsGenerator(self.namelist_path)
-            grid_weights = grid_weights_generator.generate(use_precipitation=True)
-            
-            # Extract relevant arrays for efficiency
-            self.logger.debug("Extracting grid weights and NetCDF data")
-            grid_weights_np = grid_weights[['HRU ID', 'cell_id', 'normalized_relative_area']].to_numpy()
-            
-            # Get variable names and extract data with explicit error handling
-            var_names = list(ds.data_vars.keys())
-            self.logger.debug(f"NetCDF variables: {var_names}")
-            
-            if len(var_names) == 0:
-                raise ValueError("No data variables found in NetCDF file")
+                self.logger.info("Preparing coupled precipitation data")
+
+                # ✅ ADD: Check if output file already exists
+                out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
+                output_path = Path(out_dir, 'era5_land_precip_coupled.nc')
                 
-            # Try the first variable if only one exists
-            if len(var_names) == 1:
-                var_name = var_names[0]
-            else:
-                # CHANGE: Look for ERA5-Land precipitation variable names
+                if output_path.exists() and not force_reprocess:
+                    self.logger.info(f"✅ Coupled precipitation file already exists: {output_path}")
+                    self.logger.info("⏭️ Skipping processing. Set force_reprocess=True to reprocess.")
+                    return pd.DataFrame()
+                
+                # Check if required fields are available
+                required_fields = ['model_type', 'start_date', 'end_date']
+                for field in required_fields:
+                    if not getattr(self, field):
+                        raise ValueError(f"Missing required field for coupled forcing: {field}")
+                
+                # ✅ Generate the full date range for the desired period FIRST
+                full_date_range = pd.date_range(self.start_date, self.end_date)
+                self.logger.info(f"Target date range: {self.start_date} to {self.end_date} ({len(full_date_range)} days)")
+                        
+                # Load necessary files
+                self.logger.debug("Loading shapefile")
+                shapefile_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+                gdf = gpd.read_file(shapefile_path)
+                gdf['ID'] = gdf.reset_index().index
+
+                self.logger.debug("Loading NetCDF file")
+                out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
+                netcdf_path = Path(out_dir, 'era5_land_precip.nc')
+                
+                self.logger.debug(f"Opening NetCDF file: {netcdf_path}")
+                ds = xr.open_mfdataset(netcdf_path)
+                
+                # Debug: Print NetCDF structure
+                self.logger.debug(f"NetCDF dimensions: {ds.dims}")
+                self.logger.debug(f"NetCDF variables: {list(ds.data_vars)}")
+                
+                # ✅ FIX: Filter NetCDF to match the desired date range
+                time_coord_name = None
+                for coord in ds.coords:
+                    if coord.lower() in ['time', 'date']:
+                        time_coord_name = coord
+                        break
+                
+                if time_coord_name:
+                    self.logger.info(f"Original NetCDF time range: {ds[time_coord_name].values[0]} to {ds[time_coord_name].values[-1]} ({len(ds[time_coord_name])} days)")
+                    
+                    # Filter to the desired date range
+                    ds = ds.sel({time_coord_name: slice(self.start_date, self.end_date)})
+                    
+                    self.logger.info(f"Filtered NetCDF time range: {ds[time_coord_name].values[0]} to {ds[time_coord_name].values[-1]} ({len(ds[time_coord_name])} days)")
+                else:
+                    self.logger.warning("Could not find time coordinate in NetCDF, proceeding without filtering")
+
+                self.logger.debug("Loading GloGEM data")
+                glogem_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'GloGEM_melt.csv')
+                glogem = pd.read_csv(glogem_dir, dtype={'id': str})[['id', 'date', 'q']]
+                glogem['date'] = pd.to_datetime(glogem['date'])
+
+                self.logger.debug("Loading HRU data")
+                hru_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+                HRU = gpd.read_file(hru_dir)
+                HRU = HRU.sort_values(by='HRU_ID').reset_index(drop=True)
+                HRU['HRU ID'] = range(1, len(HRU) + 1)
+                
+                # Auto-detect RGI region code
+                rgi_region_code = None
+                if 'Glacier_Cl' in HRU.columns:
+                    glacier_series = HRU['Glacier_Cl'].dropna()
+                    if not glacier_series.empty:
+                        for glacier_id in glacier_series.unique():
+                            if isinstance(glacier_id, str) and glacier_id.startswith('RGI60-'):
+                                parts = glacier_id.split('.')
+                                if len(parts) >= 2:
+                                    rgi_region_code = parts[0]
+                                    break
+                        self.logger.info(f"Auto-detected RGI region code: {rgi_region_code}")
+
+                # Import GridWeightsGenerator
+                from preprocess_meteo import GridWeightsGenerator
+                
+                self.logger.debug("Generating grid weights")
+                grid_weights_generator = GridWeightsGenerator(self.namelist_path)
+                grid_weights = grid_weights_generator.generate(use_precipitation=True)
+                
+                # Extract relevant arrays
+                grid_weights_np = grid_weights[['HRU ID', 'cell_id', 'normalized_relative_area']].to_numpy()
+                
+                # Get variable names
+                var_names = list(ds.data_vars.keys())
+                self.logger.debug(f"NetCDF variables: {var_names}")
+                
+                if len(var_names) == 0:
+                    raise ValueError("No data variables found in NetCDF file")
+                
+                # Find precipitation variable
                 era5_precip_vars = ['tp', 'precip', 'precipitation', 'total_precipitation']
                 var_name = None
                 for era5_var in era5_precip_vars:
@@ -864,147 +1002,102 @@ class GloGEMProcessor:
                         break
                 
                 if var_name is None:
-                    # Fallback to first non-coordinate variable
                     non_coord_vars = [v for v in var_names if not any(coord in v.lower() for coord in ['coord', 'crs', 'lv95'])]
-                    if non_coord_vars:
-                        var_name = non_coord_vars[0]
-                    else:
-                        var_name = var_names[0]
-            
-            self.logger.debug(f"Using variable: {var_name}")
-            
-            # Extract the data with detailed shape information
-            array3d = ds[var_name].values
-            self.logger.debug(f"Array shape: {array3d.shape}")
-            
-            # Special handling for 1D or 2D arrays
-            if len(array3d.shape) == 1:
-                self.logger.warning(f"Array is 1D with shape {array3d.shape}. Reshaping to 2D.")
-                array3d = array3d.reshape(-1, 1)
-            
-            time_dim = array3d.shape[0]
-            
-            # Detailed info about grid weights and array shapes
-            self.logger.debug(f"Grid weights shape: {grid_weights_np.shape}")
-            self.logger.debug(f"Array3D shape: {array3d.shape}")
-            self.logger.debug(f"Time dimension: {time_dim}")
-            
-            # Apply function that calculates precip for each HRU with explicit error handling
-            self.logger.debug("Calculating precipitation for each HRU")
-            num_cores = max(1, multiprocessing.cpu_count() - 1)
-            self.logger.debug(f"Processing HRUs in parallel using {num_cores} cores")
-            
-            # CRITICAL CHANGE: Sequential processing first for easier debugging
-            self.logger.debug("Trying sequential processing first to identify any issues")
-            hru_range = range(1, max(grid_weights['HRU ID']) + 1)
-            results = []
-            
-            for hru_id in hru_range:
-                self.logger.debug(f"Processing HRU {hru_id}")
-                try:
-                    hru_result = self._process_hru(hru_id, grid_weights_np, array3d, time_dim)
-                    results.append(hru_result)
-                except Exception as e:
-                    self.logger.error(f"Error processing HRU {hru_id}: {str(e)}")
-                    import traceback
-                    self.logger.error(traceback.format_exc())
-                    # Continue with next HRU rather than failing
-                    results.append((hru_id, np.zeros(time_dim, dtype=np.float32)))
-            
-            result_df = pd.DataFrame({hru_id: values for hru_id, values in results})
-            
-            # Process GloGEM data for glacier HRUs
-            unique_ids = glogem['id'].unique()
-            if self.debug:
-                self.logger.debug(f"GloGEM unique IDs: {unique_ids}")
-            
-            # Generate the full date range for the desired period using date strings
-            full_date_range = pd.date_range(self.start_date, self.end_date)
-            
-            # Put in glacier time series for glacier HRUs
-            for glogem_id in glogem['id'].unique():
-                # Create the full glacier ID string using the detected region code
-                full_glacier_id = f"{rgi_region_code}.{glogem_id}" if rgi_region_code else str(glogem_id)
-            
-                # Check if this glacier exists in the HRU DataFrame - safely using a mask
-                mask = HRU['Glacier_Cl'].notna() & (HRU['Glacier_Cl'] == full_glacier_id)
-                if not mask.any():
-                    self.logger.warning(f"Warning: Glacier ID {full_glacier_id} from GloGEM not found in HRU data")
-                    continue
+                    var_name = non_coord_vars[0] if non_coord_vars else var_names[0]
                 
-                # Filter glogem time series for this ID
-                filtered_glogem = glogem[glogem['id'] == glogem_id].copy()
-                filtered_glogem['date'] = pd.to_datetime(filtered_glogem['date'])
-            
-                # Reindex filtered_glogem to match the full date range
-                filtered_glogem = filtered_glogem.set_index('date').reindex(full_date_range, fill_value=0).reset_index()
-                filtered_glogem.rename(columns={'index': 'date'}, inplace=True)
-            
-                # Identify the HRU ID using the mask
-                hru_id = HRU.loc[mask, 'HRU ID'].iloc[0]
-            
-                # Assign glogem values to the corresponding HRU
-                result_df[hru_id] = filtered_glogem['q'].values
-            
-            # Create time index using date strings
-            time_index = full_date_range
-            
-            # Format to numpy
-            result_array = result_df.to_numpy() 
-            
-            # Create the dimension variables
-            x_values = np.arange(1, result_array.shape[1] + 1)
-            y_values = np.arange(1, 2)
-            
-            if self.debug:
-                self.logger.debug(f"X values: {x_values}")
-                self.logger.debug(f"Y values: {y_values}")
-            
-            ds_new = xr.Dataset(
-                {'data': (['time', 'x', 'y'], result_array.reshape(len(time_index), -1, 1))},
-                coords={'time': time_index, 'x': x_values, 'y': y_values}
-            )
-            
-            # Add elevation data
-            elevation_values = HRU['Elev_Mean'].values
-            
-            elevation_da = xr.DataArray(
-                elevation_values.reshape(-1, 1),
-                dims=['x', 'y'], coords={'x': ds_new['x'], 'y': ds_new['y']}
-            )
+                self.logger.debug(f"Using variable: {var_name}")
+                
+                # Extract data
+                array3d = ds[var_name].values
+                self.logger.debug(f"Array shape: {array3d.shape}")
+                
+                if len(array3d.shape) == 1:
+                    self.logger.warning(f"Array is 1D with shape {array3d.shape}. Reshaping to 2D.")
+                    array3d = array3d.reshape(-1, 1)
+                
+                time_dim = array3d.shape[0]
+                
+                # ✅ CRITICAL CHECK: Verify time dimensions match
+                if time_dim != len(full_date_range):
+                    self.logger.error(f"Time dimension mismatch! NetCDF: {time_dim} days, Expected: {len(full_date_range)} days")
+                    raise ValueError(f"NetCDF time dimension ({time_dim}) does not match desired date range ({len(full_date_range)})")
+                
+                # Process HRUs
+                self.logger.debug("Calculating precipitation for each HRU")
+                hru_range = range(1, max(grid_weights['HRU ID']) + 1)
+                results = []
+                
+                for hru_id in hru_range:
+                    self.logger.debug(f"Processing HRU {hru_id}")
+                    try:
+                        hru_result = self._process_hru(hru_id, grid_weights_np, array3d, time_dim)
+                        results.append(hru_result)
+                    except Exception as e:
+                        self.logger.error(f"Error processing HRU {hru_id}: {str(e)}")
+                        results.append((hru_id, np.zeros(time_dim, dtype=np.float32)))
+                
+                result_df = pd.DataFrame({hru_id: values for hru_id, values in results})
+                
+                # ✅ NOW THE LENGTHS MATCH: both result_df and filtered_glogem are len(full_date_range)
+                # Process GloGEM data for glacier HRUs
+                unique_ids = glogem['id'].unique()
+                
+                for glogem_id in unique_ids:
+                    full_glacier_id = f"{rgi_region_code}.{glogem_id}" if rgi_region_code else str(glogem_id)
+                    mask = HRU['Glacier_Cl'].notna() & (HRU['Glacier_Cl'] == full_glacier_id)
+                    
+                    if not mask.any():
+                        self.logger.warning(f"Warning: Glacier ID {full_glacier_id} from GloGEM not found in HRU data")
+                        continue
+                    
+                    # Filter and reindex GloGEM data
+                    filtered_glogem = glogem[glogem['id'] == glogem_id].copy()
+                    filtered_glogem['date'] = pd.to_datetime(filtered_glogem['date'])
+                    filtered_glogem = filtered_glogem.set_index('date').reindex(full_date_range, fill_value=0).reset_index()
+                    filtered_glogem.rename(columns={'index': 'date'}, inplace=True)
+                    
+                    hru_id = HRU.loc[mask, 'HRU ID'].iloc[0]
+                    
+                    # This should now work because lengths match
+                    result_df[hru_id] = filtered_glogem['q'].values
+                
+                # Create time index
+                time_index = full_date_range
+                
+                # Format to numpy
+                result_array = result_df.to_numpy() 
+                
+                # Create xarray Dataset
+                x_values = np.arange(1, result_array.shape[1] + 1)
+                y_values = np.arange(1, 2)
+                
+                ds_new = xr.Dataset(
+                    {'data': (['time', 'x', 'y'], result_array.reshape(len(time_index), -1, 1))},
+                    coords={'time': time_index, 'x': x_values, 'y': y_values}
+                )
+                
+                # Add elevation
+                elevation_values = HRU['Elev_Mean'].values
+                elevation_da = xr.DataArray(
+                    elevation_values.reshape(-1, 1),
+                    dims=['x', 'y'], coords={'x': ds_new['x'], 'y': ds_new['y']}
+                )
+                ds_new['elevation'] = elevation_da
+                
+                # Save
+                output_path = Path(out_dir, 'era5_land_precip_coupled.nc')
+                ds_new.to_netcdf(output_path)
+                self.logger.info(f"Saved coupled precipitation data to {output_path}")
 
-            ds_new['elevation'] = elevation_da
+                return result_df
             
-            # Save to NetCDF
-            # CHANGE: Update output filename for ERA5-Land
-            output_path = Path(out_dir, 'era5_land_precip_coupled.nc')
-            ds_new.to_netcdf(output_path)
-            self.logger.info(f"Saved coupled precipitation data to {output_path}")
-            
-            # Extract the data variable
-            data_variable = ds_new['data']
+            except Exception as e:
+                self.logger.error(f"Error in prepare_precip_coupled: {str(e)}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                raise
 
-            # Select the first time step
-            first_time_step = data_variable.isel(time=0)
-
-            # Plot the first time step as a raster
-            plt.figure(figsize=(10, 6))
-            plt.imshow(first_time_step, cmap='viridis', origin='lower')
-            plt.colorbar(label='Value')
-            plt.title('First Time Step of Data Variable')
-            plt.xlabel('Longitude')
-            plt.ylabel('Latitude')
-            plt.show()
-
-            return result_df
-        
-        except Exception as e:
-            self.logger.error(f"Error in prepare_precip_coupled: {str(e)}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            raise
-
-    def prepare_temperature_coupled(self) -> Dict[str, pd.DataFrame]:
+    def prepare_temperature_coupled(self, force_reprocess: bool = False) -> Dict[str, pd.DataFrame]:
         """
         Prepare temperature data coupled with glacier information for hydrological modeling.
         
@@ -1015,12 +1108,31 @@ class GloGEMProcessor:
         """
         try:
             self.logger.info("Preparing coupled temperature data")
+
+            # ✅ ADD: Check if all output files already exist
+            out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
+            expected_files = [
+                out_dir / 'era5_land_temp_mean_coupled.nc',
+                out_dir / 'era5_land_temp_max_coupled.nc',
+                out_dir / 'era5_land_temp_min_coupled.nc'
+            ]
+            
+            all_exist = all(f.exists() for f in expected_files)
+            
+            if all_exist and not force_reprocess:
+                self.logger.info(f"✅ All coupled temperature files already exist")
+                self.logger.info("⏭️ Skipping processing. Set force_reprocess=True to reprocess.")
+                return {}
             
             # Check if required fields are available
             required_fields = ['model_type', 'start_date', 'end_date']
             for field in required_fields:
                 if not getattr(self, field):
                     raise ValueError(f"Missing required field for coupled forcing: {field}")
+            
+            # ✅ Generate the full date range for the desired period FIRST
+            full_date_range = pd.date_range(self.start_date, self.end_date)
+            self.logger.info(f"Target date range: {self.start_date} to {self.end_date} ({len(full_date_range)} days)")
                     
             # Load necessary files
             shapefile_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
@@ -1035,7 +1147,7 @@ class GloGEMProcessor:
                         if isinstance(glacier_id, str) and glacier_id.startswith('RGI60-'):
                             parts = glacier_id.split('.')
                             if len(parts) >= 2:
-                                rgi_region_code = parts[0]  # e.g., 'RGI60-15'
+                                rgi_region_code = parts[0]
                                 break
                     self.logger.info(f"Auto-detected RGI region code: {rgi_region_code}")
             gdf['ID'] = gdf.reset_index().index
@@ -1052,14 +1164,12 @@ class GloGEMProcessor:
             # Import GridWeightsGenerator from preprocess_meteo
             from preprocess_meteo import GridWeightsGenerator
             
-            # CHANGE: Use namelist-based configuration for GridWeightsGenerator
-            
             # Generate grid weights
             self.logger.debug("Generating grid weights")
             grid_weights_generator = GridWeightsGenerator(self.namelist_path)
             grid_weights = grid_weights_generator.generate(use_precipitation=True)
 
-            # CHANGE: List of ERA5-Land temperature files to process
+            # List of ERA5-Land temperature files to process
             file_names = ['era5_land_temp_mean.nc', 'era5_land_temp_max.nc', 'era5_land_temp_min.nc']
             temp_data = {}
 
@@ -1078,20 +1188,35 @@ class GloGEMProcessor:
                 # Debug: Print NetCDF structure
                 self.logger.debug(f"NetCDF dimensions: {ds.dims}")
                 self.logger.debug(f"NetCDF variables: {list(ds.data_vars)}")
-                self.logger.debug(f"NetCDF coordinates: {list(ds.coords)}")
                 
-                # Get variable names and extract data with explicit error handling
+                # ✅ FIX: Filter NetCDF to match the desired date range
+                time_coord_name = None
+                for coord in ds.coords:
+                    if coord.lower() in ['time', 'date']:
+                        time_coord_name = coord
+                        break
+                
+                if time_coord_name:
+                    self.logger.info(f"Original NetCDF time range: {ds[time_coord_name].values[0]} to {ds[time_coord_name].values[-1]} ({len(ds[time_coord_name])} days)")
+                    
+                    # Filter to the desired date range
+                    ds = ds.sel({time_coord_name: slice(self.start_date, self.end_date)})
+                    
+                    self.logger.info(f"Filtered NetCDF time range: {ds[time_coord_name].values[0]} to {ds[time_coord_name].values[-1]} ({len(ds[time_coord_name])} days)")
+                else:
+                    self.logger.warning("Could not find time coordinate in NetCDF, proceeding without filtering")
+                
+                # Get variable names and extract data
                 var_names = list(ds.data_vars.keys())
                 self.logger.debug(f"NetCDF variables: {var_names}")
                 
                 if len(var_names) == 0:
                     raise ValueError("No data variables found in NetCDF file")
                     
-                # CHANGE: Look for ERA5-Land temperature variable names
+                # Look for ERA5-Land temperature variables
                 if len(var_names) == 1:
                     var_name = var_names[0]
                 else:
-                    # Look for ERA5-Land temperature variables
                     era5_temp_vars = ['t2m', 'temp', 'temperature', '2m_temperature']
                     var_name = None
                     for era5_var in era5_temp_vars:
@@ -1100,7 +1225,6 @@ class GloGEMProcessor:
                             break
                     
                     if var_name is None:
-                        # Fallback to first non-coordinate variable
                         non_coord_vars = [v for v in var_names if not any(coord in v.lower() for coord in ['coord', 'crs', 'lv95'])]
                         if non_coord_vars:
                             var_name = non_coord_vars[0]
@@ -1109,7 +1233,7 @@ class GloGEMProcessor:
                 
                 self.logger.debug(f"Using variable: {var_name}")
                 
-                # Extract the data with detailed shape information
+                # Extract the data
                 array3d = ds[var_name].values
                 self.logger.debug(f"Array shape: {array3d.shape}")
                 
@@ -1120,15 +1244,16 @@ class GloGEMProcessor:
                 
                 time_dim = array3d.shape[0]
                 
+                # ✅ CRITICAL CHECK: Verify time dimensions match
+                if time_dim != len(full_date_range):
+                    self.logger.error(f"Time dimension mismatch! NetCDF: {time_dim} days, Expected: {len(full_date_range)} days")
+                    raise ValueError(f"NetCDF time dimension ({time_dim}) does not match desired date range ({len(full_date_range)})")
+                
                 # Extract relevant arrays for efficiency
                 grid_weights_np = grid_weights[['HRU ID', 'cell_id', 'normalized_relative_area']].to_numpy()
 
-                # Apply function to calculate temperature for each HRU
-                num_cores = max(1, multiprocessing.cpu_count() - 1)
-                self.logger.debug(f"Processing HRUs in parallel using {num_cores} cores")
-                
-                # CRITICAL CHANGE: Sequential processing first for easier debugging
-                self.logger.debug("Processing HRUs sequentially to identify any issues")
+                # Process HRUs
+                self.logger.debug(f"Processing HRUs in parallel using {max(1, multiprocessing.cpu_count() - 1)} cores")
                 hru_range = range(1, max(grid_weights['HRU ID']) + 1)
                 results = []
                 
@@ -1138,27 +1263,21 @@ class GloGEMProcessor:
                         results.append(hru_result)
                     except Exception as e:
                         self.logger.error(f"Error processing HRU {hru_id}: {str(e)}")
-                        import traceback
-                        self.logger.error(traceback.format_exc())
-                        # Continue with next HRU rather than failing
                         results.append((hru_id, np.zeros(time_dim, dtype=np.float32)))
                 
                 result_df = pd.DataFrame({hru_id: values for hru_id, values in results})
                 temp_data[file_name] = result_df
 
-            # Process GloGEM data for glacier HRUs
+            # ✅ NOW THE LENGTHS MATCH: Process GloGEM data for glacier HRUs
             unique_ids = glogem['id'].unique()
             for glogem_id in unique_ids:
-                # Create the full glacier ID string using the detected region code
                 full_glacier_id = f"{rgi_region_code}.{glogem_id}" if rgi_region_code else str(glogem_id)
             
-                # Check if this glacier exists in the HRU DataFrame - safely using a mask
                 mask = HRU['Glacier_Cl'].notna() & (HRU['Glacier_Cl'] == full_glacier_id)
                 if not mask.any():
                     self.logger.warning(f"Warning: Glacier ID {full_glacier_id} from GloGEM not found in HRU data")
                     continue
                 
-                # Identify the HRU ID using the mask
                 hru_id = HRU.loc[mask, 'HRU ID'].iloc[0]
             
                 # Assign the constant value 20 to this HRU across all time steps
@@ -1167,13 +1286,12 @@ class GloGEMProcessor:
                     
             # Save results to NetCDF for each temperature variable
             for file_name, result_df in temp_data.items():
-                # CHANGE: Update output filenames for ERA5-Land
                 output_name = file_name.replace('.nc', '_coupled.nc')
                 out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
                 output_path = Path(out_dir, output_name)
 
-                # Generate the full date range for the desired period using date strings
-                time_index = pd.date_range(self.start_date, self.end_date)
+                # Use the full date range as time index
+                time_index = full_date_range
                 result_array = result_df.to_numpy()
                 
                 # Create the dimension variables
@@ -1196,20 +1314,9 @@ class GloGEMProcessor:
                 ds_new.to_netcdf(output_path)
                 self.logger.info(f"Saved coupled temperature data to {output_path}")
 
-                # Extract the data variable
-                data_variable = ds_new['data']
-
-                # Select the first time step
-                first_time_step = data_variable.isel(time=0)
-
-                # Plot the first time step as a raster
-                plt.figure(figsize=(10, 6))
-                plt.imshow(first_time_step, cmap='viridis', origin='lower')
-                plt.colorbar(label='Value')
-                plt.title('First Time Step of Data Variable')
-                plt.xlabel('Longitude')
-                plt.ylabel('Latitude')
-                plt.show()
+                # Create plot if debug mode
+                if self.debug:
+                    self._plot_netcdf_first_timestep(ds_new, title=f"Temperature {file_name}")
 
             return temp_data
             
@@ -1444,6 +1551,222 @@ class GloGEMProcessor:
             
         except Exception as e:
             self.logger.error(f"Error in NetCDF first time step plotting: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            
+
+    def _plot_irrigation_timeseries_and_regime(self, ds_new, title="Irrigation (GloGEM Melt)"):
+        """
+        Plot time series and regime for irrigation (GloGEM melt) data
+        
+        Parameters
+        ----------
+        ds_new : xr.Dataset
+            The NetCDF dataset
+        title : str
+            Plot title
+        """
+        try:
+            # Create plots directory
+            plots_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'plots')
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Extract the data variable
+            data_variable = ds_new['data']
+            
+            # Get time dimension
+            time_values = pd.to_datetime(ds_new.time.values)
+            
+            # Extract values and reshape
+            values = data_variable.values.squeeze()  # Shape: (time, HRUs)
+            self.logger.debug(f"Data shape after squeeze: {values.shape}")
+            
+            if len(values.shape) == 1:
+                # If somehow it's 1D, reshape to (time, 1)
+                values = values.reshape(-1, 1)
+            
+            # Load HRU data to get areas
+            hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+            hru_gdf = gpd.read_file(hru_path)
+            
+            # ✅ Sort HRU data to match the order in the NetCDF (by HRU_ID)
+            hru_gdf = hru_gdf.sort_values(by='HRU_ID').reset_index(drop=True)
+            
+            # Get total catchment area and glacier area
+            area_col = 'Area_km2' if 'Area_km2' in hru_gdf.columns else 'area'
+            total_catchment_area = hru_gdf[area_col].sum()
+            
+            # Identify glacier HRUs and their areas
+            glacier_mask = hru_gdf['Glacier_Cl'].notna()
+            glacier_hru_indices = hru_gdf[glacier_mask].index.tolist()  # Indices in the dataframe
+            glacier_areas = hru_gdf.loc[glacier_mask, area_col].values  # Areas in km²
+            total_glacier_area = glacier_areas.sum()
+            glacier_fraction = total_glacier_area / total_catchment_area
+            
+            self.logger.info(f"Catchment area: {total_catchment_area:.2f} km²")
+            self.logger.info(f"Glacier area: {total_glacier_area:.2f} km² ({glacier_fraction*100:.1f}% of catchment)")
+            
+            # ✅ Calculate area-weighted mean irrigation per day (only for glacier HRUs)
+            # For each timestep, calculate: sum(irrigation_i * area_i) / sum(area_i)
+            mean_irrigation_weighted = np.zeros(len(time_values))
+            
+            for t in range(len(time_values)):
+                glacier_values = values[t, glacier_hru_indices]  # Irrigation values for glacier HRUs
+                weighted_sum = np.sum(glacier_values * glacier_areas)  # mm/day * km²
+                mean_irrigation_weighted[t] = weighted_sum / total_glacier_area if total_glacier_area > 0 else 0
+            
+            # ✅ Calculate catchment-normalized irrigation
+            # This is the mean irrigation weighted by glacier fraction
+            catchment_norm_irrigation = mean_irrigation_weighted * glacier_fraction
+            
+            # Find HRUs with non-zero irrigation (glacier HRUs)
+            glacier_hrus_mask = (values != 0).any(axis=0)
+            glacier_hru_ids = np.where(glacier_hrus_mask)[0] + 1  # +1 for 1-based indexing
+            
+            self.logger.info(f"Found {len(glacier_hru_ids)} glacier HRUs with irrigation data")
+            
+            # --- 1. TIME SERIES PLOT ---
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+            
+            # Plot 1a: Area-weighted mean irrigation per glacier HRU
+            ax1.plot(time_values, mean_irrigation_weighted, 'b-', linewidth=1, alpha=0.7)
+            ax1.fill_between(time_values, 0, mean_irrigation_weighted, color='blue', alpha=0.3)
+            ax1.set_title(f'{title} - Area-Weighted Mean Irrigation per Glacier HRU\nGauge {self.gauge_id}', fontsize=14)
+            ax1.set_xlabel('Date')
+            ax1.set_ylabel('Mean Irrigation (mm/day)')
+            ax1.grid(True, linestyle='--', alpha=0.7)
+            
+            # Add statistics text
+            stats_text = (
+                f"Mean: {mean_irrigation_weighted.mean():.2f} mm/day\n"
+                f"Max: {mean_irrigation_weighted.max():.2f} mm/day\n"
+                f"Glacier HRUs: {len(glacier_hru_ids)}\n"
+                f"Total glacier area: {total_glacier_area:.2f} km²"
+            )
+            ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes,
+                    fontsize=10, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            # Plot 1b: Catchment-normalized irrigation (relative contribution)
+            ax2.plot(time_values, catchment_norm_irrigation, 'orange', linewidth=1, alpha=0.7)
+            ax2.fill_between(time_values, 0, catchment_norm_irrigation, color='orange', alpha=0.3)
+            ax2.set_title(f'{title} - Catchment-Normalized Irrigation\n(Relative contribution to total catchment)', fontsize=14)
+            ax2.set_xlabel('Date')
+            ax2.set_ylabel('Catchment-Normalized Irrigation (mm/day)')
+            ax2.grid(True, linestyle='--', alpha=0.7)
+            
+            # Add statistics text
+            stats_text = (
+                f"Mean: {catchment_norm_irrigation.mean():.2f} mm/day\n"
+                f"Max: {catchment_norm_irrigation.max():.2f} mm/day\n"
+                f"Glacier fraction: {glacier_fraction*100:.1f}%\n"
+                f"Catchment area: {total_catchment_area:.2f} km²"
+            )
+            ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes,
+                    fontsize=10, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            plt.tight_layout()
+            plt.savefig(plots_dir / 'irrigation_timeseries.png', dpi=300, bbox_inches='tight')
+            if self.debug:
+                plt.show()
+            plt.close()
+            
+            self.logger.info(f"✅ Time series plot saved: {plots_dir / 'irrigation_timeseries.png'}")
+            
+            # --- 2. MONTHLY REGIME PLOT ---
+            # Create DataFrame for easier manipulation
+            df = pd.DataFrame({
+                'date': time_values,
+                'mean_irrigation_weighted': mean_irrigation_weighted,
+                'catchment_norm_irrigation': catchment_norm_irrigation
+            })
+            df['month'] = df['date'].dt.month
+            
+            # Calculate monthly means
+            monthly_mean_weighted = df.groupby('month')['mean_irrigation_weighted'].mean()
+            monthly_catchment_norm = df.groupby('month')['catchment_norm_irrigation'].mean()
+            
+            # Create regime plot
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+            
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            x = range(1, 13)
+            
+            # Plot 2a: Area-weighted mean irrigation regime
+            ax1.bar(x, monthly_mean_weighted.values, color='blue', alpha=0.7, edgecolor='black')
+            ax1.plot(x, monthly_mean_weighted.values, 'b-o', linewidth=2, markersize=6)
+            ax1.set_title(f'{title} - Monthly Regime (Area-Weighted Mean per Glacier HRU)\nGauge {self.gauge_id}', fontsize=14)
+            ax1.set_xlabel('Month')
+            ax1.set_ylabel('Mean Irrigation (mm/day)')
+            ax1.set_xticks(x)
+            ax1.set_xticklabels(month_names)
+            ax1.grid(True, linestyle='--', alpha=0.7, axis='y')
+            
+            # Add value labels on bars
+            for i, val in enumerate(monthly_mean_weighted.values, 1):
+                ax1.text(i, val + 0.5, f'{val:.1f}', ha='center', va='bottom', fontsize=9)
+            
+            # Plot 2b: Catchment-normalized regime
+            ax2.bar(x, monthly_catchment_norm.values, color='orange', alpha=0.7, edgecolor='black')
+            ax2.plot(x, monthly_catchment_norm.values, 'o-', color='darkorange', linewidth=2, markersize=6)
+            ax2.set_title(f'{title} - Monthly Regime (Catchment-Normalized)\n(Relative contribution: {glacier_fraction*100:.1f}% glacier coverage)', fontsize=14)
+            ax2.set_xlabel('Month')
+            ax2.set_ylabel('Catchment-Normalized Irrigation (mm/day)')
+            ax2.set_xticks(x)
+            ax2.set_xticklabels(month_names)
+            ax2.grid(True, linestyle='--', alpha=0.7, axis='y')
+            
+            # Add value labels on bars
+            for i, val in enumerate(monthly_catchment_norm.values, 1):
+                ax2.text(i, val + 0.1, f'{val:.2f}', ha='center', va='bottom', fontsize=9)
+            
+            plt.tight_layout()
+            plt.savefig(plots_dir / 'irrigation_regime.png', dpi=300, bbox_inches='tight')
+            if self.debug:
+                plt.show()
+            plt.close()
+            
+            self.logger.info(f"✅ Regime plot saved: {plots_dir / 'irrigation_regime.png'}")
+            
+            # --- 3. OPTIONAL: INDIVIDUAL GLACIER HRU PLOT (if reasonable number) ---
+            if len(glacier_hru_ids) > 0 and len(glacier_hru_ids) <= 20:
+                fig, ax = plt.subplots(figsize=(14, 6))
+                
+                # Plot individual glacier HRU contributions (up to 10 for clarity)
+                for i, hru_id in enumerate(glacier_hru_ids[:10]):
+                    hru_idx = hru_id - 1  # Convert to 0-based indexing
+                    hru_area = glacier_areas[i] if i < len(glacier_areas) else 1.0
+                    ax.plot(time_values, values[:, hru_idx], 
+                           alpha=0.5, linewidth=0.8, 
+                           label=f'HRU {hru_id} ({hru_area:.2f} km²)')
+                
+                # Plot area-weighted mean
+                ax.plot(time_values, mean_irrigation_weighted, 'b-', linewidth=2, 
+                       label='Area-weighted mean', alpha=0.8)
+                
+                # Plot catchment-normalized
+                ax.plot(time_values, catchment_norm_irrigation, color='orange', linewidth=2,
+                       label='Catchment-normalized', alpha=0.8, linestyle='--')
+                
+                ax.set_title(f'{title} - Individual Glacier HRU Contributions\nGauge {self.gauge_id}', 
+                           fontsize=14)
+                ax.set_xlabel('Date')
+                ax.set_ylabel('Irrigation (mm/day)')
+                ax.legend(loc='upper right', fontsize=8, ncol=2)
+                ax.grid(True, linestyle='--', alpha=0.7)
+                
+                plt.tight_layout()
+                plt.savefig(plots_dir / 'irrigation_hru_contributions.png', dpi=300, bbox_inches='tight')
+                if self.debug:
+                    plt.show()
+                plt.close()
+                
+                self.logger.info(f"✅ HRU contributions plot saved: {plots_dir / 'irrigation_hru_contributions.png'}")
+            
+        except Exception as e:
+            self.logger.error(f"Error in irrigation plotting: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
 
@@ -2016,9 +2339,12 @@ class GloGEMProcessor:
         glogem_df = pd.read_csv(glogem_path)
         glogem_df['date'] = pd.to_datetime(glogem_df['date'])
         glogem_df['q'] = pd.to_numeric(glogem_df['q'], errors='coerce')
+        
+        # Get HRU areas
+        hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+        hru_gdf = gpd.read_file(hru_path)
+        
         if 'area' not in glogem_df.columns:
-            hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
-            hru_gdf = gpd.read_file(hru_path)
             glacier_areas = hru_gdf[['Glacier_Cl', 'Area_km2']].dropna()
             glacier_areas['id'] = glacier_areas['Glacier_Cl'].astype(str).str.split('.').str[-1]
             area_map = glacier_areas.set_index('id')['Area_km2'].to_dict()
@@ -2061,63 +2387,47 @@ class GloGEMProcessor:
         # --- Merge glacier runoff and observed streamflow ---
         merged = pd.merge(daily, obs_series.rename('observed_streamflow'), left_on='date', right_index=True, how='inner')
 
-        # --- Load HRU shapefile and glacier HRUs ---
-        hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
-        hru_gdf = gpd.read_file(hru_path)
+        # --- Load HRU shapefile and get glacier info ---
+        hru_gdf = hru_gdf.sort_values(by='HRU_ID').reset_index(drop=True)
         glacier_mask = hru_gdf['Glacier_Cl'].notna()
-        glacier_hrus = hru_gdf[glacier_mask]
-        glacier_hru_areas = glacier_hrus['Area_km2'].values if 'Area_km2' in glacier_hrus.columns else glacier_hrus['area'].values
-        glacier_area_km2 = np.sum(glacier_hru_areas)
-        catchment_area_km2 = hru_gdf['Area_km2'].sum() if 'Area_km2' in hru_gdf.columns else hru_gdf['area'].sum()
+        glacier_hru_indices = hru_gdf[glacier_mask].index.tolist()
+        
+        area_col = 'Area_km2' if 'Area_km2' in hru_gdf.columns else 'area'
+        glacier_areas = hru_gdf.loc[glacier_mask, area_col].values
+        glacier_area_km2 = np.sum(glacier_areas)
+        catchment_area_km2 = hru_gdf[area_col].sum()
+        glacier_fraction = glacier_area_km2 / catchment_area_km2
 
-        # --- Load precipitation NetCDF ---
-        nc_path = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs', 'era5_land_precip.nc')
+        # ✅ FIX: Load the COUPLED precipitation NetCDF (which has GloGEM data)
+        nc_path = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs', 'era5_land_precip_coupled.nc')
+        
+        if not nc_path.exists():
+            self.logger.warning(f"Coupled precipitation NetCDF not found at {nc_path}")
+            self.logger.warning("Falling back to uncoupled precipitation")
+            nc_path = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs', 'era5_land_precip.nc')
+        
         ds = xr.open_dataset(nc_path)
-        var_names = list(ds.data_vars)
-        prec_var = var_names[0]
-        prec_data = ds[prec_var]  # shape: (time, lat, lon)
-
-        # --- Map HRU polygons to grid cells ---
-        # Get grid cell centers as GeoDataFrame
-        lats = ds['latitude'].values
-        lons = ds['longitude'].values
-        grid_points = gpd.GeoDataFrame(
-            {'lat': lats.repeat(len(lons)), 'lon': np.tile(lons, len(lats))},
-            geometry=gpd.points_from_xy(np.tile(lons, len(lats)), lats.repeat(len(lons))),
-            crs=hru_gdf.crs
-        )
-
-        # Spatial join: which grid cells fall inside glacier HRUs
-        glacier_cells = []
-        for idx, glacier_hru in glacier_hrus.iterrows():
-            mask = grid_points.within(glacier_hru.geometry)
-            glacier_cells.extend(grid_points[mask].index.tolist())
-        glacier_cells = list(set(glacier_cells))
-
-        # If no glacier cells found, fallback to nearest grid points to glacier HRU centroids
-        if len(glacier_cells) == 0:
-            glacier_cells = []
-            for idx, glacier_hru in glacier_hrus.iterrows():
-                centroid = glacier_hru.geometry.centroid
-                distances = grid_points.geometry.distance(centroid)
-                glacier_cells.append(distances.idxmin())
-            glacier_cells = list(set(glacier_cells))
-
-        # --- Extract glacier HRU precipitation time series ---
-        # Get indices for grid cells
-        n_lat = len(lats)
-        n_lon = len(lons)
-        cell_indices = [(i // n_lon, i % n_lon) for i in glacier_cells]
-        # Area-weighted mean precipitation for glacier HRUs
-        glacier_precip_ts = []
+        prec_data = ds['data']  # shape: (time, HRUs, 1)
+        
+        # ✅ FIX: Calculate area-weighted mean (same as irrigation regime plot)
+        glacier_precip_weighted = np.zeros(prec_data.shape[0])
+        
         for t in range(prec_data.shape[0]):
-            vals = [prec_data[t, lat_idx, lon_idx] for lat_idx, lon_idx in cell_indices]
-            glacier_precip_ts.append(np.nanmean(vals))
-        glacier_precip_series = pd.Series(glacier_precip_ts, index=ds['time'].values)
-        glacier_precip_series.name = 'glacier_precipitation'
-
-        # --- Normalize glacier precipitation to catchment area ---
-        glacier_precip_series_catchment_norm = glacier_precip_series * (glacier_area_km2 / catchment_area_km2)
+            # Extract values for glacier HRUs
+            glacier_values = prec_data[t, glacier_hru_indices, 0].values
+            # Calculate area-weighted mean
+            weighted_sum = np.sum(glacier_values * glacier_areas)
+            glacier_precip_weighted[t] = weighted_sum / glacier_area_km2 if glacier_area_km2 > 0 else 0
+        
+        # Create pandas series
+        glacier_precip_series = pd.Series(
+            glacier_precip_weighted,
+            index=pd.to_datetime(ds['time'].values),
+            name='glacier_precipitation'
+        )
+        
+        # ✅ Normalize to catchment (same as irrigation regime plot)
+        glacier_precip_series_catchment_norm = glacier_precip_series * glacier_fraction
         glacier_precip_series_catchment_norm.name = 'glacier_precipitation_catchment_norm'
 
         # --- Convert discharge/runoff from m³/s to mm/day over catchment ---
@@ -2129,7 +2439,6 @@ class GloGEMProcessor:
 
         # --- Merge all for plotting ---
         plot_df = merged.copy()
-        plot_df = plot_df.merge(glacier_precip_series, left_on='date', right_index=True, how='left')
         plot_df = plot_df.merge(glacier_precip_series_catchment_norm, left_on='date', right_index=True, how='left')
 
         plots_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'plots_results')
@@ -2137,12 +2446,15 @@ class GloGEMProcessor:
 
         # --- Plot in mm/day ---
         plt.figure(figsize=(14, 6))
-        plt.plot(plot_df['date'], plot_df['glacier_runoff_mm'], label='Glacier Runoff (GloGEM, mm/day)', color='green')
+        plt.plot(plot_df['date'], plot_df['glacier_runoff_mm'], label='Glacier Runoff (GloGEM CSV, mm/day)', color='green', alpha=0.7)
         plt.plot(plot_df['date'], plot_df['observed_streamflow_mm'], label='Observed Streamflow (mm/day)', color='black')
-        plt.plot(plot_df['date'], plot_df['glacier_precipitation_catchment_norm'], label='Glacier Precipitation (Catchment-normalized, mm/day)', color='dodgerblue', linestyle='--', alpha=0.7)
-        plt.title(f'Glacier Runoff, Glacier HRU Precipitation, and Observed Streamflow (Gauge {self.gauge_id})')
+        plt.plot(plot_df['date'], plot_df['glacier_precipitation_catchment_norm'], 
+                label='Glacier Melt from Coupled Precip NC (Catchment-normalized, mm/day)', 
+                color='red', linestyle='--', linewidth=2, alpha=0.8)
+        
+        plt.title(f'Glacier Runoff (CSV vs Coupled Precip NC) and Observed Streamflow\nGauge {self.gauge_id}')
         plt.xlabel('Date')
-        plt.ylabel('Discharge / Precipitation (mm/day)')
+        plt.ylabel('Discharge / Glacier Melt (mm/day)')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -2151,32 +2463,39 @@ class GloGEMProcessor:
             plt.show()
         plt.close()
 
-        # --- Monthly regime plot (mean by month) ---
+        # --- Monthly regime plot ---
         regime_df = plot_df.copy()
         regime_df['month'] = regime_df['date'].dt.month
         monthly_obs = regime_df.groupby('month')['observed_streamflow_mm'].mean()
         monthly_glacier_precip = regime_df.groupby('month')['glacier_precipitation_catchment_norm'].mean()
+        
         month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        
         plt.figure(figsize=(10, 5))
         plt.plot(range(1, 13), monthly_obs.values, label='Observed Streamflow (mm/day)', color='black', marker='o')
-        plt.plot(range(1, 13), monthly_glacier_precip.values, label='Glacier Precipitation (Catchment-normalized, mm/day)', color='dodgerblue', marker='o', linestyle='--')
+        plt.plot(range(1, 13), monthly_glacier_precip.values, 
+                label='Glacier Melt (Catchment-normalized, mm/day)', 
+                color='red', marker='o', linestyle='--', linewidth=2)
+        
         plt.xticks(range(1, 13), month_names)
-        plt.title(f'Monthly Regime: Observed Streamflow & Glacier Precipitation\nGauge {self.gauge_id}')
+        plt.title(f'Monthly Regime: Observed Streamflow vs Glacier Melt\nGauge {self.gauge_id}')
         plt.xlabel('Month')
         plt.ylabel('Mean (mm/day)')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(plots_dir / 'monthly_regime_obs_vs_glacier_precip.png', dpi=300)
+        plt.savefig(plots_dir / 'monthly_regime_obs_vs_glacier_melt.png', dpi=300)
         if self.debug:
             plt.show()
         plt.close()
 
+        self.logger.info(f"✅ Glacier runoff vs observed plots saved to {plots_dir}")
+
 
     def prepare_coupled_forcing(self) -> Dict[str, Any]:
         """
-        Prepare all coupled forcing data (precipitation and temperature)
+        Prepare all coupled forcing data (precipitation, temperature, and irrigation)
         
         Returns
         -------
@@ -2194,7 +2513,7 @@ class GloGEMProcessor:
         # First ensure we have the GloGEM time series
         if not Path(self.glogem_path).exists():
             self.logger.info("Processing GloGEM time series first")
-            self.process_glogem_data_optimized(plot=False)  # Set plot=False to avoid plotting during coupling
+            self.process_glogem_data_optimized(plot=False)
 
         # Validate glacier IDs
         validation_results = self.validate_glacier_ids()
@@ -2206,6 +2525,10 @@ class GloGEMProcessor:
         # Prepare temperature data
         self.logger.info("Preparing temperature data")
         temp_data = self.prepare_temperature_coupled()
+        
+        # Prepare irrigation data (NEW)
+        self.logger.info("Preparing irrigation data (GloGEM melt)")
+        irrigation_data = self.prepare_irrigation_coupled()
         
         # Create grid weights file
         self.logger.info("Creating grid weights file")
@@ -2221,5 +2544,6 @@ class GloGEMProcessor:
         
         return {
             'precipitation': precip_data,
-            'temperature': temp_data
+            'temperature': temp_data,
+            'irrigation': irrigation_data  # NEW
         }

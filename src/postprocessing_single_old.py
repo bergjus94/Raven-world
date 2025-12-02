@@ -291,175 +291,88 @@ def plot_hydrograph_timeseries(config, plot_dirs, validation_start=None, validat
 
 def load_swe_data(config):
     """
-    Load simulated SWE data with elevation band areas calculated from HRU shapefile.
-    Modified to work without observed SWE data and without elevation_band_areas.csv.
+    Load SWE data files with improved efficiency.
+    Also loads elevation band areas for weighted metrics.
+    Makes observed data optional - returns None if not available.
     """
     config_dir = Path(config['main_dir']) / config['config_dir']
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
     sim_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
+    obs_file = config_dir / f"catchment_{gauge_id}" / model_type / "data_obs" / "swe_by_elevation_band.csv"
+    area_file = config_dir / f"catchment_{gauge_id}" / model_type / "data_obs" / "elevation_band_areas.csv"
     
     print(f"Loading SWE data:")
     print(f"  - Simulated data: {sim_file}")
+    print(f"  - Observed data: {obs_file}")
+    print(f"  - Area data: {area_file}")
     
-    # Check if simulation file exists
+    # Check if simulated file exists (required)
     if not sim_file.exists():
-        print(f"ERROR: Simulated SWE file not found: {sim_file}")
-        return None, None
+        print(f"ERROR: Required simulated SWE file missing: {sim_file}")
+        return None, None, None
     
-    # Load simulated data with special header handling
     try:
-        # Read the file to understand its structure
+        # Load simulated data (required)
         with open(sim_file, 'r') as f:
-            first_line = f.readline().strip()
-            second_line = f.readline().strip()
+            header_line = f.readline().strip()
+            units_line = f.readline().strip()
         
-        print(f"  - First line starts with: {first_line.split()[0]}")
-        print(f"  - Second line starts with: {second_line.split()[0]}")
+        sim_data = pd.read_csv(sim_file, skiprows=[1], header=0)
         
-        # The file has two header rows:
-        # Row 1: HRUGroup: followed by elevation band names
-        # Row 2: time, day, mean, mean, mean... (units row)
+        if sim_data.columns[0] == '':
+            sim_data = sim_data.rename(columns={sim_data.columns[0]: 'row_id'})
         
-        # Read with skiprows to skip the units row (row 1, 0-indexed)
-        sim_data = pd.read_csv(sim_file, skiprows=[1])
+        print(f"  ✅ Successfully loaded simulated SWE data ({len(sim_data)} records)")
         
-        print(f"  - Loaded data shape: {sim_data.shape}")
-        print(f"  - Columns after loading: {sim_data.columns.tolist()[:10]}...")
+        # Load observed data (optional)
+        obs_data = None
+        if obs_file.exists():
+            try:
+                obs_data = pd.read_csv(obs_file)
+                obs_data['time'] = pd.to_datetime(obs_data['time'])
+                
+                # Ensure sim_data has proper date alignment with obs_data
+                min_length = min(len(sim_data), len(obs_data))
+                sim_data['date'] = obs_data['time'].iloc[:min_length].values
+                
+                print(f"  ✅ Successfully loaded observed SWE data ({len(obs_data)} records)")
+            except Exception as e:
+                print(f"  ⚠️  Warning: Could not load observed SWE data: {e}")
+                obs_data = None
+                # Create date column from row index for sim_data
+                sim_data['date'] = pd.date_range(start='2000-01-01', periods=len(sim_data), freq='D')
+        else:
+            print(f"  ℹ️  Observed SWE file not found (optional): {obs_file}")
+            obs_data = None
+            # Create date column from row index for sim_data
+            sim_data['date'] = pd.date_range(start='2000-01-01', periods=len(sim_data), freq='D')
         
-        # The date column is the first column (either 'time' or unnamed)
-        date_col = None
+        # Load area data (optional)
+        area_data = None
+        if area_file.exists():
+            try:
+                area_data = pd.read_csv(area_file)
+                print(f"  ✅ Successfully loaded elevation band areas")
+            except Exception as e:
+                print(f"  ⚠️  Warning: Could not load elevation band areas: {e}")
+        else:
+            print(f"  ℹ️  Elevation band area file not found (optional): {area_file}")
         
-        # Check first few columns for date data
-        for col in sim_data.columns[:3]:  # Check first 3 columns
-            if col.lower() == 'time':
-                date_col = col
-                break
-            # Check if the column name is empty/unnamed but contains dates
-            elif 'unnamed' in str(col).lower() or col == '':
-                # Try to parse first value to see if it's a date
-                try:
-                    test_val = sim_data[col].iloc[0]
-                    pd.to_datetime(test_val)
-                    date_col = col
-                    print(f"  - Found date data in column: '{col}'")
-                    break
-                except:
-                    continue
-        
-        if date_col is None:
-            print(f"ERROR: No date column found in SWE file")
-            print(f"  Available columns: {sim_data.columns.tolist()}")
-            return None, None
-        
-        # Convert date column to datetime
-        sim_data['date'] = pd.to_datetime(sim_data[date_col])
-        
-        # Remove the original date column if it had a different name
-        if date_col != 'date':
-            sim_data = sim_data.drop(columns=[date_col])
-        
-        # Also drop 'day' column if it exists (just row numbers)
-        if 'day' in sim_data.columns:
-            sim_data = sim_data.drop(columns=['day'])
-        
-        # Drop 'HRUGroup:' column if it exists
-        if 'HRUGroup:' in sim_data.columns:
-            sim_data = sim_data.drop(columns=['HRUGroup:'])
-        
-        # Drop any remaining unnamed columns that don't contain useful data
-        unnamed_cols = [col for col in sim_data.columns if 'unnamed' in str(col).lower() and col != 'date']
-        if unnamed_cols:
-            sim_data = sim_data.drop(columns=unnamed_cols)
-        
-        print(f"  - Successfully loaded simulated SWE data")
-        print(f"  - Date range: {sim_data['date'].min()} to {sim_data['date'].max()}")
-        print(f"  - Final columns: {sim_data.columns.tolist()[:10]}...")
+        return sim_data, obs_data, area_data
         
     except Exception as e:
-        print(f"Error loading SWE data: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None
-    
-    # Calculate elevation band areas from HRU shapefile
-    try:
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-        hru_shapefile = topo_dir / "HRU.shp"
-        
-        if not hru_shapefile.exists():
-            print(f"  - Warning: HRU shapefile not found: {hru_shapefile}")
-            print(f"  - Continuing without area-weighting")
-            return sim_data, None
-        
-        # Load HRU shapefile
-        hru_gdf = gpd.read_file(hru_shapefile)
-        print(f"  - Loaded HRU shapefile with {len(hru_gdf)} HRUs")
-        
-        # Check if required columns exist
-        if 'Elevation' not in hru_gdf.columns or 'Area_km2' not in hru_gdf.columns:
-            print(f"  - Warning: Missing required columns (Elevation, Area_km2)")
-            print(f"  - Available columns: {hru_gdf.columns.tolist()}")
-            return sim_data, None
-        
-        # Get elevation band columns from SWE data (exclude 'date', 'AllHRUs')
-        sim_elev_pattern = re.compile(r'(\d+)-(\d+)m')
-        sim_elev_cols = [col for col in sim_data.columns if sim_elev_pattern.search(col)]
-        
-        if len(sim_elev_cols) == 0:
-            print(f"  - Warning: No elevation band columns found in SWE data")
-            return sim_data, None
-        
-        print(f"  - Found {len(sim_elev_cols)} elevation bands in SWE data")
-        
-        # Create area mapping by matching HRUs to elevation bands
-        area_data = {}
-        
-        for band in sim_elev_cols:
-            # Parse elevation range from band name (e.g., "1000-1100m")
-            match = sim_elev_pattern.search(band)
-            if match:
-                lower_elev = int(match.group(1))
-                upper_elev = int(match.group(2))
-                
-                # Find HRUs within this elevation band
-                band_hrus = hru_gdf[
-                    (hru_gdf['Elevation'] >= lower_elev) & 
-                    (hru_gdf['Elevation'] < upper_elev)
-                ]
-                
-                # Sum area of HRUs in this band
-                band_area = band_hrus['Area_km2'].sum()
-                area_data[band] = band_area
-                
-                if band_area > 0:
-                    print(f"    {band}: {band_area:.2f} km² ({len(band_hrus)} HRUs)")
-        
-        # Convert to DataFrame format for compatibility
-        area_df = pd.DataFrame({
-            'Unnamed: 0': list(area_data.keys()),
-            'area_km2': list(area_data.values())
-        })
-        
-        print(f"  - Successfully calculated elevation band areas from HRU shapefile")
-        print(f"  - Total area: {sum(area_data.values()):.2f} km²")
-        
-        return sim_data, area_df
-        
-    except Exception as e:
-        print(f"  - Warning: Could not calculate elevation band areas: {e}")
-        import traceback
-        traceback.print_exc()
-        return sim_data, None
+        print(f"ERROR: Failed to load SWE data: {e}")
+        return None, None, None
     
 
 #--------------------------------------------------------------------------------
 
-def process_swe_data(sim_data, area_data=None):
+def process_swe_data(sim_data, obs_data, area_data=None):
     """
-    Process simulated SWE data for single catchment analysis.
-    Modified to work without observed data.
+    Process and align simulated and observed SWE data for single catchment analysis.
+    Now handles cases where obs_data is None.
     """
     if sim_data is None:
         return None
@@ -469,6 +382,26 @@ def process_swe_data(sim_data, area_data=None):
     sim_elev_cols = [col for col in sim_data.columns if sim_elev_pattern.search(col)]
     
     print(f"Found {len(sim_elev_cols)} simulation elevation bands")
+    
+    # Process observed data if available
+    obs_elev_cols = []
+    band_mapping = {}
+    
+    if obs_data is not None:
+        obs_elev_cols = [col for col in obs_data.columns if sim_elev_pattern.search(col)]
+        print(f"Found {len(obs_elev_cols)} observation elevation bands")
+        
+        # Create mapping between sim and obs bands
+        band_mapping = {band: band for band in sim_elev_cols if band in obs_elev_cols}
+        print(f"Found {len(band_mapping)} matching elevation bands")
+        
+        # Convert observed data to numeric
+        for col in obs_elev_cols:
+            obs_data[col] = pd.to_numeric(obs_data[col], errors='coerce')
+    else:
+        print("No observed data available - processing simulated data only")
+        # For simulated-only analysis, we can still use the elevation bands
+        band_mapping = {band: band for band in sim_elev_cols}
     
     # Create area mapping if available
     area_mapping = {}
@@ -480,7 +413,7 @@ def process_swe_data(sim_data, area_data=None):
             area_dict = dict(zip(area_data['Unnamed: 0'].astype(str), area_data['area_km2']))
             
             matched_bands = 0
-            for band in sim_elev_cols:
+            for band in sim_elev_cols:  # Use sim_elev_cols instead of band_mapping
                 if band in area_dict:
                     area_mapping[band] = area_dict[band]
                     matched_bands += 1
@@ -489,14 +422,26 @@ def process_swe_data(sim_data, area_data=None):
                     print(f"  - Warning: No area data found for band {band}")
             
             print(f"  - Successfully matched {matched_bands}/{len(sim_elev_cols)} bands with area data")
+        else:
+            # Try other column combinations
+            for band in sim_elev_cols:
+                if band in area_data.columns:
+                    area_mapping[band] = area_data[band].iloc[0]
+    else:
+        # Create equal-weight area mapping for all elevation bands
+        area_mapping = {band: 1.0 for band in sim_elev_cols}
+        print(f"  - Using equal weights for {len(sim_elev_cols)} elevation bands")
     
-    # Convert data to numeric
+    # Convert simulated data to numeric
     for col in sim_elev_cols:
         sim_data[col] = pd.to_numeric(sim_data[col], errors='coerce')
     
     return {
         'sim_data': sim_data,
+        'obs_data': obs_data,  # Can be None
         'sim_elev_cols': sim_elev_cols,
+        'obs_elev_cols': obs_elev_cols,
+        'band_mapping': band_mapping,
         'area_mapping': area_mapping
     }
 
@@ -641,303 +586,17 @@ def calculate_area_weighted_swe(df, area_mapping):
 
 def plot_area_weighted_swe_timeseries(config, plot_dirs, validation_start=None, validation_end=None):
     """
-    Plot area-weighted SWE time series for single catchment.
-    Modified to work without observed data - only plots simulated SWE.
+    Plot area-weighted SWE time series for single catchment with metrics displayed.
     """
-    # Load and process data
-    sim_data, area_data = load_swe_data(config)
-    if sim_data is None:
-        print("Failed to load SWE data")
-        return None
-    
-    processed = process_swe_data(sim_data, area_data)
-    if processed is None:
-        print("Failed to process SWE data")
-        return None
-    
-    # Use dates from config if not provided
-    if validation_start is None:
-        validation_start = config.get('cali_start_date', config.get('start_date', '2000-01-01'))
-    if validation_end is None:
-        validation_end = config.get('end_date', '2020-12-31')
-    
-    validation_start = pd.to_datetime(validation_start)
-    validation_end = pd.to_datetime(validation_end)
-    
-    # Get processed components
-    area_mapping = processed['area_mapping']
-    sim_data = processed['sim_data']
-    
-    # Filter for validation period
-    sim_data['date'] = pd.to_datetime(sim_data['date'])
-    
-    val_sim_mask = (sim_data['date'] >= validation_start) & (sim_data['date'] <= validation_end)
-    val_sim = sim_data[val_sim_mask].copy()
-    
-    if len(val_sim) == 0:
-        print("No simulation data found for validation period")
-        return None
-    
-    # Calculate area-weighted SWE
-    val_sim['area_weighted_swe'] = calculate_area_weighted_swe(val_sim, area_mapping)
-    
-    # Create plot
-    plt.figure(figsize=(14, 8))
-    
-    # Plot simulated area-weighted SWE
-    plt.plot(val_sim['date'], val_sim['area_weighted_swe'], 
-             'C0', linewidth=2, label='Simulated Area-Weighted SWE')
-    
-    # Format plot
-    plt.title(f'Area-Weighted SWE Time Series - Catchment {config["gauge_id"]}\n'
-              f'Period: {validation_start.date()} to {validation_end.date()}', 
-              fontsize=16)
-    plt.xlabel('Date', fontsize=14)
-    plt.ylabel('Snow Water Equivalent (mm)', fontsize=14)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend(loc='best', fontsize=12)
-    
-    # Format x-axis dates
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    plt.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=6))
-    plt.gcf().autofmt_xdate()
-    
-    # Add summary statistics text box
-    mean_swe = val_sim['area_weighted_swe'].mean()
-    max_swe = val_sim['area_weighted_swe'].max()
-    if area_mapping:
-        total_area = sum(area_mapping.values())
-        stats_text = f"Statistics:\nMean SWE: {mean_swe:.1f} mm\nMax SWE: {max_swe:.1f} mm\nTotal area: {total_area:.1f} km²"
-    else:
-        stats_text = f"Statistics:\nMean SWE: {mean_swe:.1f} mm\nMax SWE: {max_swe:.1f} mm"
-    
-    plt.figtext(0.02, 0.02, stats_text, fontsize=10, 
-               bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-    
-    plt.tight_layout()
-    
-    # Save plot
-    save_path = plot_dirs['swe'] / f'area_weighted_swe_timeseries_{config["gauge_id"]}.png'
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Saved area-weighted SWE plot to: {save_path}")
-    plt.show()
-    
-    # Print summary
-    print(f"\nSWE Analysis Results for Catchment {config['gauge_id']}:")
-    print(f"  Mean SWE: {mean_swe:.2f} mm")
-    print(f"  Max SWE: {max_swe:.2f} mm")
-    if area_mapping:
-        print(f"  Total catchment area: {sum(area_mapping.values()):.2f} km²")
-    
-    return val_sim
-
-#--------------------------------------------------------------------------------
-
-def plot_swe_time_series_by_elevation(config, plot_dirs, water_year=None, validation_start=None, validation_end=None):
-    """
-    Plot time series of simulated SWE for each elevation band.
-    Simplified version that just plots the data without area weighting.
-    """
-    
-    config_dir = Path(config['main_dir']) / config['config_dir']
-    gauge_id = config['gauge_id']
-    model_type = config['model_type']
-    
-    # Use dates from config if not provided
-    if validation_start is None:
-        validation_start = config.get('cali_end_date', config.get('start_date', '2000-01-01'))
-    if validation_end is None:
-        validation_end = config.get('end_date', '2020-12-31')
-    
-    print(f"Loading SWE data by elevation bands:")
-    print(f"  - Period: {validation_start} to {validation_end}")
-    
-    # Load SWE file
-    sim_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
-    
-    if not sim_file.exists():
-        print(f"ERROR: SWE file not found: {sim_file}")
-        return None
-    
-    try:
-        # Read the file, skipping the units row (row index 1)
-        sim_data = pd.read_csv(sim_file, skiprows=[1])
-        
-        print(f"  - Loaded data shape: {sim_data.shape}")
-        print(f"  - Columns: {sim_data.columns.tolist()[:10]}...")
-        
-        # Find the time/date column (first column, which may be unnamed)
-        date_col = sim_data.columns[0]
-        print(f"  - Date column: '{date_col}'")
-        
-        # Parse dates - THIS WAS THE BUG!
-        # The column might contain actual date strings or row numbers
-        try:
-            # Try to parse as dates
-            sim_data['date'] = pd.to_datetime(sim_data[date_col])
-            
-            # Check if dates make sense (not all 1970)
-            if sim_data['date'].min().year == 1970:
-                print(f"  - Warning: Dates parsed as 1970, trying alternative method...")
-                # Try reading the raw file to get actual dates
-                with open(sim_file, 'r') as f:
-                    first_line = f.readline()  # Header with band names
-                    second_line = f.readline()  # Units line (skip)
-                    
-                # Re-read without skipping unit line to see actual dates
-                temp_df = pd.read_csv(sim_file)
-                if temp_df.columns[0].lower() in ['time', 'date']:
-                    sim_data['date'] = pd.to_datetime(temp_df.iloc[:, 0])
-                else:
-                    # If still doesn't work, create date range from config
-                    print(f"  - Creating date range from config dates...")
-                    start = pd.to_datetime(config.get('start_date', '2000-01-01'))
-                    sim_data['date'] = pd.date_range(start=start, periods=len(sim_data), freq='D')
-            
-            print(f"  - Date range: {sim_data['date'].min()} to {sim_data['date'].max()}")
-            
-        except Exception as e:
-            print(f"  - Error parsing dates: {e}")
-            print(f"  - Creating date range from config...")
-            start = pd.to_datetime(config.get('start_date', '2000-01-01'))
-            sim_data['date'] = pd.date_range(start=start, periods=len(sim_data), freq='D')
-        
-        # Get elevation band columns (exclude 'AllHRUs', 'date', 'day', etc.)
-        exclude_cols = ['date', 'day', 'time', 'AllHRUs', 'HRUGroup:', date_col]
-        if 'Unnamed' in str(date_col):
-            exclude_cols.append(date_col)
-        
-        elev_bands = [col for col in sim_data.columns if col not in exclude_cols and '-' in col and 'm' in col]
-        
-        if len(elev_bands) == 0:
-            print(f"ERROR: No elevation band columns found")
-            print(f"  Available columns: {sim_data.columns.tolist()}")
-            return None
-        
-        print(f"  - Found {len(elev_bands)} elevation bands: {elev_bands[:5]}...")
-        
-        # Filter for time period
-        start_date = pd.to_datetime(validation_start)
-        end_date = pd.to_datetime(validation_end)
-        
-        sim_mask = (sim_data['date'] >= start_date) & (sim_data['date'] <= end_date)
-        sim_filtered = sim_data[sim_mask].copy()
-        
-        if len(sim_filtered) == 0:
-            print(f"ERROR: No data found for period {start_date} to {end_date}")
-            print(f"  Data date range: {sim_data['date'].min()} to {sim_data['date'].max()}")
-            return None
-        
-        print(f"  - Filtered to {len(sim_filtered)} records")
-        
-        # Sort elevation bands by altitude
-        elev_bands_sorted = sorted(elev_bands, key=lambda x: int(x.split('-')[0]))
-        
-        # Create subplots - one row per elevation band
-        n_bands = len(elev_bands_sorted)
-        fig, axes = plt.subplots(n_bands, 1, figsize=(14, 3*n_bands), sharex=True)
-        
-        # Make axes iterable if there's only one
-        if n_bands == 1:
-            axes = [axes]
-        
-        # Plot each elevation band
-        for i, band in enumerate(elev_bands_sorted):
-            ax = axes[i]
-            
-            # Plot SWE data
-            swe_values = sim_filtered[band].values
-            
-            # Convert to mm if needed (if values are in meters)
-            if swe_values.mean() < 10 and swe_values.max() < 20:
-                swe_values = swe_values * 1000
-            
-            ax.plot(sim_filtered['date'], swe_values, 'C0', linewidth=1.5)
-            
-            # Calculate statistics
-            mean_val = swe_values.mean()
-            max_val = swe_values.max()
-            
-            # Add statistics text box
-            stats_text = f"Mean: {mean_val:.1f} mm\nMax: {max_val:.1f} mm"
-            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-                   verticalalignment='top', fontsize=9,
-                   bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-            
-            # Formatting
-            ax.set_title(f'Elevation Band: {band}', fontsize=12, fontweight='bold')
-            ax.set_ylabel('SWE (mm)', fontsize=11)
-            ax.grid(True, linestyle='--', alpha=0.7)
-            
-            # Format x-axis dates
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
-        
-        # Add overall title
-        title = f'SWE by Elevation Band - Catchment {gauge_id}\n'
-        title += f'Period: {start_date.date()} to {end_date.date()}'
-        fig.suptitle(title, fontsize=16, fontweight='bold')
-        
-        # Format x-axis for bottom plot
-        axes[-1].set_xlabel('Date', fontsize=12)
-        plt.setp(axes[-1].xaxis.get_majorticklabels(), rotation=45, ha='right')
-        
-        plt.tight_layout(rect=[0, 0, 1, 0.97])
-        plt.subplots_adjust(hspace=0.3)
-        
-        # Save figure
-        filename = f'swe_time_series_by_elevation_{gauge_id}.png'
-        save_path = plot_dirs['swe'] / filename
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved SWE elevation band plot to: {save_path}")
-        plt.show()
-        
-        # Print summary
-        print(f"\nSWE Elevation Band Analysis:")
-        print(f"  - Period: {start_date.date()} to {end_date.date()}")
-        print(f"  - Number of elevation bands: {len(elev_bands_sorted)}")
-        print(f"  - Elevation range: {elev_bands_sorted[0]} to {elev_bands_sorted[-1]}")
-        
-        return fig
-        
-    except Exception as e:
-        print(f"ERROR: Failed to process SWE data: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-#--------------------------------------------------------------------------------
-
-def analyze_peak_swe(config, plot_dirs, validation_start=None, validation_end=None):
-    """
-    Analyze peak SWE timing and magnitude for the catchment using area-weighted averages.
-    
-    Parameters:
-    -----------
-    config : dict
-        Configuration dictionary from namelist
-    plot_dirs : dict
-        Dictionary containing plot directory paths
-    validation_start : str, optional
-        Start date for validation period
-    validation_end : str, optional
-        End date for validation period
-        
-    Returns:
-    --------
-    dict
-        Dictionary containing peak SWE analysis results
-    """
-    
     # Load and process data
     sim_data, obs_data, area_data = load_swe_data(config)
     if sim_data is None or obs_data is None:
-        print("Failed to load SWE data for peak analysis")
+        print("Failed to load SWE data")
         return None
     
     processed = process_swe_data(sim_data, obs_data, area_data)
     if processed is None:
-        print("Failed to process SWE data for peak analysis")
+        print("Failed to process SWE data")
         return None
     
     # Use dates from config if not provided
@@ -948,11 +607,6 @@ def analyze_peak_swe(config, plot_dirs, validation_start=None, validation_end=No
     
     validation_start = pd.to_datetime(validation_start)
     validation_end = pd.to_datetime(validation_end)
-    
-    gauge_id = config['gauge_id']
-    
-    print(f"Analyzing peak SWE for catchment {gauge_id}:")
-    print(f"  - Period: {validation_start.date()} to {validation_end.date()}")
     
     # Get processed components
     band_mapping = processed['band_mapping']
@@ -974,247 +628,92 @@ def analyze_peak_swe(config, plot_dirs, validation_start=None, validation_end=No
         print("No simulation data found for validation period")
         return None
     
-    # Calculate area-weighted SWE for both datasets
+    # Calculate area-weighted SWE
     val_sim['area_weighted_swe'] = calculate_area_weighted_swe(val_sim, area_mapping)
     
     if len(val_obs) > 0:
         val_obs['area_weighted_swe'] = calculate_area_weighted_swe(val_obs, area_mapping)
     
-    # Analyze peak SWE by water year (October 1 - September 30)
-    def get_water_year(date):
-        if date.month >= 10:
-            return date.year + 1
-        else:
-            return date.year
+    # Calculate metrics
+    metrics = calculate_swe_metrics(
+        sim_data, obs_data,
+        processed['sim_elev_cols'], processed['obs_elev_cols'],
+        band_mapping, area_mapping
+    )
     
-    val_sim['water_year'] = val_sim['date'].apply(get_water_year)
-    if len(val_obs) > 0:
-        val_obs['water_year'] = val_obs['time'].apply(get_water_year)
+    # Create plot
+    plt.figure(figsize=(14, 8))
     
-    # Find peak SWE for each water year
-    peak_swe_results = {
-        'simulated': {},
-        'observed': {},
-        'summary': {}
-    }
+    # Plot simulated area-weighted SWE
+    plt.plot(val_sim['date'], val_sim['area_weighted_swe'], 
+             'C0', linewidth=2, label='Simulated Area-Weighted SWE')
     
-    # Analyze simulated peak SWE
-    water_years = sorted(val_sim['water_year'].unique())
+    # Plot observed area-weighted SWE if available
+    if len(val_obs) > 0 and 'area_weighted_swe' in val_obs.columns:
+        plt.plot(val_obs['time'], val_obs['area_weighted_swe'], 
+                 'k-', linewidth=2, label='Observed Area-Weighted SWE')
     
-    for wy in water_years:
-        wy_sim = val_sim[val_sim['water_year'] == wy].copy()
+    # Format plot
+    plt.title(f'Area-Weighted SWE Time Series - Catchment {config["gauge_id"]}\n'
+              f'Validation Period: {validation_start.date()} to {validation_end.date()}', 
+              fontsize=16)
+    plt.xlabel('Date', fontsize=14)
+    plt.ylabel('Snow Water Equivalent (mm)', fontsize=14)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend(loc='best', fontsize=12)
+    
+    # Format x-axis dates
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    plt.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+    plt.gcf().autofmt_xdate()
+    
+    # Add metrics text box with area-weighted metrics
+    if metrics['overall_rmse'] is not None:
+        metric_text = (
+            f"SWE Metrics:\n"
+            f"RMSE: {metrics['overall_rmse']:.1f} mm\n"
+            f"Bias: {metrics['overall_bias']:.1f} mm\n"
+            f"Correlation: {metrics['overall_corr']:.3f}"
+        )
         
-        if len(wy_sim) > 0:
-            # Find peak SWE
-            peak_idx = wy_sim['area_weighted_swe'].idxmax()
-            peak_swe = wy_sim.loc[peak_idx]
-            
-            # Calculate some statistics for this water year
-            mean_swe = wy_sim['area_weighted_swe'].mean()
-            max_swe = wy_sim['area_weighted_swe'].max()
-            
-            # Find snow season length (days with SWE > 10 mm)
-            snow_days = len(wy_sim[wy_sim['area_weighted_swe'] > 10])
-            
-            peak_swe_results['simulated'][wy] = {
-                'peak_date': peak_swe['date'],
-                'peak_swe': peak_swe['area_weighted_swe'],
-                'peak_doy': peak_swe['date'].dayofyear,
-                'mean_swe': mean_swe,
-                'max_swe': max_swe,
-                'snow_days': snow_days,
-                'data_points': len(wy_sim)
-            }
-    
-    # Analyze observed peak SWE (if available)
-    if len(val_obs) > 0:
-        obs_water_years = sorted(val_obs['water_year'].unique())
+        if metrics['area_weighted_rmse'] is not None:
+            metric_text += f"\n\nArea-Weighted Metrics:"
+            metric_text += f"\nRMSE: {metrics['area_weighted_rmse']:.1f} mm"
+            metric_text += f"\nBias: {metrics['area_weighted_bias']:.1f} mm"
+            metric_text += f"\nCorrelation: {metrics['area_weighted_corr']:.3f}"
+            metric_text += f"\nTotal area: {metrics['total_area']:.1f} km²"
         
-        for wy in obs_water_years:
-            wy_obs = val_obs[val_obs['water_year'] == wy].copy()
-            
-            if len(wy_obs) > 0:
-                # Find peak SWE
-                peak_idx = wy_obs['area_weighted_swe'].idxmax()
-                peak_swe = wy_obs.loc[peak_idx]
-                
-                # Calculate statistics
-                mean_swe = wy_obs['area_weighted_swe'].mean()
-                max_swe = wy_obs['area_weighted_swe'].max()
-                snow_days = len(wy_obs[wy_obs['area_weighted_swe'] > 10])
-                
-                peak_swe_results['observed'][wy] = {
-                    'peak_date': peak_swe['time'],
-                    'peak_swe': peak_swe['area_weighted_swe'],
-                    'peak_doy': peak_swe['time'].dayofyear,
-                    'mean_swe': mean_swe,
-                    'max_swe': max_swe,
-                    'snow_days': snow_days,
-                    'data_points': len(wy_obs)
-                }
-    
-    # Calculate summary statistics
-    if peak_swe_results['simulated']:
-        sim_peak_dates = [result['peak_doy'] for result in peak_swe_results['simulated'].values()]
-        sim_peak_swe = [result['peak_swe'] for result in peak_swe_results['simulated'].values()]
-        
-        peak_swe_results['summary']['simulated'] = {
-            'mean_peak_doy': np.mean(sim_peak_dates),
-            'std_peak_doy': np.std(sim_peak_dates),
-            'median_peak_doy': np.median(sim_peak_dates),
-            'mean_peak_swe': np.mean(sim_peak_swe),
-            'std_peak_swe': np.std(sim_peak_swe),
-            'median_peak_swe': np.median(sim_peak_swe),
-            'n_years': len(sim_peak_dates)
-        }
-    
-    if peak_swe_results['observed']:
-        obs_peak_dates = [result['peak_doy'] for result in peak_swe_results['observed'].values()]
-        obs_peak_swe = [result['peak_swe'] for result in peak_swe_results['observed'].values()]
-        
-        peak_swe_results['summary']['observed'] = {
-            'mean_peak_doy': np.mean(obs_peak_dates),
-            'std_peak_doy': np.std(obs_peak_dates),
-            'median_peak_doy': np.median(obs_peak_dates),
-            'mean_peak_swe': np.mean(obs_peak_swe),
-            'std_peak_swe': np.std(obs_peak_swe),
-            'median_peak_swe': np.median(obs_peak_swe),
-            'n_years': len(obs_peak_dates)
-        }
-    
-    # Create visualization
-    plt.figure(figsize=(16, 10))
-    
-    # Plot 1: Peak SWE timing comparison
-    plt.subplot(2, 2, 1)
-    
-    if peak_swe_results['simulated']:
-        sim_years = list(peak_swe_results['simulated'].keys())
-        sim_doys = [peak_swe_results['simulated'][wy]['peak_doy'] for wy in sim_years]
-        plt.scatter(sim_years, sim_doys, color='C0', s=60, alpha=0.7, label='Simulated', edgecolors='black')
-    
-    if peak_swe_results['observed']:
-        obs_years = list(peak_swe_results['observed'].keys())
-        obs_doys = [peak_swe_results['observed'][wy]['peak_doy'] for wy in obs_years]
-        plt.scatter(obs_years, obs_doys, color='black', s=60, alpha=0.7, label='Observed', edgecolors='white')
-    
-    plt.xlabel('Water Year', fontsize=12)
-    plt.ylabel('Peak SWE Day of Year', fontsize=12)
-    plt.title('Peak SWE Timing by Water Year', fontsize=14, fontweight='bold')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Add month labels on y-axis
-    month_doys = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
-    month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    plt.yticks(month_doys, month_labels)
-    
-    # Plot 2: Peak SWE magnitude comparison
-    plt.subplot(2, 2, 2)
-    
-    if peak_swe_results['simulated']:
-        sim_magnitudes = [peak_swe_results['simulated'][wy]['peak_swe'] for wy in sim_years]
-        plt.scatter(sim_years, sim_magnitudes, color='C0', s=60, alpha=0.7, label='Simulated', edgecolors='black')
-    
-    if peak_swe_results['observed']:
-        obs_magnitudes = [peak_swe_results['observed'][wy]['peak_swe'] for wy in obs_years]
-        plt.scatter(obs_years, obs_magnitudes, color='black', s=60, alpha=0.7, label='Observed', edgecolors='white')
-    
-    plt.xlabel('Water Year', fontsize=12)
-    plt.ylabel('Peak SWE (mm)', fontsize=12)
-    plt.title('Peak SWE Magnitude by Water Year', fontsize=14, fontweight='bold')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Plot 3: Peak timing distribution
-    plt.subplot(2, 2, 3)
-    
-    if peak_swe_results['simulated']:
-        plt.hist(sim_doys, bins=15, alpha=0.7, color='C0', edgecolor='black', label='Simulated')
-    
-    if peak_swe_results['observed']:
-        plt.hist(obs_doys, bins=15, alpha=0.7, color='black', edgecolor='white', label='Observed')
-    
-    plt.xlabel('Peak SWE Day of Year', fontsize=12)
-    plt.ylabel('Frequency', fontsize=12)
-    plt.title('Peak SWE Timing Distribution', fontsize=14, fontweight='bold')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Plot 4: Peak magnitude distribution
-    plt.subplot(2, 2, 4)
-    
-    if peak_swe_results['simulated']:
-        plt.hist(sim_magnitudes, bins=15, alpha=0.7, color='C0', edgecolor='black', label='Simulated')
-    
-    if peak_swe_results['observed']:
-        plt.hist(obs_magnitudes, bins=15, alpha=0.7, color='black', edgecolor='white', label='Observed')
-    
-    plt.xlabel('Peak SWE (mm)', fontsize=12)
-    plt.ylabel('Frequency', fontsize=12)
-    plt.title('Peak SWE Magnitude Distribution', fontsize=14, fontweight='bold')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.suptitle(f'Peak SWE Analysis - Catchment {gauge_id}\n'
-                f'Period: {validation_start.date()} to {validation_end.date()}', 
-                fontsize=16, fontweight='bold')
+        plt.figtext(0.02, 0.02, metric_text, fontsize=10, 
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
     
     plt.tight_layout()
     
     # Save plot
-    save_path = plot_dirs['swe'] / f'peak_swe_analysis_{gauge_id}.png'
+    save_path = plot_dirs['swe'] / f'area_weighted_swe_timeseries_{config["gauge_id"]}.png'
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Saved peak SWE analysis plot to: {save_path}")
+    print(f"Saved area-weighted SWE plot to: {save_path}")
     plt.show()
     
-    # Print summary statistics
-    print(f"\nPeak SWE Analysis Summary for Catchment {gauge_id}:")
-    print(f"  Period: {validation_start.date()} to {validation_end.date()}")
+    # Print summary with area-weighted metrics
+    if metrics['overall_rmse'] is not None:
+        print(f"\nSWE Analysis Results for Catchment {config['gauge_id']}:")
+        print(f"  Overall RMSE: {metrics['overall_rmse']:.2f} mm")
+        print(f"  Overall Bias: {metrics['overall_bias']:.2f} mm")
+        print(f"  Overall Correlation: {metrics['overall_corr']:.3f}")
+        if metrics['area_weighted_rmse'] is not None:
+            print(f"  Area-weighted RMSE: {metrics['area_weighted_rmse']:.2f} mm")
+            print(f"  Area-weighted Bias: {metrics['area_weighted_bias']:.2f} mm")
+            print(f"  Area-weighted Correlation: {metrics['area_weighted_corr']:.3f}")
+            print(f"  Total catchment area: {metrics['total_area']:.2f} km²")
     
-    if 'simulated' in peak_swe_results['summary']:
-        sim_summary = peak_swe_results['summary']['simulated']
-        print(f"\n  Simulated Peak SWE:")
-        print(f"    Number of water years: {sim_summary['n_years']}")
-        print(f"    Mean peak timing: DOY {sim_summary['mean_peak_doy']:.1f} ± {sim_summary['std_peak_doy']:.1f}")
-        print(f"    Median peak timing: DOY {sim_summary['median_peak_doy']:.1f}")
-        print(f"    Mean peak SWE: {sim_summary['mean_peak_swe']:.1f} ± {sim_summary['std_peak_swe']:.1f} mm")
-        print(f"    Median peak SWE: {sim_summary['median_peak_swe']:.1f} mm")
-    
-    if 'observed' in peak_swe_results['summary']:
-        obs_summary = peak_swe_results['summary']['observed']
-        print(f"\n  Observed Peak SWE:")
-        print(f"    Number of water years: {obs_summary['n_years']}")
-        print(f"    Mean peak timing: DOY {obs_summary['mean_peak_doy']:.1f} ± {obs_summary['std_peak_doy']:.1f}")
-        print(f"    Median peak timing: DOY {obs_summary['median_peak_doy']:.1f}")
-        print(f"    Mean peak SWE: {obs_summary['mean_peak_swe']:.1f} ± {obs_summary['std_peak_swe']:.1f} mm")
-        print(f"    Median peak SWE: {obs_summary['median_peak_swe']:.1f} mm")
-    
-    # Compare simulated vs observed if both available
-    if 'simulated' in peak_swe_results['summary'] and 'observed' in peak_swe_results['summary']:
-        sim_summary = peak_swe_results['summary']['simulated']
-        obs_summary = peak_swe_results['summary']['observed']
-        
-        timing_bias = sim_summary['mean_peak_doy'] - obs_summary['mean_peak_doy']
-        magnitude_bias = sim_summary['mean_peak_swe'] - obs_summary['mean_peak_swe']
-        magnitude_bias_pct = (magnitude_bias / obs_summary['mean_peak_swe']) * 100 if obs_summary['mean_peak_swe'] > 0 else 0
-        
-        print(f"\n  Simulated vs Observed Comparison:")
-        print(f"    Peak timing bias: {timing_bias:+.1f} days (sim - obs)")
-        print(f"    Peak magnitude bias: {magnitude_bias:+.1f} mm ({magnitude_bias_pct:+.1f}%)")
-    
-    return peak_swe_results
+    return val_sim
 
 #--------------------------------------------------------------------------------
 
-def plot_spatial_swe_distribution(config, plot_dirs, validation_start=None, validation_end=None, 
-                                                example_years=None, figsize=(20, 16)):
+def plot_swe_time_series_by_elevation(config, plot_dirs, water_year=None, validation_start=None, validation_end=None):
     """
-    Plot spatial SWE distribution comparing simulated and observed on:
-    1. Date of observed peak SWE
-    2. Date of simulated peak SWE
-    
-    Creates two side-by-side plots for each comparison date.
+    Plot time series of SWE for each elevation band comparing observed and simulated data
+    for a single catchment configuration.
     
     Parameters:
     -----------
@@ -1222,493 +721,177 @@ def plot_spatial_swe_distribution(config, plot_dirs, validation_start=None, vali
         Configuration dictionary from namelist
     plot_dirs : dict
         Dictionary containing plot directory paths
+    water_year : int, optional
+        Optional water year to filter (e.g. 2018 for 2018-2019 water year)
     validation_start : str, optional
         Start date for validation period
     validation_end : str, optional
         End date for validation period
-    example_years : list, optional
-        List of years to plot (default: first and last year of validation period)
-    figsize : tuple, optional
-        Figure size for the plots
-        
-    Returns:
-    --------
-    dict
-        Dictionary containing plot information and peak SWE data
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
-    gauge_id = config['gauge_id']
-    model_type = config['model_type']
-    
-    # Use dates from config if not provided
-    if validation_start is None:
-        validation_start = config.get('cali_end_date', '2010-01-01')
-    if validation_end is None:
-        validation_end = config.get('end_date', '2020-12-31')
-    
-    validation_start_dt = pd.to_datetime(validation_start)
-    validation_end_dt = pd.to_datetime(validation_end)
-    
-    print(f"Creating spatial SWE peak comparison plots for catchment {gauge_id}:")
-    print(f"  - Period: {validation_start} to {validation_end}")
-    print(f"  - Excluding glacier areas (Landuse_Cl 7 and 8)")
-    print(f"  - Excluding HRUs with SWE > 1000mm")
-    
-    # 1. Load HRU shapefile for spatial information
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-    hru_shapefile = topo_dir / "HRU.shp"
-    
-    if not hru_shapefile.exists():
-        print(f"ERROR: HRU shapefile not found: {hru_shapefile}")
+    # Load and process data
+    sim_data, obs_data, area_data = load_swe_data(config)
+    if sim_data is None or obs_data is None:
+        print("Failed to load SWE data")
         return None
     
-    try:
-        hru_gdf = gpd.read_file(hru_shapefile)
-        original_count = len(hru_gdf)
-        print(f"  - Loaded {original_count} HRUs from shapefile")
-        
-        # Filter out glacier HRUs (landuse classes 7 and 8)
-        if 'Landuse_Cl' in hru_gdf.columns:
-            hru_gdf = hru_gdf[~hru_gdf['Landuse_Cl'].isin([7, 8])].copy()
-            print(f"  - Filtered to {len(hru_gdf)} non-glacier HRUs")
-        else:
-            print(f"  - Warning: 'Landuse_Cl' column not found, cannot filter glacier areas")
-            
-    except Exception as e:
-        print(f"ERROR: Failed to load HRU shapefile: {e}")
+    processed = process_swe_data(sim_data, obs_data, area_data)
+    if processed is None:
+        print("Failed to process SWE data")
         return None
     
-    # 2. Load simulated SWE data
-    model_dir = config_dir / f"catchment_{gauge_id}" / model_type
-    sim_swe_file = model_dir / "output" / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRU.csv"
+    # Get processed components
+    sim_data = processed['sim_data']
+    obs_data = processed['obs_data']
+    sim_elev_cols = processed['sim_elev_cols']
+    obs_elev_cols = processed['obs_elev_cols']
+    band_mapping = processed['band_mapping']
     
-    if not sim_swe_file.exists():
-        print(f"ERROR: Simulated SWE file not found: {sim_swe_file}")
+    if not band_mapping:
+        print("No matching elevation bands found")
         return None
     
-    try:
-        # Handle header properly
-        with open(sim_swe_file, 'r') as f:
-            header_line = f.readline().strip()
-            units_line = f.readline().strip()
+    # Convert date columns to datetime
+    sim_data['date'] = pd.to_datetime(sim_data['date'])
+    obs_data['time'] = pd.to_datetime(obs_data['time'])
+    
+    # Filter data based on time period
+    if water_year is not None:
+        # Water year: October 1 to September 30
+        start_date = pd.to_datetime(f"{water_year}-10-01")
+        end_date = pd.to_datetime(f"{water_year+1}-09-30")
+        period_label = f"Water Year {water_year}-{water_year+1}"
+    else:
+        # Use validation period or config dates
+        if validation_start is None:
+            validation_start = config.get('cali_end_date', '2010-01-01')
+        if validation_end is None:
+            validation_end = config.get('end_date', '2020-12-31')
         
-        sim_swe_df = pd.read_csv(sim_swe_file, skiprows=[1], header=0)
-        
-        # Handle first column if unnamed
-        if sim_swe_df.columns[0] == '' or 'Unnamed' in sim_swe_df.columns[0]:
-            sim_swe_df = sim_swe_df.rename(columns={sim_swe_df.columns[0]: 'row_id'})
-        
-        # Handle date column
-        date_col = None
-        for possible_date_col in ['date', 'day', 'time']:
-            if possible_date_col in sim_swe_df.columns:
-                date_col = possible_date_col
-                break
-        
-        if date_col is None:
-            # Create date column from observed data
-            obs_swe_file = model_dir / "data_obs" / "swe_by_hru.csv"
-            if obs_swe_file.exists():
-                obs_swe_temp = pd.read_csv(obs_swe_file)
-                if 'time' in obs_swe_temp.columns:
-                    obs_dates = pd.to_datetime(obs_swe_temp['time'])
-                    min_length = min(len(sim_swe_df), len(obs_dates))
-                    sim_swe_df['date'] = obs_dates.iloc[:min_length].values
-                    date_col = 'date'
-        
-        # Convert date column to datetime
-        sim_swe_df[date_col] = pd.to_datetime(sim_swe_df[date_col])
-        if date_col != 'date':
-            sim_swe_df['date'] = sim_swe_df[date_col]
-        
-        # Filter for validation period
-        sim_mask = (sim_swe_df['date'] >= validation_start_dt) & (sim_swe_df['date'] <= validation_end_dt)
-        sim_swe_df = sim_swe_df[sim_mask].copy()
-        
-        if len(sim_swe_df) == 0:
-            print("ERROR: No simulated SWE data found for validation period")
-            return None
-        
-        print(f"  - Loaded simulated SWE data: {len(sim_swe_df)} records")
-        
-    except Exception as e:
-        print(f"ERROR: Failed to load simulated SWE data: {e}")
+        start_date = pd.to_datetime(validation_start)
+        end_date = pd.to_datetime(validation_end)
+        period_label = f"Validation Period ({start_date.date()} to {end_date.date()})"
+    
+    # Filter data
+    sim_mask = (sim_data['date'] >= start_date) & (sim_data['date'] <= end_date)
+    obs_mask = (obs_data['time'] >= start_date) & (obs_data['time'] <= end_date)
+    
+    sim_filtered = sim_data[sim_mask].copy()
+    obs_filtered = obs_data[obs_mask].copy()
+    
+    if len(sim_filtered) == 0 or len(obs_filtered) == 0:
+        print(f"No data found for the specified period: {start_date} to {end_date}")
         return None
     
-    # 3. Load observed SWE data
-    obs_swe_file = model_dir / "data_obs" / "swe_by_hru.csv"
+    # Sort elevation bands by altitude
+    elev_bands = sorted(band_mapping.keys(), key=lambda x: int(x.split('-')[0]) if '-' in x else 0)
     
-    if not obs_swe_file.exists():
-        print(f"ERROR: Observed SWE file not found: {obs_swe_file}")
-        return None
+    # Calculate number of subplots needed - use 1 column
+    n_bands = len(elev_bands)
+    n_cols = 1  # Single column layout
+    n_rows = n_bands
     
-    try:
-        obs_swe_df = pd.read_csv(obs_swe_file)
-        
-        # Handle date column
-        if 'time' in obs_swe_df.columns:
-            obs_swe_df['date'] = pd.to_datetime(obs_swe_df['time'])
-        elif 'date' in obs_swe_df.columns:
-            obs_swe_df['date'] = pd.to_datetime(obs_swe_df['date'])
-        else:
-            print("ERROR: No date column found in observed SWE file")
-            return None
-        
-        # Filter for validation period
-        obs_mask = (obs_swe_df['date'] >= validation_start_dt) & (obs_swe_df['date'] <= validation_end_dt)
-        obs_swe_df = obs_swe_df[obs_mask].copy()
-        
-        if len(obs_swe_df) == 0:
-            print("ERROR: No observed SWE data found for validation period")
-            return None
-        
-        print(f"  - Loaded observed SWE data: {len(obs_swe_df)} records")
-        
-    except Exception as e:
-        print(f"ERROR: Failed to load observed SWE data: {e}")
-        return None
+    # Create figure
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 3*n_rows), sharex=True)
     
-    # 4. Get HRU columns and create mapping
-    sim_hru_cols = [col for col in sim_swe_df.columns if col not in ['date', 'day', 'time', 'row_id', 'HRU:'] and col != '']
-    obs_hru_cols = [col for col in obs_swe_df.columns if col not in ['date', 'day', 'time'] and col != '']
+    # Make axes iterable if there's only one plot
+    if n_bands == 1:
+        axes = np.array([axes])
     
-    # Create mapping between different HRU naming conventions (only non-glacier HRUs)
-    hru_mapping = {}  # {sim_col: obs_col}
-    non_glacier_hru_ids = set(hru_gdf['HRU_ID'].astype(str))
-    
-    for sim_col in sim_hru_cols:
-        try:
-            if sim_col.isdigit():
-                sim_hru_id = int(sim_col)
-            else:
-                continue
+    # Plot each elevation band
+    for i, band in enumerate(elev_bands):
+        ax = axes[i]
+        
+        # Plot observed data
+        if band in obs_filtered.columns:
+            obs_values = obs_filtered[band].copy()
+            # Convert to mm if needed
+            if obs_values.mean() < 10 and obs_values.max() < 20:
+                obs_values *= 1000
             
-            if str(sim_hru_id) not in non_glacier_hru_ids:
-                continue
+            ax.plot(obs_filtered['time'], obs_values, 
+                    'k-', label='Observed', linewidth=2)
+        
+        # Plot simulated data
+        if band in sim_filtered.columns:
+            sim_values = sim_filtered[band].copy()
+            # Convert to mm if needed
+            if sim_values.mean() < 10 and sim_values.max() < 20:
+                sim_values *= 1000
             
-            for obs_col in obs_hru_cols:
-                if obs_col.startswith('HRU_'):
-                    obs_hru_id_str = obs_col.replace('HRU_', '')
-                    if obs_hru_id_str.isdigit():
-                        obs_hru_id = int(obs_hru_id_str)
-                        if sim_hru_id == obs_hru_id:
-                            hru_mapping[sim_col] = obs_col
-                            break
-        except:
-            continue
-    
-    if len(hru_mapping) == 0:
-        print("ERROR: No matching non-glacier HRU columns found")
-        return None
-    
-    print(f"  - Found {len(hru_mapping)} matching non-glacier HRU columns")
-    
-    # 5. Convert SWE units if needed (from m to mm)
-    for sim_col, obs_col in hru_mapping.items():
-        if sim_col in sim_swe_df.columns:
-            sim_vals = sim_swe_df[sim_col]
-            if sim_vals.mean() < 10 and sim_vals.max() < 20:
-                sim_swe_df[sim_col] = sim_vals * 1000
+            ax.plot(sim_filtered['date'], sim_values, 
+                    'C0', label='Simulated', linewidth=1.5)
         
-        if obs_col in obs_swe_df.columns:
-            obs_vals = obs_swe_df[obs_col]
-            if obs_vals.mean() < 10 and obs_vals.max() < 20:
-                obs_swe_df[obs_col] = obs_vals * 1000
-    
-    # 6. Determine example years
-    available_years = sorted(sim_swe_df['date'].dt.year.unique())
-    
-    if example_years is None:
-        if len(available_years) >= 2:
-            example_years = [available_years[0], available_years[-1]]
-        else:
-            example_years = available_years[:1]
-    
-    print(f"  - Example years: {example_years}")
-    
-    # 7. Find peak SWE dates for each year and create plots
-    plot_info = {}
-    
-    for year in example_years:
-        print(f"\n  Processing year {year}...")
-        
-        # Define water year period (Oct 1 to Sep 30)
-        wy_start = pd.to_datetime(f"{year-1}-10-01")
-        wy_end = pd.to_datetime(f"{year}-09-30")
-        
-        # Filter data for this water year
-        sim_wy_mask = (sim_swe_df['date'] >= wy_start) & (sim_swe_df['date'] <= wy_end)
-        obs_wy_mask = (obs_swe_df['date'] >= wy_start) & (obs_swe_df['date'] <= wy_end)
-        
-        sim_wy = sim_swe_df[sim_wy_mask].copy()
-        obs_wy = obs_swe_df[obs_wy_mask].copy()
-        
-        if len(sim_wy) == 0 or len(obs_wy) == 0:
-            print(f"    Warning: No data for water year {year}")
-            continue
-        
-        # Calculate area-weighted mean SWE for peak detection
-        hru_weights = {}
-        for sim_col, obs_col in hru_mapping.items():
-            try:
-                hru_id = int(sim_col) if sim_col.isdigit() else sim_col
-                hru_match = hru_gdf[hru_gdf['HRU_ID'] == hru_id]
-                if len(hru_match) > 0:
-                    hru_weights[sim_col] = hru_match['Area_km2'].iloc[0]
-                else:
-                    hru_weights[sim_col] = 1.0
-            except:
-                hru_weights[sim_col] = 1.0
-        
-        # Calculate weighted mean SWE for simulated data
-        sim_wy['weighted_swe'] = 0
-        total_weight = sum(hru_weights.values())
-        for sim_col in hru_mapping.keys():
-            if sim_col in sim_wy.columns:
-                weight = hru_weights[sim_col] / total_weight
-                sim_wy['weighted_swe'] += sim_wy[sim_col].fillna(0) * weight
-        
-        # Calculate weighted mean SWE for observed data
-        obs_wy['weighted_swe'] = 0
-        for sim_col, obs_col in hru_mapping.items():
-            if obs_col in obs_wy.columns:
-                weight = hru_weights[sim_col] / total_weight
-                obs_wy['weighted_swe'] += obs_wy[obs_col].fillna(0) * weight
-        
-        # Find peak SWE dates
-        sim_peak_idx = sim_wy['weighted_swe'].idxmax()
-        obs_peak_idx = obs_wy['weighted_swe'].idxmax()
-        
-        sim_peak_date = sim_wy.loc[sim_peak_idx, 'date']
-        obs_peak_date = obs_wy.loc[obs_peak_idx, 'date']
-        
-        sim_peak_swe = sim_wy.loc[sim_peak_idx, 'weighted_swe']
-        obs_peak_swe = obs_wy.loc[obs_peak_idx, 'weighted_swe']
-        
-        print(f"    Simulated peak: {sim_peak_date.date()} ({sim_peak_swe:.1f} mm)")
-        print(f"    Observed peak: {obs_peak_date.date()} ({obs_peak_swe:.1f} mm)")
-        
-        # Create two plots: one for each peak date
-        
-        # PLOT 1: SWE distribution on observed peak date
-        print(f"    Creating plot for observed peak date...")
-        
-        # Get SWE data for observed peak date
-        sim_obs_peak_data = sim_swe_df.loc[sim_swe_df['date'] == obs_peak_date]
-        obs_obs_peak_data = obs_swe_df.loc[obs_swe_df['date'] == obs_peak_date]
-        
-        if len(sim_obs_peak_data) > 0 and len(obs_obs_peak_data) > 0:
-            fig1, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+        # Calculate band-specific metrics if both obs and sim data exist
+        if band in obs_filtered.columns and band in sim_filtered.columns:
+            # Merge data for metrics calculation
+            merged = pd.merge(
+                sim_filtered[['date', band]].rename(columns={'date': 'time', band: 'sim'}),
+                obs_filtered[['time', band]].rename(columns={band: 'obs'}),
+                on='time', how='inner'
+            ).dropna()
             
-            # Prepare HRU data for observed peak date
-            hru_gdf_obs = hru_gdf.copy()
-            hru_gdf_obs['sim_swe'] = np.nan
-            hru_gdf_obs['obs_swe'] = np.nan
-            
-            # Add SWE data to geodataframe
-            for sim_col, obs_col in hru_mapping.items():
-                try:
-                    hru_id = int(sim_col) if sim_col.isdigit() else sim_col
-                    hru_mask = hru_gdf_obs['HRU_ID'] == hru_id
-                    
-                    if hru_mask.any():
-                        if len(sim_obs_peak_data) > 0:
-                            hru_gdf_obs.loc[hru_mask, 'sim_swe'] = sim_obs_peak_data[sim_col].iloc[0]
-                        if len(obs_obs_peak_data) > 0:
-                            hru_gdf_obs.loc[hru_mask, 'obs_swe'] = obs_obs_peak_data[obs_col].iloc[0]
-                except:
-                    continue
-            
-            # Filter out HRUs with extremely high SWE (>1000mm) or no data
-            plot_mask = ~(hru_gdf_obs['sim_swe'].isna() & hru_gdf_obs['obs_swe'].isna())
-            hru_gdf_obs = hru_gdf_obs[plot_mask].copy()
-            
-            high_swe_mask = (hru_gdf_obs['sim_swe'] <= 1000) | (hru_gdf_obs['sim_swe'].isna())
-            high_swe_mask &= (hru_gdf_obs['obs_swe'] <= 1000) | (hru_gdf_obs['obs_swe'].isna())
-            hru_gdf_obs = hru_gdf_obs[high_swe_mask].copy()
-            
-            if len(hru_gdf_obs) > 0:
-                # Determine color scale
-                valid_sim = hru_gdf_obs['sim_swe'].dropna()
-                valid_obs = hru_gdf_obs['obs_swe'].dropna()
+            if len(merged) > 0:
+                # Convert units if needed
+                if merged['sim'].mean() < 10:
+                    merged['sim'] *= 1000
+                if merged['obs'].mean() < 10:
+                    merged['obs'] *= 1000
                 
-                if len(valid_sim) > 0 and len(valid_obs) > 0:
-                    vmin = min(valid_sim.min(), valid_obs.min())
-                    vmax = max(valid_sim.max(), valid_obs.max())
-                    vmin = max(0, vmin)
-                    vmax = min(1000, vmax)
-                else:
-                    vmin, vmax = 0, 100
+                # Calculate metrics
+                rmse = np.sqrt(np.mean((merged['sim'] - merged['obs'])**2))
+                bias = np.mean(merged['sim'] - merged['obs'])
+                corr = np.corrcoef(merged['sim'], merged['obs'])[0, 1] if len(merged) > 2 else np.nan
                 
-                # Plot simulated SWE on observed peak date
-                hru_gdf_obs.plot(column='sim_swe', ax=ax1, cmap='Blues', 
-                               vmin=vmin, vmax=vmax, legend=False, 
-                               edgecolor='black', linewidth=0.5)
-                
-                ax1.set_title(f'Simulated SWE on Observed Peak Date\n'
-                             f'{obs_peak_date.strftime("%Y-%m-%d")} (Water Year {year})\n'
-                             f'Obs Peak SWE: {obs_peak_swe:.1f} mm', 
-                             fontsize=14, fontweight='bold')
-                ax1.set_xlabel('Longitude', fontsize=12)
-                ax1.set_ylabel('Latitude', fontsize=12)
-                ax1.grid(True, alpha=0.3)
-                
-                # Plot observed SWE on observed peak date
-                hru_gdf_obs.plot(column='obs_swe', ax=ax2, cmap='Blues', 
-                               vmin=vmin, vmax=vmax, legend=False,
-                               edgecolor='black', linewidth=0.5)
-                
-                ax2.set_title(f'Observed SWE on Observed Peak Date\n'
-                             f'{obs_peak_date.strftime("%Y-%m-%d")} (Water Year {year})\n'
-                             f'Obs Peak SWE: {obs_peak_swe:.1f} mm', 
-                             fontsize=14, fontweight='bold')
-                ax2.set_xlabel('Longitude', fontsize=12)
-                ax2.set_ylabel('Latitude', fontsize=12)
-                ax2.grid(True, alpha=0.3)
-                
-                # Add shared colorbar
-                fig1.subplots_adjust(right=0.85)
-                cbar_ax1 = fig1.add_axes([0.87, 0.15, 0.03, 0.7])
-                sm = plt.cm.ScalarMappable(cmap='Blues', norm=plt.Normalize(vmin=vmin, vmax=vmax))
-                sm.set_array([])
-                cbar1 = fig1.colorbar(sm, cax=cbar_ax1)
-                cbar1.set_label('Snow Water Equivalent (mm)', fontsize=12, fontweight='bold')
-                
-                # Save plot
-                save_path1 = plot_dirs['swe'] / f'spatial_swe_obs_peak_WY{year}_{gauge_id}.png'
-                plt.savefig(save_path1, dpi=300, bbox_inches='tight')
-                print(f"    Saved observed peak plot to: {save_path1}")
-                plt.show()
+                # Add metrics text to plot
+                metrics_text = f"RMSE: {rmse:.1f} mm\nBias: {bias:.1f} mm\nR: {corr:.3f}"
+                ax.text(0.02, 0.98, metrics_text, transform=ax.transAxes, 
+                       verticalalignment='top', fontsize=9,
+                       bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
         
-        # PLOT 2: SWE distribution on simulated peak date  
-        print(f"    Creating plot for simulated peak date...")
+        # Formatting
+        ax.set_title(f'Elevation Band: {band}', fontsize=12)
+        ax.set_ylabel('SWE (mm)', fontsize=11)
+        ax.grid(True, linestyle='--', alpha=0.7)
         
-        # Get SWE data for simulated peak date
-        sim_sim_peak_data = sim_swe_df.loc[sim_swe_df['date'] == sim_peak_date]
-        obs_sim_peak_data = obs_swe_df.loc[obs_swe_df['date'] == sim_peak_date]
+        # Format x-axis dates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
         
-        if len(sim_sim_peak_data) > 0 and len(obs_sim_peak_data) > 0:
-            fig2, (ax3, ax4) = plt.subplots(1, 2, figsize=figsize)
-            
-            # Prepare HRU data for simulated peak date
-            hru_gdf_sim = hru_gdf.copy()
-            hru_gdf_sim['sim_swe'] = np.nan
-            hru_gdf_sim['obs_swe'] = np.nan
-            
-            # Add SWE data to geodataframe
-            for sim_col, obs_col in hru_mapping.items():
-                try:
-                    hru_id = int(sim_col) if sim_col.isdigit() else sim_col
-                    hru_mask = hru_gdf_sim['HRU_ID'] == hru_id
-                    
-                    if hru_mask.any():
-                        if len(sim_sim_peak_data) > 0:
-                            hru_gdf_sim.loc[hru_mask, 'sim_swe'] = sim_sim_peak_data[sim_col].iloc[0]
-                        if len(obs_sim_peak_data) > 0:
-                            hru_gdf_sim.loc[hru_mask, 'obs_swe'] = obs_sim_peak_data[obs_col].iloc[0]
-                except:
-                    continue
-            
-            # Filter out HRUs with extremely high SWE (>1000mm) or no data
-            plot_mask = ~(hru_gdf_sim['sim_swe'].isna() & hru_gdf_sim['obs_swe'].isna())
-            hru_gdf_sim = hru_gdf_sim[plot_mask].copy()
-            
-            high_swe_mask = (hru_gdf_sim['sim_swe'] <= 1000) | (hru_gdf_sim['sim_swe'].isna())
-            high_swe_mask &= (hru_gdf_sim['obs_swe'] <= 1000) | (hru_gdf_sim['obs_swe'].isna())
-            hru_gdf_sim = hru_gdf_sim[high_swe_mask].copy()
-            
-            if len(hru_gdf_sim) > 0:
-                # Determine color scale
-                valid_sim = hru_gdf_sim['sim_swe'].dropna()
-                valid_obs = hru_gdf_sim['obs_swe'].dropna()
-                
-                if len(valid_sim) > 0 and len(valid_obs) > 0:
-                    vmin = min(valid_sim.min(), valid_obs.min())
-                    vmax = max(valid_sim.max(), valid_obs.max())
-                    vmin = max(0, vmin)
-                    vmax = min(1000, vmax)
-                else:
-                    vmin, vmax = 0, 100
-                
-                # Plot simulated SWE on simulated peak date
-                hru_gdf_sim.plot(column='sim_swe', ax=ax3, cmap='Blues', 
-                               vmin=vmin, vmax=vmax, legend=False, 
-                               edgecolor='black', linewidth=0.5)
-                
-                ax3.set_title(f'Simulated SWE on Simulated Peak Date\n'
-                             f'{sim_peak_date.strftime("%Y-%m-%d")} (Water Year {year})\n'
-                             f'Sim Peak SWE: {sim_peak_swe:.1f} mm', 
-                             fontsize=14, fontweight='bold')
-                ax3.set_xlabel('Longitude', fontsize=12)
-                ax3.set_ylabel('Latitude', fontsize=12)
-                ax3.grid(True, alpha=0.3)
-                
-                # Plot observed SWE on simulated peak date
-                hru_gdf_sim.plot(column='obs_swe', ax=ax4, cmap='Blues', 
-                               vmin=vmin, vmax=vmax, legend=False,
-                               edgecolor='black', linewidth=0.5)
-                
-                ax4.set_title(f'Observed SWE on Simulated Peak Date\n'
-                             f'{sim_peak_date.strftime("%Y-%m-%d")} (Water Year {year})\n'
-                             f'Sim Peak SWE: {sim_peak_swe:.1f} mm', 
-                             fontsize=14, fontweight='bold')
-                ax4.set_xlabel('Longitude', fontsize=12)
-                ax4.set_ylabel('Latitude', fontsize=12)
-                ax4.grid(True, alpha=0.3)
-                
-                # Add shared colorbar
-                fig2.subplots_adjust(right=0.85)
-                cbar_ax2 = fig2.add_axes([0.87, 0.15, 0.03, 0.7])
-                sm = plt.cm.ScalarMappable(cmap='Blues', norm=plt.Normalize(vmin=vmin, vmax=vmax))
-                sm.set_array([])
-                cbar2 = fig2.colorbar(sm, cax=cbar_ax2)
-                cbar2.set_label('Snow Water Equivalent (mm)', fontsize=12, fontweight='bold')
-                
-                # Save plot
-                save_path2 = plot_dirs['swe'] / f'spatial_swe_sim_peak_WY{year}_{gauge_id}.png'
-                plt.savefig(save_path2, dpi=300, bbox_inches='tight')
-                print(f"    Saved simulated peak plot to: {save_path2}")
-                plt.show()
-        
-        # Store plot information
-        plot_info[year] = {
-            'sim_peak_date': sim_peak_date,
-            'obs_peak_date': obs_peak_date,
-            'sim_peak_swe': sim_peak_swe,
-            'obs_peak_swe': obs_peak_swe,
-            'obs_peak_plot': save_path1 if 'save_path1' in locals() else None,
-            'sim_peak_plot': save_path2 if 'save_path2' in locals() else None
-        }
+        # Add legend only to the first plot
+        if i == 0:
+            ax.legend(loc='upper right', fontsize=10)
     
-    # Print summary
-    print(f"\nSpatial SWE Peak Comparison Analysis Summary:")
-    print(f"  Catchment: {gauge_id}")
-    print(f"  Validation period: {validation_start} to {validation_end}")
-    print(f"  Example years processed: {list(plot_info.keys())}")
-    print(f"  Original HRUs in shapefile: {original_count}")
-    print(f"  Non-glacier HRUs: {len(hru_gdf)}")
-    print(f"  HRUs with SWE data: {len(hru_mapping)}")
+    # Add overall title
+    title = f'SWE by Elevation Band - Catchment {config["gauge_id"]}\n{period_label}'
+    fig.suptitle(title, fontsize=16)
     
-    for year, info in plot_info.items():
-        print(f"\n  Water Year {year}:")
-        print(f"    Observed peak: {info['obs_peak_date'].strftime('%Y-%m-%d')} ({info['obs_peak_swe']:.1f} mm)")
-        print(f"    Simulated peak: {info['sim_peak_date'].strftime('%Y-%m-%d')} ({info['sim_peak_swe']:.1f} mm)")
-        print(f"    Peak timing difference: {(info['sim_peak_date'] - info['obs_peak_date']).days} days")
+    # Format x-axis for the bottom plot
+    axes[-1].set_xlabel('Date', fontsize=12)
+    plt.setp(axes[-1].xaxis.get_majorticklabels(), rotation=45, ha='right')
     
-    return {
-        'plot_info': plot_info,
-        'hru_mapping': hru_mapping,
-        'n_hrus_total': original_count,
-        'n_hrus_non_glacier': len(hru_gdf),
-        'n_hrus_with_data': len(hru_mapping),
-        'example_years': example_years,
-        'filtering_applied': {
-            'glacier_areas_excluded': True,
-            'high_swe_threshold': 1000,
-            'landuse_classes_excluded': [7, 8]
-        }
-    }
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.subplots_adjust(hspace=0.3)
+    
+    # Save figure
+    if water_year:
+        filename = f'swe_time_series_by_elevation_WY{water_year}_{config["gauge_id"]}.png'
+    else:
+        filename = f'swe_time_series_by_elevation_{config["gauge_id"]}.png'
+    
+    save_path = plot_dirs['swe'] / filename
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"Saved SWE elevation band plot to: {save_path}")
+    plt.show()
+    
+    # Print summary statistics
+    print(f"\nSWE Elevation Band Analysis for Catchment {config['gauge_id']}:")
+    print(f"  Period: {start_date.date()} to {end_date.date()}")
+    print(f"  Number of elevation bands: {len(elev_bands)}")
+    print(f"  Elevation bands: {', '.join(elev_bands)}")
+    
+    return fig
+
 
 #--------------------------------------------------------------------------------
 ################################### metrics #####################################
@@ -2412,97 +1595,181 @@ def plot_storage_timeseries(config, plot_dirs, validation_start=None, validation
 
 def load_glogem_data(config, unit='mm', plot=True):
     """
-    Load catchment-averaged GloGEM data from the new preprocessing format.
-    The new format has separate columns for all components (icemelt, snowmelt, rain, melt)
-    with both glacier area and catchment area normalized values.
+    Load and process GloGEM data from the preprocessed CSV file.
+    
+    Parameters:
+    -----------
+    config : dict
+        Configuration dictionary from namelist
+    unit : str
+        Output unit ('mm' or 'm3')
+    plot : bool
+        Whether to create plots
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame containing processed GloGEM data with columns:
+        ['date', 'glacier_melt', 'snowmelt', 'rainfall', 'total_output']
     """
     
     config_dir = Path(config['main_dir']) / config['config_dir']
     gauge_id = config['gauge_id']
     
-    # Define topo_dir where GloGEM files are located
+    print(f"Loading GloGEM data for catchment {gauge_id}:")
+    
+    # Load the preprocessed GloGEM CSV file from topo_files
     topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    glogem_csv_file = topo_dir / "GloGEM_melt.csv"
     
-    # NEW: Look for the catchment-averaged file with ALL components
-    catchment_avg_file = topo_dir / "GloGEM_catchment_averaged.csv"
-    
-    if not catchment_avg_file.exists():
-        print(f"ERROR: Catchment-averaged GloGEM file not found: {catchment_avg_file}")
-        print(f"Please run the GloGEM preprocessing with create_catchment_averaged_melt() first")
+    if not glogem_csv_file.exists():
+        print(f"ERROR: GloGEM CSV file not found: {glogem_csv_file}")
+        print("Please run the preprocess_glogem script first to generate this file.")
         return None
+    
+    print(f"  - Loading from: {glogem_csv_file}")
     
     # Get date range from config
     start_date = config.get('start_date', '2000-01-01')
     end_date = config.get('end_date', '2020-12-31')
     
-    print(f"Loading catchment-averaged GloGEM data for catchment {gauge_id}:")
-    print(f"  - File: {catchment_avg_file}")
-    print(f"  - Period: {start_date} to {end_date}")
-    
     try:
-        # Load the catchment-averaged file
-        glogem_df = pd.read_csv(catchment_avg_file, parse_dates=['date'])
+        # Load the individual glacier records from CSV
+        glogem_df = pd.read_csv(glogem_csv_file, dtype={'id': str})
+        glogem_df['date'] = pd.to_datetime(glogem_df['date'])
         
-        print(f"  - Loaded {len(glogem_df)} records")
-        print(f"  - Columns: {glogem_df.columns.tolist()}")
+        print(f"  - Loaded {len(glogem_df)} records for {glogem_df['id'].nunique()} glaciers")
+        print(f"  - Date range in file: {glogem_df['date'].min()} to {glogem_df['date'].max()}")
         
-        # Filter for date range
+        # Filter for the specified date range
         start = pd.to_datetime(start_date)
         end = pd.to_datetime(end_date)
-        glogem_filtered = glogem_df[(glogem_df['date'] >= start) & (glogem_df['date'] <= end)].copy()
+        
+        date_mask = (glogem_df['date'] >= start) & (glogem_df['date'] <= end)
+        glogem_filtered = glogem_df[date_mask].copy()
         
         if len(glogem_filtered) == 0:
-            print(f"ERROR: No data found for period {start_date} to {end_date}")
+            print(f"ERROR: No GloGEM data found for period {start_date} to {end_date}")
             return None
         
-        # NEW: The file now has columns for all components:
-        # - icemelt_glacier_area, icemelt_catchment_area
-        # - snowmelt_glacier_area, snowmelt_catchment_area
-        # - rain_glacier_area, rain_catchment_area
-        # - melt_glacier_area, melt_catchment_area
+        print(f"  - Filtered to {len(glogem_filtered)} records for period {start_date} to {end_date}")
         
-        # Rename columns to match expected format (using glacier area values by default)
-        result_df = pd.DataFrame({
-            'date': glogem_filtered['date'],
-            'icemelt': glogem_filtered['icemelt_catchment_area'],
-            'snowmelt': glogem_filtered['snowmelt_catchment_area'],
-            'rainfall': glogem_filtered['rain_catchment_area'],
-            'glacier_melt': glogem_filtered['melt_catchment_area'],
-            'total_output': glogem_filtered['melt_catchment_area'],
-            # Also include catchment-normalized versions
-            'icemelt_normalized': glogem_filtered['icemelt_catchment_area'],
-            'snowmelt_normalized': glogem_filtered['snowmelt_catchment_area'],
-            'rainfall_normalized': glogem_filtered['rain_catchment_area'],
-            'glacier_melt_normalized': glogem_filtered['melt_catchment_area']
-        })
+        # Load catchment shapefile to get areas and scaling
+        catchment_shape_file = topo_dir / "HRU.shp"
         
-        print(f"  ✓ Successfully loaded catchment-averaged GloGEM data")
-        print(f"  - Date range: {result_df['date'].min()} to {result_df['date'].max()}")
-        print(f"\n  Mean values (glacier area):")
-        print(f"    Ice melt: {result_df['icemelt'].mean():.3f} mm/day")
-        print(f"    Snow melt: {result_df['snowmelt'].mean():.3f} mm/day")
-        print(f"    Rainfall: {result_df['rainfall'].mean():.3f} mm/day")
-        print(f"    Total melt: {result_df['glacier_melt'].mean():.3f} mm/day")
-        print(f"\n  Mean values (catchment area):")
-        print(f"    Ice melt: {result_df['icemelt_normalized'].mean():.3f} mm/day")
-        print(f"    Snow melt: {result_df['snowmelt_normalized'].mean():.3f} mm/day")
-        print(f"    Rainfall: {result_df['rainfall_normalized'].mean():.3f} mm/day")
-        print(f"    Total melt: {result_df['glacier_melt_normalized'].mean():.3f} mm/day")
+        if not catchment_shape_file.exists():
+            print(f"ERROR: Catchment shapefile not found: {catchment_shape_file}")
+            return None
+        
+        try:
+            catchment = gpd.read_file(catchment_shape_file)
+        except Exception as e:
+            print(f"ERROR: Failed to read catchment shapefile: {e}")
+            return None
+        
+        # Calculate catchment areas for scaling
+        glacier_areas = catchment.groupby('Glacier_Cl').agg({'Area_km2': 'sum'}).reset_index()
+        glacier_area = glacier_areas['Area_km2'].sum()
+        total_area = catchment['Area_km2'].sum()
+        percentage = (glacier_area / total_area) * 100
+        
+        print(f"  - Total catchment area: {total_area:.2f} km²")
+        print(f"  - Glaciated area: {glacier_area:.2f} km² ({percentage:.1f}%)")
+        
+        # Create area mapping for individual glaciers
+        area_dict = {}
+        for _, row in glacier_areas.iterrows():
+            if pd.notna(row['Glacier_Cl']):
+                # Extract the numeric part of glacier ID (remove RGI prefix)
+                glacier_id = str(row['Glacier_Cl']).split('.')[-1] if '.' in str(row['Glacier_Cl']) else str(row['Glacier_Cl'])
+                area_dict[glacier_id] = row['Area_km2']
+        
+        print(f"  - Found area mapping for {len(area_dict)} glaciers")
+        
+        # Calculate area-weighted daily averages
+        print(f"  - Calculating area-weighted catchment averages...")
+        
+        # Add area information to glacier records
+        glogem_filtered['area'] = glogem_filtered['id'].map(area_dict)
+        
+        # Fill missing areas with mean area (for glaciers not in shapefile)
+        missing_area_mask = glogem_filtered['area'].isna()
+        if missing_area_mask.any():
+            mean_area = glogem_filtered['area'].mean()
+            glogem_filtered.loc[missing_area_mask, 'area'] = mean_area
+            print(f"    Warning: {missing_area_mask.sum()} records had missing area data, used mean area {mean_area:.3f} km²")
+        
+        # Calculate area-weighted daily totals
+        def calculate_daily_totals(df):
+            """Calculate area-weighted daily totals for the catchment"""
+            total_area = df['area'].sum()
+            if total_area == 0:
+                return 0
+            
+            # Weight by area and sum
+            weighted_total = (df['q'] * df['area']).sum()
+            # Return as catchment average (weighted by total glacier area)
+            return weighted_total / total_area
+        
+        # Group by date and calculate catchment average
+        daily_averages = glogem_filtered.groupby('date').apply(calculate_daily_totals).reset_index()
+        daily_averages.columns = ['date', 'glacier_melt']
+        
+        # Create the output dataframe in the expected format
+        # Note: Since we only have total melt from GloGEM, we'll use it for glacier_melt
+        # and set other components to appropriate values
+        result_df = daily_averages.copy()
+        result_df['snowmelt'] = 0.0  # GloGEM total melt already includes snow melt
+        result_df['rainfall'] = 0.0  # GloGEM doesn't provide rainfall component separately
+        result_df['total_output'] = result_df['glacier_melt']  # Total output is the same as glacier melt
+        
+        # Apply scaling factor based on glaciated percentage of catchment
+        scaling_factor = percentage / 100
+        result_df['glacier_melt'] = result_df['glacier_melt'] * scaling_factor
+        result_df['snowmelt'] = result_df['snowmelt'] * scaling_factor
+        result_df['total_output'] = result_df['total_output'] * scaling_factor
+        
+        print(f"  - Applied scaling factor: {scaling_factor:.3f} (glaciated percentage)")
+        
+        # Convert units if necessary
+        if unit == 'm3':
+            catchment_area_m2 = total_area * 1000000  # Convert km² to m²
+            for col in ['glacier_melt', 'snowmelt', 'rainfall', 'total_output']:
+                result_df[col] = result_df[col] * catchment_area_m2 / 1000  # mm to m³
+            print(f"  - Converted units to m³/day")
+        
+        print(f"  - Final dataset: {len(result_df)} daily records")
+        print(f"  - Mean glacier melt: {result_df['glacier_melt'].mean():.3f} {unit}/day")
+        print(f"  - Max glacier melt: {result_df['glacier_melt'].max():.3f} {unit}/day")
+        print(f"  - Total glacier melt: {result_df['glacier_melt'].sum():.1f} {unit}")
+        
+        # Create a cached parsed file for compatibility
+        parsed_file = topo_dir / f"GloGEM_parsed_{gauge_id}.csv"
+        result_df.to_csv(parsed_file, index=False)
+        print(f"  - Saved parsed result to: {parsed_file}")
         
         return result_df
         
     except Exception as e:
-        print(f"ERROR: Failed to load GloGEM data: {e}")
+        print(f"ERROR: Failed to process GloGEM CSV file: {e}")
         import traceback
         traceback.print_exc()
         return None
-    
+
 #--------------------------------------------------------------------------------
 
 def plot_glogem_regime(config, plot_dirs, unit='mm'):
     """
-    Plot GloGEM monthly regime for the catchment.
-    Updated to work with new catchment-averaged format with ALL components.
+    Plot GloGEM monthly and daily regimes for the catchment.
+    
+    Parameters:
+    -----------
+    config : dict
+        Configuration dictionary from namelist
+    plot_dirs : dict
+        Dictionary containing plot directory paths
+    unit : str
+        Output unit ('mm' or 'm3')
     """
     
     # Load GloGEM data
@@ -2516,116 +1783,69 @@ def plot_glogem_regime(config, plot_dirs, unit='mm'):
     glogem_df['month'] = glogem_df['date'].dt.month
     glogem_df['day_of_year'] = glogem_df['date'].dt.dayofyear
     
-    # Calculate monthly regime for all components
+    # Calculate monthly regime
     monthly_regime = glogem_df.groupby('month').agg({
-        'icemelt': 'mean',
+        'glacier_melt': 'mean',
         'snowmelt': 'mean',
         'rainfall': 'mean',
-        'glacier_melt': 'mean',
-        'icemelt_normalized': 'mean',
-        'snowmelt_normalized': 'mean',
-        'rainfall_normalized': 'mean',
-        'glacier_melt_normalized': 'mean'
+        'total_output': 'mean'
     }).reset_index()
     
     # Calculate daily regime (averaged over all years)
     daily_regime = glogem_df.groupby('day_of_year').agg({
-        'icemelt': 'mean',
+        'glacier_melt': 'mean',
         'snowmelt': 'mean',
         'rainfall': 'mean',
-        'glacier_melt': 'mean',
-        'icemelt_normalized': 'mean',
-        'snowmelt_normalized': 'mean',
-        'rainfall_normalized': 'mean',
-        'glacier_melt_normalized': 'mean'
+        'total_output': 'mean'
     }).reset_index()
     
     # Create date series for daily regime (using non-leap year)
     daily_regime['date'] = pd.to_datetime('2001-01-01') + pd.to_timedelta(daily_regime['day_of_year'] - 1, unit='days')
     
-    # Create subplots - 2x2 grid
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    # Create subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
     
     # Unit label
     unit_label = 'mm/day' if unit == 'mm' else 'm³/day'
     
-    # PLOT 1: Monthly regime - Glacier area
+    # Monthly regime plot
+    ax1.plot(monthly_regime['month'], monthly_regime['glacier_melt'], 'b-', 
+             label='Glacier Melt', linewidth=2, marker='o')
+    ax1.plot(monthly_regime['month'], monthly_regime['snowmelt'], 'c-', 
+             label='Snowmelt', linewidth=2, marker='s')
     ax1.plot(monthly_regime['month'], monthly_regime['rainfall'], 'g-', 
-             label='Rainfall', linewidth=2, marker='o')
-    ax1.plot(monthly_regime['month'], monthly_regime['snowmelt'], 'b-', 
-             label='Snow Melt', linewidth=2, marker='^')
-    ax1.plot(monthly_regime['month'], monthly_regime['icemelt'], 'r-', 
-             label='Ice Melt', linewidth=2, marker='s')
-    ax1.plot(monthly_regime['month'], monthly_regime['glacier_melt'], 'darkred', 
-             label='Total Glacier Melt', linewidth=3, marker='D', linestyle='--')
+             label='Rainfall', linewidth=2, marker='^')
+    ax1.plot(monthly_regime['month'], monthly_regime['total_output'], 'k-', 
+             label='Total Output', linewidth=2.5, marker='D')
     
     ax1.set_xlabel('Month', fontsize=12)
-    ax1.set_ylabel(f'Contribution ({unit_label})', fontsize=12)
-    ax1.set_title(f'Monthly GloGEM Regime (Glacier Area) - Catchment {config["gauge_id"]}', 
-                 fontsize=14, fontweight='bold')
+    ax1.set_ylabel(f'Average Runoff ({unit_label})', fontsize=12)
+    ax1.set_title(f'Monthly Regime - Catchment {config["gauge_id"]}', fontsize=14, fontweight='bold')
     ax1.grid(True, linestyle='--', alpha=0.7)
     ax1.set_xticks(range(1, 13))
-    ax1.set_xticklabels(['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'])
+    ax1.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
     ax1.legend(loc='best')
     
-    # PLOT 2: Monthly regime - Catchment normalized
-    ax2.plot(monthly_regime['month'], monthly_regime['rainfall_normalized'], 'g--', 
-             label='Rainfall', linewidth=2, marker='o')
-    ax2.plot(monthly_regime['month'], monthly_regime['snowmelt_normalized'], 'b--', 
-             label='Snow Melt', linewidth=2, marker='^')
-    ax2.plot(monthly_regime['month'], monthly_regime['icemelt_normalized'], 'r--', 
-             label='Ice Melt', linewidth=2, marker='s')
-    ax2.plot(monthly_regime['month'], monthly_regime['glacier_melt_normalized'], 'darkred', 
-             label='Total Glacier Melt', linewidth=3, marker='D', linestyle=':')
+    # Daily regime plot
+    ax2.plot(daily_regime['date'], daily_regime['glacier_melt'], 'b-', 
+             label='Glacier Melt', linewidth=1.5)
+    ax2.plot(daily_regime['date'], daily_regime['snowmelt'], 'c-', 
+             label='Snowmelt', linewidth=1.5)
+    ax2.plot(daily_regime['date'], daily_regime['rainfall'], 'g-', 
+             label='Rainfall', linewidth=1.5)
+    ax2.plot(daily_regime['date'], daily_regime['total_output'], 'k-', 
+             label='Total Output', linewidth=2)
+    
+    # Format x-axis for daily plot
+    ax2.xaxis.set_major_locator(mdates.MonthLocator())
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
     
     ax2.set_xlabel('Month', fontsize=12)
-    ax2.set_ylabel(f'Contribution ({unit_label})', fontsize=12)
-    ax2.set_title('Monthly GloGEM Regime (Catchment Normalized)', 
-                 fontsize=14, fontweight='bold')
+    ax2.set_ylabel(f'Average Runoff ({unit_label})', fontsize=12)
+    ax2.set_title('Daily Average Runoff (Averaged Over All Years)', fontsize=14, fontweight='bold')
     ax2.grid(True, linestyle='--', alpha=0.7)
-    ax2.set_xticks(range(1, 13))
-    ax2.set_xticklabels(['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'])
     ax2.legend(loc='best')
-    
-    # PLOT 3: Daily regime - Glacier area
-    ax3.plot(daily_regime['date'], daily_regime['rainfall'], 'g-', 
-             label='Rainfall', linewidth=1.5)
-    ax3.plot(daily_regime['date'], daily_regime['snowmelt'], 'b-', 
-             label='Snow Melt', linewidth=1.5)
-    ax3.plot(daily_regime['date'], daily_regime['icemelt'], 'r-', 
-             label='Ice Melt', linewidth=1.5)
-    ax3.plot(daily_regime['date'], daily_regime['glacier_melt'], 'darkred', 
-             label='Total Glacier Melt', linewidth=2, linestyle='--')
-    
-    # Format x-axis
-    ax3.xaxis.set_major_locator(mdates.MonthLocator())
-    ax3.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
-    
-    ax3.set_xlabel('Month', fontsize=12)
-    ax3.set_ylabel(f'Contribution ({unit_label})', fontsize=12)
-    ax3.set_title('Daily Average GloGEM (Glacier Area)', fontsize=14, fontweight='bold')
-    ax3.grid(True, linestyle='--', alpha=0.7)
-    ax3.legend(loc='best')
-    
-    # PLOT 4: Daily regime - Catchment normalized
-    ax4.plot(daily_regime['date'], daily_regime['rainfall_normalized'], 'g--', 
-             label='Rainfall', linewidth=1.5)
-    ax4.plot(daily_regime['date'], daily_regime['snowmelt_normalized'], 'b--', 
-             label='Snow Melt', linewidth=1.5)
-    ax4.plot(daily_regime['date'], daily_regime['icemelt_normalized'], 'r--', 
-             label='Ice Melt', linewidth=1.5)
-    ax4.plot(daily_regime['date'], daily_regime['glacier_melt_normalized'], 'darkred', 
-             label='Total Glacier Melt', linewidth=2, linestyle=':')
-    
-    # Format x-axis
-    ax4.xaxis.set_major_locator(mdates.MonthLocator())
-    ax4.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
-    
-    ax4.set_xlabel('Month', fontsize=12)
-    ax4.set_ylabel(f'Contribution ({unit_label})', fontsize=12)
-    ax4.set_title('Daily Average GloGEM (Catchment Normalized)', fontsize=14, fontweight='bold')
-    ax4.grid(True, linestyle='--', alpha=0.7)
-    ax4.legend(loc='best')
     
     plt.tight_layout()
     
@@ -2636,22 +1856,15 @@ def plot_glogem_regime(config, plot_dirs, unit='mm'):
     plt.show()
     
     # Print summary statistics
-    total_annual = glogem_df.groupby('year')[['icemelt', 'snowmelt', 'rainfall', 'glacier_melt', 
-                                              'icemelt_normalized', 'snowmelt_normalized', 
-                                              'rainfall_normalized', 'glacier_melt_normalized']].sum().mean()
+    total_annual = glogem_df.groupby('year')[['glacier_melt', 'snowmelt', 'rainfall', 'total_output']].sum().mean()
     
     print(f"\nGloGEM Analysis Summary for Catchment {config['gauge_id']}:")
     print(f"  Period: {glogem_df['date'].min().date()} to {glogem_df['date'].max().date()}")
-    print(f"\n  Annual averages (glacier area):")
-    print(f"    Rainfall: {total_annual['rainfall']:.1f} mm/year")
-    print(f"    Snow melt: {total_annual['snowmelt']:.1f} mm/year")
-    print(f"    Ice melt: {total_annual['icemelt']:.1f} mm/year")
-    print(f"    Total glacier melt: {total_annual['glacier_melt']:.1f} mm/year")
-    print(f"\n  Annual averages (catchment normalized):")
-    print(f"    Rainfall: {total_annual['rainfall_normalized']:.1f} mm/year")
-    print(f"    Snow melt: {total_annual['snowmelt_normalized']:.1f} mm/year")
-    print(f"    Ice melt: {total_annual['icemelt_normalized']:.1f} mm/year")
-    print(f"    Total glacier melt: {total_annual['glacier_melt_normalized']:.1f} mm/year")
+    print(f"  Annual averages ({unit_label.replace('/day', '/year')}):")
+    print(f"    Glacier melt: {total_annual['glacier_melt']:.1f}")
+    print(f"    Snowmelt: {total_annual['snowmelt']:.1f}")
+    print(f"    Rainfall: {total_annual['rainfall']:.1f}")
+    print(f"    Total output: {total_annual['total_output']:.1f}")
     
     return fig
 
@@ -3849,10 +3062,14 @@ def plot_streamflow_contributions_regime(config, plot_dirs, validation_start=Non
 
 #--------------------------------------------------------------------------------
 
+
+
+#--------------------------------------------------------------------------------
+
 def plot_average_yearly_water_balance(config, plot_dirs, validation_start=None, validation_end=None):
     """
     Plot average yearly water balance components: precipitation, observed streamflow, simulated streamflow,
-    and a stacked bar of simulated streamflow components (snowmelt, glacier melt).
+    and a stacked bar of simulated streamflow components (rainfall, snowmelt, glacier melt).
     """
     # Use dates from config if not provided
     if validation_start is None:
@@ -3992,22 +3209,17 @@ def plot_average_yearly_water_balance(config, plot_dirs, validation_start=None, 
     )
     total_snowmelt = glacier_yearly.get('snowmelt', 0) + nonglacier_yearly.get('snowmelt', 0)
     glacier_melt = glacier_yearly.get('glaciermelt', 0)
-    
-    # Stacked bar components for simulated streamflow (ONLY snowmelt and glacier melt)
-    stack_snowmelt = total_snowmelt
-    stack_glacier = glacier_melt
-    stack_total = stack_snowmelt + stack_glacier
-    
-    # Calculate percentages
-    snowmelt_perc = stack_snowmelt / sim_streamflow * 100 if sim_streamflow > 0 else 0
-    glacier_perc = stack_glacier / sim_streamflow * 100 if sim_streamflow > 0 else 0
-    
-    # Print debug info
-    print(f"    Components: snowmelt={stack_snowmelt:.1f} ({snowmelt_perc:.1f}%), glacier={stack_glacier:.1f} ({glacier_perc:.1f}%), total={stack_total:.1f}")
+    total_rainfall = glacier_yearly.get('rainfall', 0) + nonglacier_yearly.get('rainfall', 0)
     
     # Prepare data for plotting
-    bar_labels = ['Precipitation', 'Observed\nStreamflow', 'Simulated\nStreamflow', 'Melt\nComponents']
+    bar_labels = ['Precipitation', 'Observed\nStreamflow', 'Simulated\nStreamflow', 'Simulated\nComponents']
     bar_positions = np.arange(len(bar_labels))
+    
+    # Stacked bar components for simulated streamflow
+    stack_rain = total_rainfall
+    stack_snowmelt = total_snowmelt
+    stack_glacier = glacier_melt
+    stack_total = stack_rain + stack_snowmelt + stack_glacier
     
     # Main bars
     bar_values = [
@@ -4019,69 +3231,38 @@ def plot_average_yearly_water_balance(config, plot_dirs, validation_start=None, 
     
     # Colors for bars and stacks
     bar_colors = ['darkblue', 'black', 'orange', None]  # Last is stacked
-    stack_colors = ['deepskyblue', 'grey']  # Snowmelt, glacier melt
+    stack_colors = ['forestgreen', 'deepskyblue', 'grey']  # Rain, snowmelt, glacier melt
     
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(10, 8))
     
-    # Plot main bars (first 3 bars)
-    for i in range(3):
-        plt.bar(bar_positions[i], bar_values[i], color=bar_colors[i], alpha=0.8, edgecolor='black', linewidth=1.5)
+    # Plot main bars
+    plt.bar(bar_positions[:3], bar_values[:3], color=bar_colors[:3], alpha=0.8, edgecolor='black', linewidth=1.5)
     
-    # Plot stacked bar for simulated components (4th bar) - ONLY snowmelt and glacier melt
-    bar_pos = bar_positions[3]
-    
-    # Bottom layer: snowmelt - starts from 0
-    if stack_snowmelt > 0:
-        plt.bar(bar_pos, stack_snowmelt, bottom=0, color=stack_colors[0], 
-                edgecolor='black', linewidth=1.5, label=f'Snowmelt ({snowmelt_perc:.1f}%)')
-    
-    # Top layer: glacier melt - starts from snowmelt height
-    if stack_glacier > 0:
-        plt.bar(bar_pos, stack_glacier, bottom=stack_snowmelt, color=stack_colors[1], 
-                edgecolor='black', linewidth=1.5, label=f'Glacier Melt ({glacier_perc:.1f}%)')
+    # Plot stacked bar for simulated components
+    plt.bar(bar_positions[3], stack_rain, color=stack_colors[0], edgecolor='black', linewidth=1.5, label='Rainfall')
+    plt.bar(bar_positions[3], stack_snowmelt, bottom=stack_rain, color=stack_colors[1], edgecolor='black', linewidth=1.5, label='Snowmelt')
+    plt.bar(bar_positions[3], stack_glacier, bottom=stack_rain + stack_snowmelt, color=stack_colors[2], edgecolor='black', linewidth=1.5, label='Glacier Melt')
     
     # Add value labels on bars
     for i in range(3):
-        if bar_values[i] > 0:
-            plt.text(bar_positions[i], bar_values[i] + max(bar_values)*0.01,
-                     f'{bar_values[i]:.0f}', ha='center', va='bottom', fontsize=13, fontweight='bold')
+        plt.text(bar_positions[i], bar_values[i] + max(bar_values)*0.01,
+                 f'{bar_values[i]:.0f}', ha='center', va='bottom', fontsize=13, fontweight='bold')
     
-    # Add total value label on top of stacked bar
-    if stack_total > 0:
-        plt.text(bar_pos, stack_total + max(bar_values)*0.01,
-                 f'{stack_total:.0f}', ha='center', va='bottom', fontsize=13, fontweight='bold')
-    
-    # Add component labels with percentages inside stacked bar segments
-    if stack_snowmelt > 10:  # Only add label if segment is big enough
-        plt.text(bar_pos, stack_snowmelt/2, f'{stack_snowmelt:.0f}\n({snowmelt_perc:.1f}%)', 
-                 ha='center', va='center', fontsize=11, fontweight='bold', color='black')
-    
-    if stack_glacier > 10:  # Only add label if segment is big enough
-        plt.text(bar_pos, stack_snowmelt + stack_glacier/2, f'{stack_glacier:.0f}\n({glacier_perc:.1f}%)', 
-                 ha='center', va='center', fontsize=11, fontweight='bold', color='white')
+    # Add value and percentage label inside stacked bar for snowmelt and glacier melt
+    if sim_streamflow and stack_total:
+        snowmelt_perc = stack_snowmelt / sim_streamflow * 100 if sim_streamflow > 0 else 0
+        glacier_perc = stack_glacier / sim_streamflow * 100 if sim_streamflow > 0 else 0
+        label_text = (f'Snowmelt: {stack_snowmelt:.0f} mm\n({snowmelt_perc:.1f}%)\n'
+                      f'Glacier: {stack_glacier:.0f} mm\n({glacier_perc:.1f}%)')
+        plt.text(bar_positions[3], stack_total/2, 
+                 label_text, 
+                 ha='center', va='center', fontsize=13, fontweight='bold', color='black')
     
     # Formatting
     plt.xticks(bar_positions, bar_labels, fontsize=15)
     plt.ylabel('Annual Average (mm/year)', fontsize=15)
-    plt.title(f'Average Yearly Water Balance - Catchment {gauge_id}\n'
-             f'Period: {validation_start} to {validation_end} ({"Coupled" if coupled else "Uncoupled"})\n'
-             f'Snowmelt: {snowmelt_perc:.1f}% | Glacier Melt: {glacier_perc:.1f}% of Simulated Streamflow', 
-             fontsize=16, fontweight='bold')
     plt.grid(True, axis='y', alpha=0.3)
-    
-    # Only add legend if we have components
-    if stack_snowmelt > 0 or stack_glacier > 0:
-        legend_elements = []
-        if stack_snowmelt > 0:
-            legend_elements.append(plt.Rectangle((0,0),1,1, color=stack_colors[0], 
-                                               label=f'Snowmelt ({snowmelt_perc:.1f}%)'))
-        if stack_glacier > 0:
-            legend_elements.append(plt.Rectangle((0,0),1,1, color=stack_colors[1], 
-                                               label=f'Glacier Melt ({glacier_perc:.1f}%)'))
-        
-        if legend_elements:
-            plt.legend(handles=legend_elements, fontsize=13, loc='upper right')
-    
+    plt.legend(['Rainfall', 'Snowmelt', 'Glacier Melt'], fontsize=13, loc='upper right')
     plt.tight_layout()
     
     # Save plot
@@ -4097,24 +3278,22 @@ def plot_average_yearly_water_balance(config, plot_dirs, validation_start=None, 
     print(f"  Precipitation: {total_precipitation:.1f} mm/year")
     print(f"  Observed streamflow: {obs_streamflow:.1f} mm/year")
     print(f"  Simulated streamflow: {sim_streamflow:.1f} mm/year")
-    print(f"  Melt components:")
-    print(f"    Snowmelt: {stack_snowmelt:.1f} mm/year ({snowmelt_perc:.1f}% of simulated streamflow)")
-    print(f"    Glacier melt: {stack_glacier:.1f} mm/year ({glacier_perc:.1f}% of simulated streamflow)")
-    print(f"    Total melt: {stack_total:.1f} mm/year ({(snowmelt_perc + glacier_perc):.1f}% of simulated streamflow)")
-    
-    # Verify the math
-    print(f"  Verification: {stack_snowmelt:.1f} + {stack_glacier:.1f} = {stack_total:.1f} mm/year")
+    print(f"  Simulated components (rain/snowmelt/glacier): {stack_rain:.1f} / {stack_snowmelt:.1f} / {stack_glacier:.1f} mm/year")
+    print(f"  Snowmelt: {stack_snowmelt:.1f} mm/year ({snowmelt_perc:.1f}% of simulated streamflow)")
+    print(f"  Glacier melt: {stack_glacier:.1f} mm/year ({glacier_perc:.1f}% of simulated streamflow)")
     
     return {
         'precipitation': total_precipitation,
         'obs_streamflow': obs_streamflow,
         'sim_streamflow': sim_streamflow,
+        'rainfall': stack_rain,
         'snowmelt_total': stack_snowmelt,
         'glacier_melt': stack_glacier,
-        'melt_components_total': stack_total,
+        'sim_components_total': stack_total,
         'snowmelt_pct': snowmelt_perc,
         'glacier_pct': glacier_perc
     }
+
 
 #--------------------------------------------------------------------------------
 ################################# Uncertainties #################################
@@ -4406,8 +3585,27 @@ def plot_regime_100_best_runs(config, plot_dirs, template_dir=None, raven_exe=No
                              color_best='#24868E', color_others='grey'):
     """
     Plot regime for the best runs from SCEUA calibration using namelist configuration.
-    Now includes streamflow, glacier melt, and snowmelt uncertainty analysis.
-    Uses GloGEM data for glacier/snowmelt when coupled=True.
+    
+    Parameters:
+    -----------
+    config : dict
+        Configuration dictionary from namelist
+    plot_dirs : dict
+        Dictionary containing plot directory paths
+    template_dir : str or Path, optional
+        Directory containing template files (will use config if not provided)
+    raven_exe : str or Path, optional
+        Path to Raven executable (will use config if not provided)
+    n_runs : int
+        Number of best runs to process (default: 100)
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+    color_best : str
+        Color for the best simulation
+    color_others : str
+        Color for other simulations
     """
     
     import subprocess
@@ -4415,14 +3613,7 @@ def plot_regime_100_best_runs(config, plot_dirs, template_dir=None, raven_exe=No
     
     gauge_id = config['gauge_id']
     model_type = config['model_type']
-    coupled = config.get('coupled', False)  # Get coupled setting
     config_dir = Path(config['main_dir']) / config['config_dir']
-    
-    print(f"Running regime uncertainty analysis for {n_runs} best runs:")
-    print(f"  - Catchment: {gauge_id}")
-    print(f"  - Model: {model_type}")
-    print(f"  - Coupled mode: {coupled}")
-    print(f"  - Validation period: {validation_start} to {validation_end}")
     
     # Use dates from config if not provided
     if validation_start is None:
@@ -4436,140 +3627,19 @@ def plot_regime_100_best_runs(config, plot_dirs, template_dir=None, raven_exe=No
     else:
         template_dir = Path(template_dir)
     
-    # Get Raven executable from config
+    # Get Raven executable from config (note: key is 'raven_executable' not 'raven_exe')
     if raven_exe is None:
         raven_exe = config.get('raven_executable', '/path/to/raven.exe')
         if raven_exe == '/path/to/raven.exe':
             print("Warning: Using default Raven executable path. Please check your namelist.")
 
+    print(f"Running regime analysis for {n_runs} best runs:")
+    print(f"  - Catchment: {gauge_id}")
+    print(f"  - Model: {model_type}")
+    print(f"  - Validation period: {validation_start} to {validation_end}")
     print(f"  - Template directory: {template_dir}")
     print(f"  - Raven executable: {raven_exe}")
     
-    # Load catchment area for GloGEM normalization if coupled
-    conversion_factor = None
-    if coupled:
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-        catchment_shape_file = topo_dir / "HRU.shp"
-        
-        if catchment_shape_file.exists():
-            try:
-                import geopandas as gpd
-                hru_gdf = gpd.read_file(catchment_shape_file)
-                total_area_km2 = hru_gdf['Area_km2'].sum()
-                # Convert km² to m² for GloGEM normalization
-                conversion_factor = total_area_km2 * 1000000
-                print(f"  - Catchment area for GloGEM: {total_area_km2:.2f} km²")
-            except Exception as e:
-                print(f"  - Warning: Could not load catchment area: {e}")
-                conversion_factor = None
-    
-    # Load GloGEM data if coupled (using parsed file)
-    glogem_glacier_data = None
-    glogem_snowmelt_data = None
-    
-    if coupled and conversion_factor is not None:
-        try:
-            topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-            glogem_parsed_file = topo_dir / f"GloGEM_parsed_{gauge_id}.csv"
-            
-            if glogem_parsed_file.exists():
-                print(f"  - Loading parsed GloGEM data from: {glogem_parsed_file}")
-                
-                # Load parsed GloGEM data (this has the correct column names)
-                glogem_df = pd.read_csv(glogem_parsed_file, parse_dates=['date'])
-                print(f"    Raw GloGEM data shape: {glogem_df.shape}")
-                print(f"    Raw GloGEM data columns: {glogem_df.columns.tolist()}")
-                print(f"    Raw GloGEM data date range: {glogem_df['date'].min()} to {glogem_df['date'].max()}")
-                
-                # Filter by validation period
-                start_date = pd.to_datetime(validation_start)
-                end_date = pd.to_datetime(validation_end)
-                glogem_filtered = glogem_df[(glogem_df['date'] >= start_date) & 
-                                           (glogem_df['date'] <= end_date)].copy()
-                print(f"    Filtered GloGEM data shape: {glogem_filtered.shape}")
-                
-                if len(glogem_filtered) > 0:
-                    # Process glacier melt data
-                    if 'glacier_melt' in glogem_filtered.columns:
-                        glogem_filtered['month'] = glogem_filtered['date'].dt.month
-                        glogem_glacier_data = glogem_filtered.groupby('month')['glacier_melt'].mean()
-                        print(f"    ✓ Loaded GloGEM glacier data: {len(glogem_filtered)} records")
-                        print(f"    Monthly glacier melt values: {glogem_glacier_data.to_dict()}")
-                    else:
-                        print(f"    ✗ 'glacier_melt' column not found in parsed GloGEM file")
-                        print(f"    Available columns: {glogem_filtered.columns.tolist()}")
-                        glogem_glacier_data = None
-                    
-                    # Process snowmelt data
-                    if 'snowmelt' in glogem_filtered.columns:
-                        glogem_snowmelt_data = glogem_filtered.groupby('month')['snowmelt'].mean()
-                        print(f"    ✓ Loaded GloGEM snowmelt data: {len(glogem_filtered)} records")
-                        print(f"    Monthly snowmelt values: {glogem_snowmelt_data.to_dict()}")
-                    else:
-                        print(f"    ✗ 'snowmelt' column not found in parsed GloGEM file")
-                        print(f"    Available columns: {glogem_filtered.columns.tolist()}")
-                        glogem_snowmelt_data = None
-                else:
-                    print(f"    ✗ No GloGEM data found for validation period")
-                    glogem_glacier_data = None
-                    glogem_snowmelt_data = None
-                
-            else:
-                print(f"  - Warning: Parsed GloGEM file not found: {glogem_parsed_file}")
-                print(f"  - Please run load_glogem_data() first to create the parsed file")
-                glogem_glacier_data = None
-                glogem_snowmelt_data = None
-                
-        except Exception as e:
-            print(f"  - Error loading parsed GloGEM data: {e}")
-            import traceback
-            traceback.print_exc()
-            glogem_glacier_data = None
-            glogem_snowmelt_data = None
-    
-    # MODIFY THE TEMPLATE FILE FIRST
-    print(f"  - Modifying template file for glacier/snowmelt output...")
-    rvi_template_file = template_dir / f"{gauge_id}_{model_type}.rvi.tpl"
-    
-    if rvi_template_file.exists():
-        try:
-            # Read the template file
-            with open(rvi_template_file, 'r') as f:
-                content = f.read()
-            
-            # Replace the output options
-            old_output = "#Output Options\n  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE \n  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP"
-            new_output = "#Output Options\n  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_BASIN\n  :CustomOutput DAILY AVERAGE To:LAKE_STORAGE BY_BASIN"
-            
-            if old_output in content:
-                content = content.replace(old_output, new_output)
-                print(f"    ✓ Replaced evaluation metrics with glacier/snowmelt output")
-            else:
-                # Try alternative patterns
-                import re
-                # Pattern to match the output section
-                pattern = r'#Output Options\s*:EvaluationMetrics[^\n]*\n\s*:CustomOutput[^\n]*'
-                if re.search(pattern, content):
-                    content = re.sub(pattern, new_output, content)
-                    print(f"    ✓ Found and replaced output section using pattern matching")
-                else:
-                    print(f"    ⚠ Could not find output section to replace")
-                    print(f"    Template content preview:")
-                    print(content[-500:])  # Show last 500 chars where output usually is
-            
-            # Write the modified content back
-            with open(rvi_template_file, 'w') as f:
-                f.write(content)
-            
-            print(f"    ✓ Modified template file: {rvi_template_file}")
-            
-        except Exception as e:
-            print(f"    ✗ Error modifying template file: {e}")
-            return None
-    else:
-        print(f"    ✗ Template file not found: {rvi_template_file}")
-        return None
-
     # 1. Read SCEUA results file
     output_dir = config_dir / f"catchment_{gauge_id}" / model_type / "output"
     results_file = output_dir / f"raven_sceua_{gauge_id}_{model_type}.csv"
@@ -4584,96 +3654,21 @@ def plot_regime_100_best_runs(config, plot_dirs, template_dir=None, raven_exe=No
         else:
             print(f"No SCEUA results files found in {output_dir}")
             return None
-
-    # READ THE CSV FILE - THIS WAS MISSING!
-    try:
-        df = pd.read_csv(results_file)
-        print(f"Successfully loaded CSV with shape: {df.shape}")
         
-    except pd.errors.ParserError as e:
-        print(f"CSV parsing error: {e}")
-        print(f"Attempting to fix parsing issues...")
-        
-        try:
-            # Method 1: Use python engine with flexible separator detection
-            df = pd.read_csv(results_file, sep=None, engine='python', on_bad_lines='skip')
-            print(f"Successfully loaded with python engine: {df.shape}")
-            
-        except Exception as e2:
-            try:
-                # Method 2: Skip bad lines and use comma separator
-                df = pd.read_csv(results_file, sep=',', on_bad_lines='skip')
-                print(f"Successfully loaded skipping bad lines: {df.shape}")
-                
-            except Exception as e3:
-                print(f"All CSV reading attempts failed:")
-                print(f"  - Normal reading: {e}")
-                print(f"  - Python engine: {e2}")
-                print(f"  - Skip bad lines: {e3}")
-                print(f"Please check the CSV file format manually: {results_file}")
-                return None
-
-    except Exception as e:
-        print(f"Error loading CSV file: {e}")
-        return None
-
-    # Validate the loaded data
-    if df is None or len(df) == 0:
-        print("Error: Empty or invalid results file")
+    df = pd.read_csv(results_file)
+    if 'like1' not in df.columns:
+        print("Error: 'like1' column not found in results file.")
+        print(f"Available columns: {df.columns.tolist()}")
         return None
 
     print(f"Loaded {len(df)} parameter sets from results file")
 
-    # 2. Convert negative KGE to positive KGE - WITH ERROR HANDLING
-    print(f"Columns: {df.columns.tolist()}")
-    print(f"Sample 'like1' values: {df['like1'].head().tolist()}")
-    print(f"Data type of 'like1': {df['like1'].dtype}")
-
-    # Convert like1 column to numeric, handling any non-numeric values
-    try:
-        # First, try to convert to numeric (this will handle strings that represent numbers)
-        df['like1_numeric'] = pd.to_numeric(df['like1'], errors='coerce')
-        
-        # Check for any NaN values that resulted from conversion
-        nan_count = df['like1_numeric'].isna().sum()
-        if nan_count > 0:
-            print(f"Warning: {nan_count} non-numeric values found in 'like1' column, dropping these rows")
-            # Show some examples of problematic values
-            problematic = df[df['like1_numeric'].isna()]['like1'].head()
-            print(f"Examples of problematic values: {problematic.tolist()}")
-            
-            # Drop rows with NaN values
-            df = df.dropna(subset=['like1_numeric'])
-        
-        # Remove failed runs (like1 = 999999 means failed run in SCEUA)
-        print(f"Original dataset: {len(df)} parameter sets")
-        valid_mask = (df['like1_numeric'] != 999999)
-        df_valid = df[valid_mask].copy()
-        
-        print(f"After removing failed runs (999999): {len(df_valid)} parameter sets")
-        
-        if len(df_valid) == 0:
-            print("ERROR: No valid parameter sets found after filtering!")
-            print("All runs appear to have failed (like1 = 999999)")
-            print("Check your SCEUA calibration - it may not have converged properly.")
-            return None
-        
-        # Now convert negative KGE to positive KGE (SCEUA minimizes, so negative KGE becomes positive)
-        df_valid['KGE'] = -df_valid['like1_numeric']
-        
-        print(f"Successfully processed {len(df_valid)} valid parameter sets")
-        print(f"KGE range: {df_valid['KGE'].min():.4f} to {df_valid['KGE'].max():.4f}")
-        
-        # Use the cleaned dataframe for the rest of the function
-        df = df_valid
-        
-    except Exception as e:
-        print(f"Error converting 'like1' to numeric: {e}")
-        return None
+    # 2. Convert negative KGE to positive KGE
+    df['KGE'] = -df['like1']
 
     # 3. Select best runs
     best_runs = df.sort_values('KGE', ascending=False).head(n_runs)
-    param_cols = [col for col in df.columns if col not in ['like1', 'like1_numeric', 'KGE']]
+    param_cols = [col for col in df.columns if col not in ['like1', 'KGE']]
     
     print(f"Parameter columns: {param_cols}")
     print(f"Best KGE range: {best_runs['KGE'].min():.4f} to {best_runs['KGE'].max():.4f}")
@@ -4696,11 +3691,9 @@ def plot_regime_100_best_runs(config, plot_dirs, template_dir=None, raven_exe=No
     sim_results_dir = output_dir / f"best_{n_runs}_simulations_{gauge_id}"
     sim_results_dir.mkdir(exist_ok=True)
 
-    # 6. Process all runs and collect streamflow, glacier melt, and snowmelt data
+    # 6. Process all runs directly
     print(f"\nProcessing all {n_runs} runs...")
     hydrographs = []
-    glacier_melts = []
-    snowmelts = []
     successful_runs = 0
     failed_runs = 0
     
@@ -4731,837 +3724,372 @@ def plot_regime_100_best_runs(config, plot_dirs, template_dir=None, raven_exe=No
             
             cmd = [str(raven_exe), str(model_file), "-o", str(run_output_dir)]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             
             if result.returncode == 0:
-                # Define file paths
                 hydro_file = run_output_dir / f"{gauge_id}_{model_type}_Hydrographs.csv"
-                
-                # For glacier melt: use GloGEM if coupled, otherwise HBV output
-                if coupled and glogem_glacier_data is not None:
-                    # Use pre-loaded GloGEM glacier data (same for all runs)
-                    monthly_mean_glacier = glogem_glacier_data
-                    glacier_file_exists = True
+                if hydro_file.exists():
+                    df_hydro = pd.read_csv(hydro_file)
+                    df_hydro['date'] = pd.to_datetime(df_hydro['date'])
+                    mask = (df_hydro['date'] >= validation_start) & (df_hydro['date'] <= validation_end)
+                    monthly = df_hydro[mask].copy()
+                    monthly['month'] = monthly['date'].dt.month
+                    
+                    sim_col = None
+                    for col in df_hydro.columns:
+                        if '[m3/s]' in col and 'observed' not in col.lower():
+                            sim_col = col
+                            break
+                    
+                    if sim_col:
+                        monthly_mean = monthly.groupby('month')[sim_col].mean()
+                        hydrographs.append(monthly_mean)
+                        successful_runs += 1
+                        
+                        # Clean up run directory
+                        cleanup_raven_run_directory(run_dir)
+                    else:
+                        failed_runs += 1
                 else:
-                    # Use HBV glacier file
-                    glacier_file = run_output_dir / f"{gauge_id}_{model_type}_FROM_GLACIER_ICE_Daily_Average_BySubbasin.csv"
-                    glacier_file_exists = glacier_file.exists()
-                
-                # For snowmelt: combine GloGEM + HBV if coupled, otherwise just HBV
-                snowmelt_file = run_output_dir / f"{gauge_id}_{model_type}_TO_LAKE_STORAGE_Daily_Average_BySubbasin.csv"
-                
-                # Check if required files exist
-                if hydro_file.exists() and glacier_file_exists and snowmelt_file.exists():
-                    
-                    # Process hydrograph data (unchanged)
-                    try:
-                        df_hydro = pd.read_csv(hydro_file)
-                        df_hydro['date'] = pd.to_datetime(df_hydro['date'])
-                        mask = (df_hydro['date'] >= validation_start) & (df_hydro['date'] <= validation_end)
-                        monthly_hydro = df_hydro[mask].copy()
-                        
-                        if len(monthly_hydro) > 0:
-                            monthly_hydro['month'] = monthly_hydro['date'].dt.month
-                            
-                            sim_col = None
-                            for col in df_hydro.columns:
-                                if '[m3/s]' in col and 'observed' not in col.lower():
-                                    sim_col = col
-                                    break
-                            
-                            if sim_col:
-                                monthly_mean_hydro = monthly_hydro.groupby('month')[sim_col].mean()
-                                hydrographs.append(monthly_mean_hydro)
-                            else:
-                                print(f"    Warning: No simulation column found in hydrograph file for run {idx}")
-                                failed_runs += 1
-                                continue
-                        else:
-                            failed_runs += 1
-                            continue
-                            
-                    except Exception as e:
-                        print(f"    Error processing hydrograph data for run {idx}: {e}")
-                        failed_runs += 1
-                        continue
-                    
-                    # Process glacier melt data
-                    try:
-                        if coupled and glogem_glacier_data is not None:
-                            # Use pre-loaded GloGEM data (same for all runs)
-                            monthly_mean_glacier = glogem_glacier_data
-                            glacier_melts.append(monthly_mean_glacier)
-                            print(f"    Using GloGEM glacier data for run {idx}")
-                        else:
-                            # Use HBV glacier data (existing code)
-                            df_glacier = pd.read_csv(glacier_file, skiprows=1)
-                            
-                            # Handle date column
-                            if 'day' in df_glacier.columns:
-                                df_glacier['date'] = pd.to_datetime(df_glacier['day'])
-                            elif 'date' in df_glacier.columns:
-                                df_glacier['date'] = pd.to_datetime(df_glacier['date'])
-                            else:
-                                print(f"    Warning: No date column found in glacier file for run {idx}")
-                                failed_runs += 1
-                                continue
-                            
-                            # Filter for validation period and calculate rates
-                            glacier_mask = (df_glacier['date'] >= validation_start) & (df_glacier['date'] <= validation_end)
-                            monthly_glacier = df_glacier[glacier_mask].copy()
-                            
-                            if len(monthly_glacier) > 0:
-                                monthly_glacier['month'] = monthly_glacier['date'].dt.month
-                                
-                                if 'mean' in df_glacier.columns:
-                                    monthly_glacier['glacier_melt_rate'] = monthly_glacier['mean'].diff().fillna(0)
-                                    monthly_glacier['glacier_melt_rate'] = monthly_glacier['glacier_melt_rate'].clip(lower=0)
-                                    
-                                    monthly_mean_glacier = monthly_glacier.groupby('month')['glacier_melt_rate'].mean()
-                                    glacier_melts.append(monthly_mean_glacier)
-                                else:
-                                    print(f"    Warning: No 'mean' column found in glacier file for run {idx}")
-                                    failed_runs += 1
-                                    continue
-                            else:
-                                failed_runs += 1
-                                continue
-                        
-                    except Exception as e:
-                        print(f"    Error processing glacier data for run {idx}: {e}")
-                        failed_runs += 1
-                        continue
-                    
-                    # Process snowmelt data
-                    try:
-                        # Always load HBV snowmelt
-                        df_snowmelt = pd.read_csv(snowmelt_file, skiprows=1)
-                        
-                        # Handle date column
-                        if 'day' in df_snowmelt.columns:
-                            df_snowmelt['date'] = pd.to_datetime(df_snowmelt['day'])
-                        elif 'date' in df_snowmelt.columns:
-                            df_snowmelt['date'] = pd.to_datetime(df_snowmelt['date'])
-                        else:
-                            print(f"    Warning: No date column found in snowmelt file for run {idx}")
-                            failed_runs += 1
-                            continue
-                        
-                        # Filter for validation period
-                        snowmelt_mask = (df_snowmelt['date'] >= validation_start) & (df_snowmelt['date'] <= validation_end)
-                        monthly_snowmelt = df_snowmelt[snowmelt_mask].copy()
-                        
-                        if len(monthly_snowmelt) > 0:
-                            monthly_snowmelt['month'] = monthly_snowmelt['date'].dt.month
-                            
-                            # Calculate daily snowmelt rates from cumulative values
-                            if 'mean' in df_snowmelt.columns:
-                                monthly_snowmelt['snowmelt_rate'] = monthly_snowmelt['mean'].diff().fillna(0)
-                                monthly_snowmelt['snowmelt_rate'] = monthly_snowmelt['snowmelt_rate'].clip(lower=0)
-                                
-                                # Calculate monthly mean HBV snowmelt
-                                hbv_snowmelt = monthly_snowmelt.groupby('month')['snowmelt_rate'].mean()
-                                
-                                # If coupled, add GloGEM snowmelt
-                                if coupled and glogem_snowmelt_data is not None:
-                                    # Combine HBV + GloGEM snowmelt
-                                    combined_snowmelt = hbv_snowmelt.add(glogem_snowmelt_data, fill_value=0)
-                                    snowmelts.append(combined_snowmelt)
-                                    print(f"    Combined HBV + GloGEM snowmelt for run {idx}")
-                                else:
-                                    # Use only HBV snowmelt
-                                    snowmelts.append(hbv_snowmelt)
-                                
-                            else:
-                                print(f"    Warning: No 'mean' column found in snowmelt file for run {idx}")
-                                failed_runs += 1
-                                continue
-                        else:
-                            failed_runs += 1
-                            continue
-                            
-                    except Exception as e:
-                        print(f"    Error processing snowmelt data for run {idx}: {e}")
-                        failed_runs += 1
-                        continue
-                    
-                    # If we got here, all three datasets were processed successfully
-                    successful_runs += 1
-                    
-                    # Clean up run directory
-                    cleanup_raven_run_directory(run_dir)
-                        
-                else:
-                    if not hydro_file.exists():
-                        print(f"    Warning: Hydrograph file not found for run {idx}")
-                    if not glacier_file_exists:
-                        print(f"    Warning: Glacier file not found for run {idx}")
-                    if not snowmelt_file.exists():
-                        print(f"    Warning: Snowmelt file not found for run {idx}")
                     failed_runs += 1
             else:
-                print(f"    Warning: Raven execution failed for run {idx}")
-                print(f"    Error: {result.stderr}")
                 failed_runs += 1
                         
         except Exception as e:
-            print(f"    Error in run {idx}: {e}")
             failed_runs += 1
             continue
 
     print(f"Successfully processed {successful_runs} out of {n_runs} runs ({failed_runs} failed)")
     
-    if len(hydrographs) == 0 or len(glacier_melts) == 0 or len(snowmelts) == 0:
-        print("ERROR: Not all datasets were successfully generated. Cannot create plots.")
-        print(f"  Hydrographs: {len(hydrographs)}")
-        print(f"  Glacier melt: {len(glacier_melts)} ({'GloGEM' if coupled else 'HBV'})")
-        print(f"  Snowmelt: {len(snowmelts)} ({'HBV+GloGEM' if coupled else 'HBV'})")
+    if len(hydrographs) == 0:
+        print("No hydrographs generated. Cannot create plot.")
         return None
 
-    # 7. Load observed data for hydrograph comparison
+    # 7. Load observed data and create final plot
     obs_data = load_hydrograph_data(config)
     if obs_data is None:
-        print("Warning: Could not load observed hydrograph data")
-        obs_mean = None
-    else:
-        mask = (obs_data['date'] >= validation_start) & (obs_data['date'] <= validation_end)
-        obs_monthly = obs_data[mask].copy()
-        obs_monthly['month'] = obs_monthly['date'].dt.month
-        obs_mean = obs_monthly.groupby('month')['obs_Q'].mean()
+        print("Error: Could not load observed hydrograph data")
+        return None
+    
+    mask = (obs_data['date'] >= validation_start) & (obs_data['date'] <= validation_end)
+    obs_monthly = obs_data[mask].copy()
+    obs_monthly['month'] = obs_monthly['date'].dt.month
+    obs_mean = obs_monthly.groupby('month')['obs_Q'].mean()
 
-    # 8. Create three separate plots
-    months = range(1, 13)
-    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    # 8. Create final plot
+    plt.figure(figsize=(12, 7))
     
-    # PLOT 1: Streamflow uncertainty
-    plt.figure(figsize=(14, 8))
-    
-    # Plot observed data first (if available)
-    if obs_mean is not None:
-        plt.plot(obs_mean.index, obs_mean.values, 'k-', linewidth=3, label='Observed', zorder=4)
+    # Plot observed data first
+    plt.plot(obs_mean.index, obs_mean.values, 'k-', linewidth=2.5, label='Observed')
     
     # Plot all simulations except the best one (in grey)
     for i, monthly_mean in enumerate(hydrographs[1:], 1):  # Skip first (best) simulation
         plt.plot(monthly_mean.index, monthly_mean.values, color=color_others, 
                 linewidth=1, alpha=0.5, zorder=1)
     
-    # Plot the best simulation on top
+    # Plot the best simulation on top (highest zorder)
     if len(hydrographs) > 0:
         plt.plot(hydrographs[0].index, hydrographs[0].values, color=color_best, 
-                linewidth=3, label='Best Simulation', zorder=3)
+                linewidth=2, label='Best Simulation', zorder=3)
     
-    # Add grey line to legend
+    # Add a single grey line to legend
     if len(hydrographs) > 1:
         plt.plot([], [], color=color_others, linewidth=1, alpha=0.5, 
                 label=f'Other {len(hydrographs)-1} Simulations')
     
     plt.xlabel('Month', fontsize=14)
     plt.ylabel('Discharge (m³/s)', fontsize=14)
-    plt.title(f'Streamflow Regime Uncertainty - {len(hydrographs)} Best Runs\nCatchment {gauge_id}', 
-             fontsize=16, fontweight='bold')
-    plt.xticks(months, month_names)
-    plt.legend(fontsize=12)
+    plt.title(f'Regime for {len(hydrographs)} Best Runs - Catchment {gauge_id}', fontsize=16)
+    plt.xticks(range(1, 13), ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
     plt.grid(True, linestyle='--', alpha=0.7, zorder=0)
+    plt.legend()
     plt.tight_layout()
     
-    # Save streamflow plot
-    save_path_hydro = plot_dirs['hydrographs'] / f'streamflow_uncertainty_{len(hydrographs)}_best_runs_{gauge_id}.png'
-    plt.savefig(save_path_hydro, dpi=300, bbox_inches='tight')
-    print(f"Saved streamflow uncertainty plot to: {save_path_hydro}")
+    # Save plot
+    save_path = plot_dirs['hydrographs'] / f'regime_{len(hydrographs)}_best_runs_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"Saved regime plot to: {save_path}")
     plt.show()
     
-    # PLOT 2: Glacier melt uncertainty
-    plt.figure(figsize=(14, 8))
-    
-    # Plot all glacier melt simulations except the best one (in grey)
-    for i, monthly_glacier in enumerate(glacier_melts[1:], 1):  # Skip first (best) simulation
-        plt.plot(monthly_glacier.index, monthly_glacier.values, color=color_others, 
-                linewidth=1, alpha=0.5, zorder=1)
-    
-    # Plot the best glacier melt simulation on top
-    if len(glacier_melts) > 0:
-        plt.plot(glacier_melts[0].index, glacier_melts[0].values, color='red', 
-                linewidth=3, label='Best Glacier Melt', zorder=3)
-    
-    # Add grey line to legend
-    if len(glacier_melts) > 1:
-        plt.plot([], [], color=color_others, linewidth=1, alpha=0.5, 
-                label=f'Other {len(glacier_melts)-1} Simulations')
-    
-    plt.xlabel('Month', fontsize=14)
-    plt.ylabel('Glacier Melt Rate (mm/day)', fontsize=14)
-    plt.title(f'Glacier Melt Uncertainty - {len(glacier_melts)} Best Runs\nCatchment {gauge_id} ({'GloGEM' if coupled else 'HBV'})', 
-             fontsize=16, fontweight='bold')
-    plt.xticks(months, month_names)
-    plt.legend(fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.7, zorder=0)
-    plt.tight_layout()
-    
-    # Save glacier melt plot
-    save_path_glacier = plot_dirs['contributions'] / f'glacier_melt_uncertainty_{len(glacier_melts)}_best_runs_{gauge_id}.png'
-    plt.savefig(save_path_glacier, dpi=300, bbox_inches='tight')
-    print(f"Saved glacier melt uncertainty plot to: {save_path_glacier}")
-    plt.show()
-    
-    # PLOT 3: Snowmelt uncertainty
-    plt.figure(figsize=(14, 8))
-    
-    # Plot all snowmelt simulations except the best one (in grey)
-    for i, monthly_snowmelt in enumerate(snowmelts[1:], 1):  # Skip first (best) simulation
-        plt.plot(monthly_snowmelt.index, monthly_snowmelt.values, color=color_others, 
-                linewidth=1, alpha=0.5, zorder=1)
-    
-    # Plot the best snowmelt simulation on top
-    if len(snowmelts) > 0:
-        plt.plot(snowmelts[0].index, snowmelts[0].values, color='deepskyblue', 
-                linewidth=3, label='Best Snowmelt', zorder=3)
-    
-    # Add grey line to legend
-    if len(snowmelts) > 1:
-        plt.plot([], [], color=color_others, linewidth=1, alpha=0.5, 
-                label=f'Other {len(snowmelts)-1} Simulations')
-    
-    plt.xlabel('Month', fontsize=14)
-    plt.ylabel('Snowmelt Rate (mm/day)', fontsize=14)
-    plt.title(f'Snowmelt Uncertainty - {len(snowmelts)} Best Runs\nCatchment {gauge_id} ({'HBV+GloGEM' if coupled else 'HBV'})', 
-             fontsize=16, fontweight='bold')
-    plt.xticks(months, month_names)
-    plt.legend(fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.7, zorder=0)
-    plt.tight_layout()
-    
-    # Save snowmelt plot
-    save_path_snowmelt = plot_dirs['contributions'] / f'snowmelt_uncertainty_{len(snowmelts)}_best_runs_{gauge_id}.png'
-    plt.savefig(save_path_snowmelt, dpi=300, bbox_inches='tight')
-    print(f"Saved snowmelt uncertainty plot to: {save_path_snowmelt}")
-    plt.show()
-    
-    # Print comprehensive summary
-    print(f"\nUncertainty Analysis Summary for Catchment {gauge_id}:")
-    print(f"  Successfully processed: {successful_runs}/{n_runs} runs")
-    print(f"  Mode: {'Coupled (GloGEM+HBV)' if coupled else 'Uncoupled (HBV only)'}")
+    print(f"\nRegime Analysis Summary for Catchment {gauge_id}:")
+    print(f"  Successfully processed: {len(hydrographs)}/{n_runs} runs")
     print(f"  Validation period: {validation_start} to {validation_end}")
     print(f"  Best KGE: {best_runs['KGE'].iloc[0]:.4f}")
     print(f"  Worst KGE in selection: {best_runs['KGE'].iloc[-1]:.4f}")
     
-    # Calculate uncertainty statistics for all three components
-    if len(glacier_melts) > 1:
-        glacier_array = np.array([gm.values for gm in glacier_melts])
-        glacier_mean = np.mean(glacier_array, axis=0)
-        glacier_std = np.std(glacier_array, axis=0)
-        
-        print(f"\nGlacier Melt Uncertainty Statistics:")
-        for month, mean_val, std_val in zip(month_names, glacier_mean, glacier_std):
-            cv = (std_val/mean_val*100) if mean_val > 0 else 0
-            print(f"  {month}: {mean_val:.3f} ± {std_val:.3f} mm/day (CV: {cv:.1f}%)")
-    
-    if len(snowmelts) > 1:
-        snowmelt_array = np.array([sm.values for sm in snowmelts])
-        snowmelt_mean = np.mean(snowmelt_array, axis=0)
-        snowmelt_std = np.std(snowmelt_array, axis=0)
-        
-        print(f"\nSnowmelt Uncertainty Statistics:")
-        for month, mean_val, std_val in zip(month_names, snowmelt_mean, snowmelt_std):
-            cv = (std_val/mean_val*100) if mean_val > 0 else 0
-            print(f"  {month}: {mean_val:.3f} ± {std_val:.3f} mm/day (CV: {cv:.1f}%)")
-    
-    return {
-        'hydrographs': hydrographs,
-        'glacier_melts': glacier_melts,
-        'snowmelts': snowmelts,
-        'best_kge': best_runs['KGE'].iloc[0],
-        'successful_runs': successful_runs,
-        'save_paths': {
-            'streamflow': save_path_hydro,
-            'glacier_melt': save_path_glacier,
-            'snowmelt': save_path_snowmelt
-        }
-    }
+    return hydrographs
 
 #--------------------------------------------------------------------------------
+#################################### run all ####################################
+#--------------------------------------------------------------------------------
 
-def plot_combined_uncertainty_with_envelope(config, plot_dirs, template_dir=None, raven_exe=None, n_runs=100,
-                                          validation_start=None, validation_end=None):
+def run_complete_postprocessing(config, validation_start=None, validation_end=None):
     """
-    Create three combined uncertainty plots with presentation-style formatting:
-    1. Best run only (clean for presentations)
-    2. Spaghetti plot with all runs as individual lines
-    3. Best run with full uncertainty envelope (min-max range)
+    Run complete postprocessing analysis for a single model configuration.
+    Creates all diagnostic plots and analyses.
     
-    Also calculates and displays contribution statistics.
+    Parameters:
+    -----------
+    config : dict
+        Configuration dictionary from namelist
+    validation_start : str, optional
+        Start date for validation period (defaults to cali_end_date from config)
+    validation_end : str, optional
+        End date for validation period (defaults to end_date from config)
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing results from all analyses
     """
     
-    # First run the main uncertainty analysis to get the data
-    uncertainty_results = plot_regime_100_best_runs(
-        config, plot_dirs, template_dir, raven_exe, n_runs,
-        validation_start, validation_end
-    )
-    
-    if uncertainty_results is None:
-        print("ERROR: Could not generate uncertainty data")
-        return None
-    
-    hydrographs = uncertainty_results['hydrographs']
-    glacier_melts = uncertainty_results['glacier_melts']
-    snowmelts = uncertainty_results['snowmelts']
     gauge_id = config['gauge_id']
+    model_type = config.get('model_type', 'HBV')
     coupled = config.get('coupled', False)
     
-    # Load catchment area for unit conversion
-    config_dir = Path(config['main_dir']) / config['config_dir']
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-    catchment_shape_file = topo_dir / "HRU.shp"
+    print(f"\n{'='*80}")
+    print(f"COMPLETE POSTPROCESSING ANALYSIS")
+    print(f"{'='*80}")
+    print(f"Catchment: {gauge_id}")
+    print(f"Model: {model_type}")
+    print(f"Coupled: {coupled}")
+    print(f"Validation: {validation_start or config.get('cali_end_date', 'auto')} to {validation_end or config.get('end_date', 'auto')}")
+    print(f"{'='*80}")
     
-    conversion_factor = None
-    if catchment_shape_file.exists():
-        try:
-            import geopandas as gpd
-            hru_gdf = gpd.read_file(catchment_shape_file)
-            total_area_km2 = hru_gdf['Area_km2'].sum()
-            conversion_factor = total_area_km2 * 1000000 / 1000 / 86400
-            print(f"  - Catchment area: {total_area_km2:.2f} km²")
-        except Exception as e:
-            print(f"  - Warning: Could not load catchment area: {e}")
-            conversion_factor = None
-    
-    # Convert glacier melt and snowmelt from mm/day to m³/s if possible
-    if conversion_factor is not None:
-        glacier_melts_converted = []
-        for glacier_melt in glacier_melts:
-            glacier_melt_converted = glacier_melt * conversion_factor
-            glacier_melts_converted.append(glacier_melt_converted)
-        glacier_melts = glacier_melts_converted
-        
-        snowmelts_converted = []
-        for snowmelt in snowmelts:
-            snowmelt_converted = snowmelt * conversion_factor
-            snowmelts_converted.append(snowmelt_converted)
-        snowmelts = snowmelts_converted
-        
-        print(f"  - Successfully converted glacier melt and snowmelt to m³/s")
-    
-    # Load observed data for streamflow comparison
-    obs_data = load_hydrograph_data(config)
-    obs_mean = None
-    if obs_data is not None:
-        if validation_start is None:
-            validation_start = config.get('cali_end_date', '2010-01-01')
-        if validation_end is None:
-            validation_end = config.get('end_date', '2020-12-31')
-        
-        mask = (obs_data['date'] >= validation_start) & (obs_data['date'] <= validation_end)
-        obs_monthly = obs_data[mask].copy()
-        obs_monthly['month'] = obs_monthly['date'].dt.month
-        obs_mean = obs_monthly.groupby('month')['obs_Q'].mean()
-    
-    months = range(1, 13)
-    month_names_short = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
-    
-    # Set colors based on coupled setting
-    sim_color = '#82b182' if coupled else '#976c03'
-    
-    # Calculate min-max envelope and best run
-    def calculate_envelope(data_list):
-        if len(data_list) < 2:
-            return None, None, None
-        
-        data_array = np.array([sim.reindex(months, fill_value=0).values for sim in data_list])
-        
-        min_vals = np.min(data_array, axis=0)
-        max_vals = np.max(data_array, axis=0)
-        best_vals = data_array[0]
-        
-        return min_vals, max_vals, best_vals
-    
-    # Calculate envelopes for each component
-    hydro_min, hydro_max, hydro_best = calculate_envelope(hydrographs)
-    glacier_min, glacier_max, glacier_best = calculate_envelope(glacier_melts)
-    snow_min, snow_max, snow_best = calculate_envelope(snowmelts)
-    
-    # =================================================================
-    # CALCULATE CONTRIBUTION STATISTICS
-    # =================================================================
-    
-    print(f"\n{'='*60}")
-    print(f"CALCULATING CONTRIBUTION STATISTICS")
-    print(f"{'='*60}")
-    
-    contribution_data = []
-    contribution_stats = None
-    unit_label = 'm³/s' if conversion_factor is not None else 'mm/day'
-    
-    # Calculate yearly contribution percentages for all runs
-    if len(hydrographs) > 0 and len(glacier_melts) > 0 and len(snowmelts) > 0:
-        
-        for i in range(len(hydrographs)):
-            if i >= len(glacier_melts) or i >= len(snowmelts):
-                continue
-                
-            # Get annual means for this run
-            hydro_annual = hydrographs[i].mean()  # Mean monthly discharge
-            glacier_annual = glacier_melts[i].mean()  # Mean monthly glacier melt
-            snowmelt_annual = snowmelts[i].mean()  # Mean monthly snowmelt
-            
-            # Skip if any values are zero or invalid
-            if hydro_annual <= 0 or not np.isfinite(hydro_annual):
-                continue
-            
-            # Calculate contributions as percentages of streamflow
-            glacier_contribution = (glacier_annual / hydro_annual) * 100
-            snowmelt_contribution = (snowmelt_annual / hydro_annual) * 100
-            total_melt_contribution = glacier_contribution + snowmelt_contribution
-            
-            # Store the data
-            contribution_data.append({
-                'run': i,
-                'streamflow_annual': hydro_annual,
-                'glacier_melt_annual': glacier_annual,
-                'snowmelt_annual': snowmelt_annual,
-                'glacier_contribution_pct': glacier_contribution,
-                'snowmelt_contribution_pct': snowmelt_contribution,
-                'total_melt_contribution_pct': total_melt_contribution
-            })
-        
-        if len(contribution_data) > 1:
-            # Convert to DataFrame for easier statistics
-            contrib_df = pd.DataFrame(contribution_data)
-            
-            # Calculate statistics
-            contribution_stats = {
-                'glacier_contribution': {
-                    'min': contrib_df['glacier_contribution_pct'].min(),
-                    'max': contrib_df['glacier_contribution_pct'].max(),
-                    'mean': contrib_df['glacier_contribution_pct'].mean(),
-                    'median': contrib_df['glacier_contribution_pct'].median(),
-                    'std': contrib_df['glacier_contribution_pct'].std(),
-                    'range': contrib_df['glacier_contribution_pct'].max() - contrib_df['glacier_contribution_pct'].min()
-                },
-                'snowmelt_contribution': {
-                    'min': contrib_df['snowmelt_contribution_pct'].min(),
-                    'max': contrib_df['snowmelt_contribution_pct'].max(),
-                    'mean': contrib_df['snowmelt_contribution_pct'].mean(),
-                    'median': contrib_df['snowmelt_contribution_pct'].median(),
-                    'std': contrib_df['snowmelt_contribution_pct'].std(),
-                    'range': contrib_df['snowmelt_contribution_pct'].max() - contrib_df['snowmelt_contribution_pct'].min()
-                },
-                'total_melt_contribution': {
-                    'min': contrib_df['total_melt_contribution_pct'].min(),
-                    'max': contrib_df['total_melt_contribution_pct'].max(),
-                    'mean': contrib_df['total_melt_contribution_pct'].mean(),
-                    'median': contrib_df['total_melt_contribution_pct'].median(),
-                    'std': contrib_df['total_melt_contribution_pct'].std(),
-                    'range': contrib_df['total_melt_contribution_pct'].max() - contrib_df['total_melt_contribution_pct'].min()
-                }
-            }
-            
-            print(f"Successfully calculated contribution statistics for {len(contribution_data)} runs")
-        else:
-            print("Not enough valid runs for contribution statistics")
-            contribution_stats = None
-    
-    # ==============================================
-    # PLOT 1: BEST RUNS ONLY - PRESENTATION STYLE
-    # ==============================================
-    
-    plt.figure(figsize=(16, 12))
-    
-    # Plot observed streamflow first (if available)
-    if obs_mean is not None:
-        plt.plot(months, obs_mean.reindex(months).values, 'k-', linewidth=6, 
-                label='Observed', zorder=10)
-    
-    # Plot the best runs
-    if hydro_best is not None:
-        plt.plot(months, hydro_best, color=sim_color, linewidth=5, 
-                label='Simulated', zorder=8)
-    
-    if glacier_best is not None:
-        plt.plot(months, glacier_best, color='darkgray', linewidth=5, 
-                label='Glacier Melt', zorder=6)
-    
-    if snow_best is not None:
-        plt.plot(months, snow_best, color='lightblue', linewidth=5, 
-                label='Snowmelt', zorder=4)
-    
-    # Formatting for presentation
-    plt.ylabel('Discharge (m³/s)', fontsize=32, fontweight='bold')
-    plt.xticks(months, month_names_short, fontsize=32, fontweight='bold')
-    plt.yticks(fontsize=32, fontweight='bold')
-    plt.grid(True, alpha=0.3, zorder=0)
-    plt.legend(loc='best', fontsize=28)
-    
-    plt.tight_layout()
-    
-    # Save best runs only plot
-    save_path_best = plot_dirs['contributions'] / f'best_run_only_presentation_{gauge_id}.png'
-    plt.savefig(save_path_best, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Saved best runs only plot to: {save_path_best}")
-    plt.show()
-    
-    # ==============================================
-    # PLOT 2: SPAGHETTI PLOT - ALL INDIVIDUAL RUNS
-    # ==============================================
-    
-    plt.figure(figsize=(16, 12))
-    
-    # Plot all individual runs as background lines (spaghetti)
-    # Streamflow - all runs except the best one
-    for i, monthly_mean in enumerate(hydrographs[1:], 1):
-        alpha_val = max(0.1, min(0.4, 20/len(hydrographs)))  # Adjust alpha based on number of runs
-        plt.plot(months, monthly_mean.reindex(months, fill_value=0).values, 
-                color=sim_color, linewidth=2, alpha=alpha_val, zorder=2)
-    
-    # Glacier melt - all runs except the best one
-    for i, monthly_glacier in enumerate(glacier_melts[1:], 1):
-        alpha_val = max(0.1, min(0.4, 20/len(glacier_melts)))
-        plt.plot(months, monthly_glacier.reindex(months, fill_value=0).values, 
-                color='darkgray', linewidth=2, alpha=alpha_val, zorder=2)
-    
-    # Snowmelt - all runs except the best one
-    for i, monthly_snow in enumerate(snowmelts[1:], 1):
-        alpha_val = max(0.1, min(0.4, 20/len(snowmelts)))
-        plt.plot(months, monthly_snow.reindex(months, fill_value=0).values, 
-                color='lightblue', linewidth=2, alpha=alpha_val, zorder=2)
-    
-    # Plot observed streamflow (if available)
-    if obs_mean is not None:
-        plt.plot(months, obs_mean.reindex(months).values, 'k-', linewidth=6, 
-                label='Observed', zorder=10)
-    
-    # Plot best runs on top with thicker lines
-    if hydro_best is not None:
-        plt.plot(months, hydro_best, color=sim_color, linewidth=5, 
-                label='Simulated', zorder=8)
-    
-    if glacier_best is not None:
-        plt.plot(months, glacier_best, color='darkgray', linewidth=5, 
-                label='Glacier Melt', zorder=6)
-    
-    if snow_best is not None:
-        plt.plot(months, snow_best, color='lightblue', linewidth=5, 
-                label='Snowmelt', zorder=4)
-    
-    # Add background lines to legend (invisible lines just for legend)
-    #if len(hydrographs) > 1:
-    #    plt.plot([], [], color='gray', linewidth=2, alpha=0.3, 
-    #            label=f'{len(hydrographs)-1} Other Runs')
-    
-    # Formatting for presentation
-    plt.ylabel('Discharge (m³/s)', fontsize=32, fontweight='bold')
-    plt.xticks(months, month_names_short, fontsize=32, fontweight='bold')
-    plt.yticks(fontsize=32, fontweight='bold')
-    plt.grid(True, alpha=0.3, zorder=0)
-    plt.legend(loc='best', fontsize=28)
-    
-    plt.tight_layout()
-    
-    # Save spaghetti plot
-    save_path_spaghetti = plot_dirs['contributions'] / f'spaghetti_plot_presentation_{gauge_id}.png'
-    plt.savefig(save_path_spaghetti, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Saved spaghetti plot to: {save_path_spaghetti}")
-    plt.show()
-    
-    # ==============================================
-    # PLOT 3: UNCERTAINTY ENVELOPE - PRESENTATION STYLE
-    # ==============================================
-    
-    plt.figure(figsize=(16, 12))
-    
-    # Plot uncertainty envelopes (fill between min and max)
-    if hydro_min is not None and hydro_max is not None:
-        plt.fill_between(months, hydro_min, hydro_max, alpha=0.4, color=sim_color, 
-                        zorder=1)
-    
-    if glacier_min is not None and glacier_max is not None:
-        plt.fill_between(months, glacier_min, glacier_max, alpha=0.4, color='darkgray', 
-                        zorder=1)
-    
-    if snow_min is not None and snow_max is not None:
-        plt.fill_between(months, snow_min, snow_max, alpha=0.4, color='lightblue', 
-                        zorder=1)
-    
-    # Plot observed streamflow (if available)
-    if obs_mean is not None:
-        plt.plot(months, obs_mean.reindex(months).values, 'k-', linewidth=6, 
-                label='Observed', zorder=10)
-    
-    # Plot best runs on top
-    if hydro_best is not None:
-        plt.plot(months, hydro_best, color=sim_color, linewidth=5, 
-                label='Simulated', zorder=8)
-    
-    if glacier_best is not None:
-        plt.plot(months, glacier_best, color='darkgray', linewidth=5, 
-                label='Glacier Melt', zorder=6)
-    
-    if snow_best is not None:
-        plt.plot(months, snow_best, color='lightblue', linewidth=5, 
-                label='Snowmelt', zorder=4)
-    
-    # Formatting for presentation
-    plt.ylabel('Discharge (m³/s)', fontsize=32, fontweight='bold')
-    plt.xticks(months, month_names_short, fontsize=32, fontweight='bold')
-    plt.yticks(fontsize=32, fontweight='bold')
-    plt.grid(True, alpha=0.3, zorder=0)
-    plt.legend(loc='best', fontsize=28)
-    
-    plt.tight_layout()
-    
-    # Save uncertainty envelope plot
-    save_path_envelope = plot_dirs['contributions'] / f'uncertainty_envelope_presentation_{gauge_id}.png'
-    plt.savefig(save_path_envelope, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Saved uncertainty envelope plot to: {save_path_envelope}")
-    plt.show()
-    
-    # =================================================================
-    # PRINT CONTRIBUTION STATISTICS
-    # =================================================================
-    if contribution_stats:
-        print(f"\n{'='*60}")
-        print(f"YEARLY CONTRIBUTION STATISTICS - CATCHMENT {gauge_id}")
-        print(f"{'='*60}")
-        print(f"Number of runs analyzed: {len(contribution_data)}")
-        print(f"Validation period: {validation_start} to {validation_end}")
-        
-        print(f"\nGLACIER MELT CONTRIBUTION TO STREAMFLOW:")
-        print(f"  Range: {contribution_stats['glacier_contribution']['min']:.1f}% - {contribution_stats['glacier_contribution']['max']:.1f}%")
-        print(f"  Mean: {contribution_stats['glacier_contribution']['mean']:.1f}% ± {contribution_stats['glacier_contribution']['std']:.1f}%")
-        print(f"  Median: {contribution_stats['glacier_contribution']['median']:.1f}%")
-        print(f"  Variation range: {contribution_stats['glacier_contribution']['range']:.1f} percentage points")
-        
-        print(f"\nSNOWMELT CONTRIBUTION TO STREAMFLOW:")
-        print(f"  Range: {contribution_stats['snowmelt_contribution']['min']:.1f}% - {contribution_stats['snowmelt_contribution']['max']:.1f}%")
-        print(f"  Mean: {contribution_stats['snowmelt_contribution']['mean']:.1f}% ± {contribution_stats['snowmelt_contribution']['std']:.1f}%")
-        print(f"  Median: {contribution_stats['snowmelt_contribution']['median']:.1f}%")
-        print(f"  Variation range: {contribution_stats['snowmelt_contribution']['range']:.1f} percentage points")
-        
-        print(f"\nTOTAL MELT CONTRIBUTION TO STREAMFLOW:")
-        print(f"  Range: {contribution_stats['total_melt_contribution']['min']:.1f}% - {contribution_stats['total_melt_contribution']['max']:.1f}%")
-        print(f"  Mean: {contribution_stats['total_melt_contribution']['mean']:.1f}% ± {contribution_stats['total_melt_contribution']['std']:.1f}%")
-        print(f"  Median: {contribution_stats['total_melt_contribution']['median']:.1f}%")
-        print(f"  Variation range: {contribution_stats['total_melt_contribution']['range']:.1f} percentage points")
-    
-    # Print summary statistics
-    if hydro_min is not None and hydro_max is not None:
-        print(f"\nUncertainty Range Summary for Catchment {gauge_id}:")
-        print(f"  Number of simulations: {len(hydrographs)}")
-        print(f"  Units: {unit_label}")
-        if conversion_factor is not None:
-            print(f"  Conversion factor: {conversion_factor:.6f}")
-        print(f"  Streamflow uncertainty range:")
-        for month, min_val, max_val, best_val in zip(month_names_short, hydro_min, hydro_max, hydro_best):
-            range_val = max_val - min_val
-            print(f"    {month}: {min_val:.2f} - {max_val:.2f} (range: {range_val:.2f}, best: {best_val:.2f})")
-    
-    return {
-        'best_run_plot': save_path_best,
-        'spaghetti_plot': save_path_spaghetti,
-        'uncertainty_plot': save_path_envelope,
-        'successful_runs': uncertainty_results['successful_runs'],
-        'coupled': coupled,
-        'sim_color': sim_color,
-        'conversion_factor': conversion_factor,
-        'unit_label': unit_label,
-        'contribution_statistics': contribution_stats,
-        'contribution_data': contribution_data if contribution_data else None,
-        'uncertainty_ranges': {
-            'streamflow': {'min': hydro_min, 'max': hydro_max, 'best': hydro_best},
-            'glacier_melt': {'min': glacier_min, 'max': glacier_max, 'best': glacier_best},
-            'snowmelt': {'min': snow_min, 'max': snow_max, 'best': snow_best}
-        },
-        'summary': {
-            'glacier_range': f"{contribution_stats['glacier_contribution']['min']:.1f}% - {contribution_stats['glacier_contribution']['max']:.1f}%" if contribution_stats else "N/A",
-            'snowmelt_range': f"{contribution_stats['snowmelt_contribution']['min']:.1f}% - {contribution_stats['snowmelt_contribution']['max']:.1f}%" if contribution_stats else "N/A",
-            'total_melt_range': f"{contribution_stats['total_melt_contribution']['min']:.1f}% - {contribution_stats['total_melt_contribution']['max']:.1f}%" if contribution_stats else "N/A",
-            'glacier_variation': f"{contribution_stats['glacier_contribution']['range']:.1f} percentage points" if contribution_stats else "N/A",
-            'snowmelt_variation': f"{contribution_stats['snowmelt_contribution']['range']:.1f} percentage points" if contribution_stats else "N/A",
-            'total_melt_variation': f"{contribution_stats['total_melt_contribution']['range']:.1f} percentage points" if contribution_stats else "N/A"
-        }
-    }
-
-#--------------------------------------------------------------------------------
-
-def plot_combined_uncertainty_boxplots(config, plot_dirs, template_dir=None, raven_exe=None, n_runs=100,
-                                     validation_start=None, validation_end=None):
-    """
-    Create box plots showing uncertainty distributions for each component by month.
-    """
-    
-    # Get uncertainty data
-    uncertainty_results = plot_regime_100_best_runs(
-        config, plot_dirs, template_dir, raven_exe, n_runs,
-        validation_start, validation_end
-    )
-    
-    if uncertainty_results is None:
+    # Setup output directories
+    print("\n1. Setting up output directories...")
+    try:
+        plot_dirs = setup_output_directories(config)
+        print(f"   ✓ Created plot directories")
+    except Exception as e:
+        print(f"   ✗ Error setting up directories: {e}")
         return None
     
-    hydrographs = uncertainty_results['hydrographs']
-    glacier_melts = uncertainty_results['glacier_melts']
-    snowmelts = uncertainty_results['snowmelts']
-    gauge_id = config['gauge_id']
+    # Store results
+    results = {
+        'catchment_id': gauge_id,
+        'model_type': model_type,
+        'coupled': coupled,
+        'success': {},
+        'errors': {}
+    }
     
-    months = range(1, 13)
-    month_names = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
+    # ========================
+    # HYDROGRAPH ANALYSIS
+    # ========================
+    print("\n2. Hydrograph Analysis...")
     
-    # Prepare data for box plots
-    def prepare_boxplot_data(data_list):
-        boxplot_data = []
-        for month in months:
-            month_values = [sim.get(month, 0) for sim in data_list if month in sim.index]
-            boxplot_data.append(month_values)
-        return boxplot_data
+    try:
+        print("   2.1 Performance Metrics Summary...")
+        metrics_result = plot_performance_metrics_summary(config, plot_dirs)
+        results['performance_metrics'] = metrics_result
+        results['success']['performance_metrics'] = True
+        print("       ✓ Performance metrics calculated and plotted")
+    except Exception as e:
+        print(f"       ✗ Error with performance metrics: {e}")
+        results['errors']['performance_metrics'] = str(e)
+        results['success']['performance_metrics'] = False
     
-    hydro_boxdata = prepare_boxplot_data(hydrographs)
-    glacier_boxdata = prepare_boxplot_data(glacier_melts)
-    snow_boxdata = prepare_boxplot_data(snowmelts)
+    try:
+        print("   2.2 Hydrological Regime...")
+        regime_result = plot_hydrological_regime(config, plot_dirs, validation_start, validation_end)
+        results['hydrological_regime'] = regime_result
+        results['success']['hydrological_regime'] = True
+        print("       ✓ Hydrological regime plotted")
+    except Exception as e:
+        print(f"       ✗ Error with hydrological regime: {e}")
+        results['errors']['hydrological_regime'] = str(e)
+        results['success']['hydrological_regime'] = False
     
-    # Create three subplot box plots
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 12), sharex=True)
+    try:
+        print("   2.3 Hydrograph Time Series...")
+        timeseries_result = plot_hydrograph_timeseries(config, plot_dirs, validation_start, validation_end)
+        results['hydrograph_timeseries'] = timeseries_result
+        results['success']['hydrograph_timeseries'] = True
+        print("       ✓ Hydrograph time series plotted")
+    except Exception as e:
+        print(f"       ✗ Error with hydrograph time series: {e}")
+        results['errors']['hydrograph_timeseries'] = str(e)
+        results['success']['hydrograph_timeseries'] = False
     
-    # Streamflow box plots
-    bp1 = ax1.boxplot(hydro_boxdata, positions=months, widths=0.6, patch_artist=True)
-    for patch in bp1['boxes']:
-        patch.set_facecolor('#24868E')
-        patch.set_alpha(0.7)
-    ax1.set_ylabel('Discharge (m³/s)', fontsize=12)
-    ax1.set_title(f'Streamflow Uncertainty Distribution - Catchment {gauge_id}', fontsize=14, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
+    # ========================
+    # SWE ANALYSIS
+    # ========================
+    print("\n3. Snow Water Equivalent Analysis...")
     
-    # Glacier melt box plots
-    bp2 = ax2.boxplot(glacier_boxdata, positions=months, widths=0.6, patch_artist=True)
-    for patch in bp2['boxes']:
-        patch.set_facecolor('red')
-        patch.set_alpha(0.7)
-    ax2.set_ylabel('Glacier Melt (mm/day)', fontsize=12)
-    ax2.set_title('Glacier Melt Uncertainty Distribution', fontsize=14, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
+    try:
+        print("   3.1 Area-Weighted SWE Time Series...")
+        swe_timeseries_result = plot_area_weighted_swe_timeseries(config, plot_dirs, validation_start, validation_end)
+        results['swe_timeseries'] = swe_timeseries_result
+        results['success']['swe_timeseries'] = True
+        print("       ✓ SWE time series plotted")
+    except Exception as e:
+        print(f"       ✗ Error with SWE time series: {e}")
+        results['errors']['swe_timeseries'] = str(e)
+        results['success']['swe_timeseries'] = False
     
-    # Snowmelt box plots
-    bp3 = ax3.boxplot(snow_boxdata, positions=months, widths=0.6, patch_artist=True)
-    for patch in bp3['boxes']:
-        patch.set_facecolor('deepskyblue')
-        patch.set_alpha(0.7)
-    ax3.set_ylabel('Snowmelt (mm/day)', fontsize=12)
-    ax3.set_title('Snowmelt Uncertainty Distribution', fontsize=14, fontweight='bold')
-    ax3.set_xlabel('Month', fontsize=12)
-    ax3.grid(True, alpha=0.3)
+    try:
+        print("   3.2 SWE by Elevation Bands...")
+        swe_elevation_result = plot_swe_time_series_by_elevation(config, plot_dirs, validation_start=validation_start, validation_end=validation_end)
+        results['swe_elevation'] = swe_elevation_result
+        results['success']['swe_elevation'] = True
+        print("       ✓ SWE elevation bands plotted")
+    except Exception as e:
+        print(f"       ✗ Error with SWE elevation analysis: {e}")
+        results['errors']['swe_elevation'] = str(e)
+        results['success']['swe_elevation'] = False
     
-    # Format x-axis
-    ax3.set_xticks(months)
-    ax3.set_xticklabels(month_names)
+    # ========================
+    # PARAMETER ANALYSIS
+    # ========================
+    print("\n4. Parameter Analysis...")
     
-    plt.tight_layout()
+    try:
+        print("   4.1 Parameter Distributions...")
+        param_result = plot_parameter_boxplots(config, plot_dirs, top_n=100)
+        results['parameter_distributions'] = param_result
+        results['success']['parameter_distributions'] = True
+        print("       ✓ Parameter distributions plotted")
+    except Exception as e:
+        print(f"       ✗ Error with parameter analysis: {e}")
+        results['errors']['parameter_distributions'] = str(e)
+        results['success']['parameter_distributions'] = False
     
-    # Save plot
-    save_path = plot_dirs['contributions'] / f'combined_uncertainty_boxplots_{len(hydrographs)}_best_runs_{gauge_id}.png'
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Saved combined uncertainty boxplots to: {save_path}")
-    plt.show()
+    # ========================
+    # STORAGE ANALYSIS
+    # ========================
+    print("\n5. Storage Analysis...")
     
-    return fig
-
+    try:
+        print("   5.1 Storage Time Series...")
+        storage_result = plot_storage_timeseries(config, plot_dirs, validation_start, validation_end)
+        results['storage_timeseries'] = storage_result
+        results['success']['storage_timeseries'] = True
+        print("       ✓ Storage time series plotted")
+    except Exception as e:
+        print(f"       ✗ Error with storage analysis: {e}")
+        results['errors']['storage_timeseries'] = str(e)
+        results['success']['storage_timeseries'] = False
+    
+    # ========================
+    # CONTRIBUTIONS ANALYSIS
+    # ========================
+    print("\n6. Contributions Analysis...")
+    
+    try:
+        print("   6.1 Combined Contributions Dataframes...")
+        glacier_df, nonglacier_df = create_combined_contributions_dataframes(config, plot_dirs, validation_start, validation_end)
+        results['contributions_dataframes'] = {'glacier': glacier_df, 'nonglacier': nonglacier_df}
+        results['success']['contributions_dataframes'] = True
+        print("       ✓ Contributions dataframes created")
+    except Exception as e:
+        print(f"       ✗ Error creating contributions dataframes: {e}")
+        results['errors']['contributions_dataframes'] = str(e)
+        results['success']['contributions_dataframes'] = False
+    
+    try:
+        print("   6.2 Combined Contributions Comparison...")
+        combined_contrib_result = plot_combined_contributions_comparison(config, plot_dirs, validation_start, validation_end)
+        results['combined_contributions'] = combined_contrib_result
+        results['success']['combined_contributions'] = True
+        print("       ✓ Combined contributions comparison plotted")
+    except Exception as e:
+        print(f"       ✗ Error with combined contributions: {e}")
+        results['errors']['combined_contributions'] = str(e)
+        results['success']['combined_contributions'] = False
+    
+    try:
+        print("   6.3 Streamflow Contributions Regime...")
+        streamflow_contrib_result = plot_streamflow_contributions_regime(config, plot_dirs, validation_start, validation_end)
+        results['streamflow_contributions'] = streamflow_contrib_result
+        results['success']['streamflow_contributions'] = True
+        print("       ✓ Streamflow contributions regime plotted")
+    except Exception as e:
+        print(f"       ✗ Error with streamflow contributions: {e}")
+        results['errors']['streamflow_contributions'] = str(e)
+        results['success']['streamflow_contributions'] = False
+    
+    # Only run detailed contributions analysis if we have the required data
+    if coupled:
+        try:
+            print("   6.4 GloGEM Regime Analysis...")
+            glogem_result = plot_glogem_regime(config, plot_dirs, unit='mm')
+            results['glogem_regime'] = glogem_result
+            results['success']['glogem_regime'] = True
+            print("       ✓ GloGEM regime analysis completed")
+        except Exception as e:
+            print(f"       ✗ Error with GloGEM analysis: {e}")
+            results['errors']['glogem_regime'] = str(e)
+            results['success']['glogem_regime'] = False
+    else:
+        print("   6.4 GloGEM Analysis skipped (uncoupled mode)")
+        results['success']['glogem_regime'] = None
+    
+    try:
+        print("   6.5 Glacier Contributions Regime...")
+        glacier_contrib_result = plot_glacier_contributions_regime(config, plot_dirs, validation_start, validation_end)
+        results['glacier_contributions'] = glacier_contrib_result
+        results['success']['glacier_contributions'] = True
+        print("       ✓ Glacier contributions regime plotted")
+    except Exception as e:
+        print(f"       ✗ Error with glacier contributions: {e}")
+        results['errors']['glacier_contributions'] = str(e)
+        results['success']['glacier_contributions'] = False
+    
+    try:
+        print("   6.6 Non-Glacier Contributions Regime...")
+        nonglacier_contrib_result = plot_nonglacier_contributions_regime(config, plot_dirs, validation_start, validation_end)
+        results['nonglacier_contributions'] = nonglacier_contrib_result
+        results['success']['nonglacier_contributions'] = True
+        print("       ✓ Non-glacier contributions regime plotted")
+    except Exception as e:
+        print(f"       ✗ Error with non-glacier contributions: {e}")
+        results['errors']['nonglacier_contributions'] = str(e)
+        results['success']['nonglacier_contributions'] = False
+    
+    # ========================
+    # SUMMARY
+    # ========================
+    print(f"\n{'='*80}")
+    print(f"POSTPROCESSING SUMMARY")
+    print(f"{'='*80}")
+    
+    success_count = sum(1 for success in results['success'].values() if success is True)
+    total_analyses = len([k for k, v in results['success'].items() if v is not None])
+    error_count = len(results['errors'])
+    
+    print(f"Catchment: {gauge_id}")
+    print(f"Model: {model_type} ({'Coupled' if coupled else 'Uncoupled'})")
+    print(f"Successful analyses: {success_count}/{total_analyses}")
+    print(f"Failed analyses: {error_count}")
+    
+    if error_count > 0:
+        print(f"\nErrors encountered:")
+        for analysis, error in results['errors'].items():
+            print(f"  - {analysis}: {error}")
+    
+    # List successful outputs
+    config_dir = Path(config['main_dir']) / config['config_dir']
+    output_base = config_dir / f"catchment_{gauge_id}" / model_type / "output"
+    
+    print(f"\nOutput locations:")
+    print(f"  - Plots: {output_base / 'plots'}")
+    print(f"  - Results: {output_base / 'results'}")
+    
+    # Calculate success rate
+    success_rate = (success_count / total_analyses * 100) if total_analyses > 0 else 0
+    
+    if success_rate >= 80:
+        print(f"\n🎉 POSTPROCESSING COMPLETED SUCCESSFULLY! ({success_rate:.1f}% success rate)")
+    elif success_rate >= 60:
+        print(f"\n⚠️  POSTPROCESSING COMPLETED WITH SOME ISSUES ({success_rate:.1f}% success rate)")
+    else:
+        print(f"\n❌ POSTPROCESSING COMPLETED WITH SIGNIFICANT ISSUES ({success_rate:.1f}% success rate)")
+    
+    print(f"{'='*80}")
+    
+    return results
 
 #--------------------------------------------------------------------------------
 ################################ water balance #################################
@@ -5701,9 +4229,7 @@ def plot_yearly_precipitation_streamflow(config, plot_dirs, validation_start=Non
 
 def plot_precipitation_glacier_melt_vs_streamflow_scatter(config, plot_dirs, validation_start=None, validation_end=None):
     """
-    Create a scatter plot comparing input vs observed streamflow for each year.
-    - Coupled mode: Uses precipitation (which already includes glacier melt)
-    - Uncoupled mode: Uses precipitation + separate glacier melt
+    Create a scatter plot comparing (precipitation + glacier melt) vs observed streamflow for each year.
     
     Parameters:
     -----------
@@ -5726,7 +4252,7 @@ def plot_precipitation_glacier_melt_vs_streamflow_scatter(config, plot_dirs, val
     gauge_id = config['gauge_id']
     coupled = config.get('coupled', False)
     
-    print(f"Creating input vs streamflow scatter plot for catchment {gauge_id}:")
+    print(f"Creating precipitation + glacier melt vs streamflow scatter plot for catchment {gauge_id}:")
     print(f"  - Period: {validation_start} to {validation_end}")
     print(f"  - Coupled mode: {coupled}")
     
@@ -5752,6 +4278,12 @@ def plot_precipitation_glacier_melt_vs_streamflow_scatter(config, plot_dirs, val
         print("ERROR: Hydrograph file must contain 'obs_Q', 'sim_Q', and 'precip' columns")
         return None
     
+    # Load glacier contributions data
+    glacier_df = load_glacier_contributions_data(config, validation_start, validation_end)
+    if glacier_df is None:
+        print("ERROR: Could not load glacier contributions data")
+        return None
+    
     # Convert streamflow to mm/year
     try:
         config_dir = Path(config['main_dir']) / config['config_dir']
@@ -5775,6 +4307,7 @@ def plot_precipitation_glacier_melt_vs_streamflow_scatter(config, plot_dirs, val
     
     # Calculate yearly sums
     streamflow_filtered['year'] = streamflow_filtered['date'].dt.year
+    glacier_df['year'] = glacier_df['date'].dt.year
     
     # Yearly sums for streamflow and precipitation
     streamflow_yearly = streamflow_filtered.groupby('year').agg({
@@ -5783,75 +4316,51 @@ def plot_precipitation_glacier_melt_vs_streamflow_scatter(config, plot_dirs, val
         'precip': 'sum'
     }).reset_index()
     
-    # Calculate input based on coupled/uncoupled mode
-    if coupled:
-        # COUPLED MODE: Precipitation already includes glacier melt
-        streamflow_yearly['input_total'] = streamflow_yearly['precip']
-        input_label = 'Annual Precipitation (incl. Glacier Melt)'
-        data_source_label = 'Coupled (GloGEM+HBV)'
-        print(f"  - Using precipitation data (glacier melt already included)")
-        
-    else:
-        # UNCOUPLED MODE: Need to add separate glacier melt
-        print("Loading combined contributions data for uncoupled mode...")
-        glacier_df, _ = create_combined_contributions_dataframes(
-            config, plot_dirs, validation_start, validation_end
-        )
-        
-        if glacier_df is None:
-            print("ERROR: Could not load glacier contributions data for uncoupled mode")
-            return None
-        
-        # Calculate glacier melt yearly sums
-        glacier_df['year'] = glacier_df['date'].dt.year
-        glacier_yearly = glacier_df.groupby('year')['glaciermelt'].sum().reset_index()
-        glacier_yearly.columns = ['year', 'glacier_melt']
-        
-        # Merge with streamflow data
-        streamflow_yearly = pd.merge(streamflow_yearly, glacier_yearly, on='year', how='inner')
-        
-        # Calculate total input
-        streamflow_yearly['input_total'] = streamflow_yearly['precip'] + streamflow_yearly['glacier_melt']
-        input_label = 'Annual Precipitation + Glacier Melt'
-        data_source_label = 'Uncoupled (HBV only)'
-        print(f"  - Added separate glacier melt to precipitation")
+    # Yearly sums for glacier melt (normalized to catchment scale)
+    glacier_yearly = glacier_df.groupby('year')['glacier_icemelt_normalized'].sum().reset_index()
+    glacier_yearly.columns = ['year', 'glacier_melt']
     
-    if len(streamflow_yearly) == 0:
+    # Merge data
+    yearly_data = pd.merge(streamflow_yearly, glacier_yearly, on='year', how='inner')
+    
+    if len(yearly_data) == 0:
         print("ERROR: No overlapping years found between datasets")
         return None
     
-    print(f"  - Found {len(streamflow_yearly)} years of complete data")
-    print(f"  - Data source: {data_source_label}")
+    # Calculate input (precipitation + glacier melt)
+    yearly_data['input_total'] = yearly_data['precip'] + yearly_data['glacier_melt']
+    
+    print(f"  - Found {len(yearly_data)} years of complete data")
     
     # Create scatter plot
     plt.figure(figsize=(10, 8))
     
     # Plot data points
-    plt.scatter(streamflow_yearly['input_total'], streamflow_yearly['obs_Q_mm'], 
+    plt.scatter(yearly_data['input_total'], yearly_data['obs_Q_mm'], 
                color='darkblue', s=100, alpha=0.7, edgecolors='black', linewidth=1.5)
     
     # Add 1:1 line
-    min_val = min(streamflow_yearly['input_total'].min(), streamflow_yearly['obs_Q_mm'].min()) * 0.95
-    max_val = max(streamflow_yearly['input_total'].max(), streamflow_yearly['obs_Q_mm'].max()) * 1.05
+    min_val = min(yearly_data['input_total'].min(), yearly_data['obs_Q_mm'].min()) * 0.95
+    max_val = max(yearly_data['input_total'].max(), yearly_data['obs_Q_mm'].max()) * 1.05
     plt.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.7, linewidth=2, label='1:1 line')
     
     # Add trend line
-    z = np.polyfit(streamflow_yearly['input_total'], streamflow_yearly['obs_Q_mm'], 1)
+    z = np.polyfit(yearly_data['input_total'], yearly_data['obs_Q_mm'], 1)
     p = np.poly1d(z)
-    plt.plot(streamflow_yearly['input_total'], p(streamflow_yearly['input_total']), 'r-', alpha=0.8, linewidth=2, label='Trend line')
+    plt.plot(yearly_data['input_total'], p(yearly_data['input_total']), 'r-', alpha=0.8, linewidth=2, label='Trend line')
     
     # Calculate correlation
-    corr = np.corrcoef(streamflow_yearly['input_total'], streamflow_yearly['obs_Q_mm'])[0, 1]
+    corr = np.corrcoef(yearly_data['input_total'], yearly_data['obs_Q_mm'])[0, 1]
     
     # Add year labels to points
-    for _, row in streamflow_yearly.iterrows():
+    for _, row in yearly_data.iterrows():
         plt.annotate(str(int(row['year'])), (row['input_total'], row['obs_Q_mm']), 
                     xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
     
-    plt.xlabel(f'{input_label} (mm/year)', fontsize=14, fontweight='bold')
+    plt.xlabel('Annual Precipitation + Glacier Melt (mm/year)', fontsize=14, fontweight='bold')
     plt.ylabel('Annual Observed Streamflow (mm/year)', fontsize=14, fontweight='bold')
     plt.title(f'Input vs Output Water Balance - Catchment {gauge_id}\n'
-             f'R = {corr:.3f} | Period: {validation_start} to {validation_end} ({data_source_label})', 
+             f'R = {corr:.3f} | Period: {validation_start} to {validation_end}', 
              fontsize=16, fontweight='bold')
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=12)
@@ -5864,35 +4373,23 @@ def plot_precipitation_glacier_melt_vs_streamflow_scatter(config, plot_dirs, val
     plt.tight_layout()
     
     # Save plot
-    save_path = plot_dirs['contributions'] / f'input_vs_streamflow_scatter_{gauge_id}.png'
+    save_path = plot_dirs['contributions'] / f'precipitation_glacier_melt_vs_streamflow_scatter_{gauge_id}.png'
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"Saved scatter plot to: {save_path}")
     plt.show()
     
     # Print summary statistics
-    mean_input = streamflow_yearly['input_total'].mean()
-    mean_output = streamflow_yearly['obs_Q_mm'].mean()
-    mean_precip = streamflow_yearly['precip'].mean()
+    mean_input = yearly_data['input_total'].mean()
+    mean_output = yearly_data['obs_Q_mm'].mean()
     runoff_ratio = mean_output / mean_input
     
     print(f"\nWater Balance Analysis Summary:")
-    print(f"  Data source: {data_source_label}")
-    print(f"  Mean annual precipitation: {mean_precip:.1f} mm/year")
-    
-    if not coupled and 'glacier_melt' in streamflow_yearly.columns:
-        mean_glacier_melt = streamflow_yearly['glacier_melt'].mean()
-        glacier_contribution_pct = (mean_glacier_melt / mean_input) * 100
-        print(f"  Mean annual glacier melt: {mean_glacier_melt:.1f} mm/year")
-        print(f"  Glacier contribution to input: {glacier_contribution_pct:.1f}%")
-    else:
-        print(f"  Glacier melt: Already included in precipitation")
-    
-    print(f"  Mean annual total input: {mean_input:.1f} mm/year")
+    print(f"  Mean annual input (precip + glacier melt): {mean_input:.1f} mm/year")
     print(f"  Mean annual output (observed streamflow): {mean_output:.1f} mm/year")
     print(f"  Runoff ratio: {runoff_ratio:.3f}")
     print(f"  Correlation coefficient: {corr:.3f}")
     
-    return streamflow_yearly
+    return yearly_data
 
 #--------------------------------------------------------------------------------
 
@@ -5947,14 +4444,10 @@ def plot_annual_water_balance_bars(config, plot_dirs, validation_start=None, val
         print("ERROR: Hydrograph file must contain 'obs_Q', 'sim_Q', and 'precip' columns")
         return None
     
-    # Use the combined contributions function to get all contributions
-    print("Loading combined contributions data...")
-    glacier_df, nonglacier_df = create_combined_contributions_dataframes(
-        config, plot_dirs, validation_start, validation_end
-    )
-    
-    if glacier_df is None or nonglacier_df is None:
-        print("ERROR: Could not load combined contributions data")
+    # Load glacier contributions data
+    glacier_df = load_glacier_contributions_data(config, validation_start, validation_end)
+    if glacier_df is None:
+        print("ERROR: Could not load glacier contributions data")
         return None
     
     # Convert streamflow to mm/year
@@ -5981,7 +4474,6 @@ def plot_annual_water_balance_bars(config, plot_dirs, validation_start=None, val
     # Calculate yearly sums
     streamflow_filtered['year'] = streamflow_filtered['date'].dt.year
     glacier_df['year'] = glacier_df['date'].dt.year
-    nonglacier_df['year'] = nonglacier_df['date'].dt.year
     
     # Yearly sums for streamflow and precipitation
     streamflow_yearly = streamflow_filtered.groupby('year').agg({
@@ -5990,117 +4482,55 @@ def plot_annual_water_balance_bars(config, plot_dirs, validation_start=None, val
         'precip': 'sum'
     }).reset_index()
     
-    # Yearly sums for glacier contributions (all normalized to catchment scale)
-    glacier_contributions = {}
-    for component in ['rainfall', 'snowmelt', 'glaciermelt']:
-        if component in glacier_df.columns:
-            glacier_yearly = glacier_df.groupby('year')[component].sum().reset_index()
-            glacier_yearly.columns = ['year', f'glacier_{component}']
-            glacier_contributions[component] = glacier_yearly
+    # Yearly sums for glacier melt (normalized to catchment scale)
+    glacier_yearly = glacier_df.groupby('year')['glacier_icemelt_normalized'].sum().reset_index()
+    glacier_yearly.columns = ['year', 'glacier_melt']
     
-    # Handle snowfall if present (for non-coupled runs)
-    if 'snowfall' in glacier_df.columns:
-        glacier_snowfall_yearly = glacier_df.groupby('year')['snowfall'].sum().reset_index()
-        glacier_snowfall_yearly.columns = ['year', 'glacier_snowfall']
-        glacier_contributions['snowfall'] = glacier_snowfall_yearly
-    
-    # Yearly sums for non-glacier contributions (all normalized to catchment scale)
-    nonglacier_contributions = {}
-    for component in ['rainfall', 'snowfall', 'snowmelt']:
-        if component in nonglacier_df.columns:
-            nonglacier_yearly = nonglacier_df.groupby('year')[component].sum().reset_index()
-            nonglacier_yearly.columns = ['year', f'nonglacier_{component}']
-            nonglacier_contributions[component] = nonglacier_yearly
-    
-    # Start with streamflow data
-    yearly_data = streamflow_yearly.copy()
-    
-    # Merge all glacier contributions
-    for component, contrib_df in glacier_contributions.items():
-        yearly_data = pd.merge(yearly_data, contrib_df, on='year', how='inner')
-    
-    # Merge all non-glacier contributions
-    for component, contrib_df in nonglacier_contributions.items():
-        yearly_data = pd.merge(yearly_data, contrib_df, on='year', how='inner')
+    # Merge data
+    yearly_data = pd.merge(streamflow_yearly, glacier_yearly, on='year', how='inner')
     
     if len(yearly_data) == 0:
         print("ERROR: No overlapping years found between datasets")
         return None
     
-    # Calculate combined components
-    # Total precipitation (glacier + non-glacier areas)
-    total_rainfall = yearly_data.get('glacier_rainfall', 0) + yearly_data.get('nonglacier_rainfall', 0)
-    
-    # Handle snowfall (if present)
-    total_snowfall = 0
-    if 'glacier_snowfall' in yearly_data.columns:
-        total_snowfall += yearly_data['glacier_snowfall']
-    if 'nonglacier_snowfall' in yearly_data.columns:
-        total_snowfall += yearly_data['nonglacier_snowfall']
-    
-    yearly_data['total_precipitation'] = total_rainfall + total_snowfall
-    
-    # Total snowmelt (glacier + non-glacier areas)
-    total_snowmelt = yearly_data.get('glacier_snowmelt', 0) + yearly_data.get('nonglacier_snowmelt', 0)
-    yearly_data['total_snowmelt'] = total_snowmelt
-    
-    # Glacier melt (only from glacier areas)
-    yearly_data['total_glacier_melt'] = yearly_data.get('glacier_glaciermelt', 0)
-    
     print(f"  - Found {len(yearly_data)} years of complete data")
-    print(f"  - Available components:")
-    print(f"    Total precipitation: {yearly_data['total_precipitation'].mean():.1f} mm/year")
-    print(f"    Total snowmelt: {yearly_data['total_snowmelt'].mean():.1f} mm/year")
-    print(f"    Glacier melt: {yearly_data['total_glacier_melt'].mean():.1f} mm/year")
     
     # Create bar plot
-    fig, ax = plt.subplots(figsize=(max(12, len(yearly_data) * 1.0), 8))
+    fig, ax = plt.subplots(figsize=(max(12, len(yearly_data) * 0.8), 8))
     
     x = np.arange(len(yearly_data))
-    width = 0.2  # Width of bars
+    width = 0.25  # Width of bars
     
     # Plot bars
-    bars1 = ax.bar(x - 1.5*width, yearly_data['total_precipitation'], width, 
-                   label='Total Precipitation', color='darkblue', alpha=0.8, 
-                   edgecolor='black', linewidth=1)
-    
-    bars2 = ax.bar(x - 0.5*width, yearly_data['total_snowmelt'], width, 
-                   label='Total Snowmelt', color='lightblue', alpha=0.8, 
-                   edgecolor='black', linewidth=1)
-    
-    bars3 = ax.bar(x + 0.5*width, yearly_data['total_glacier_melt'], width, 
-                   label='Glacier Melt', color='grey', alpha=0.8, 
-                   edgecolor='black', linewidth=1)
-    
-    bars4 = ax.bar(x + 1.5*width, yearly_data['obs_Q_mm'], width, 
-                   label='Observed Streamflow', color='black', alpha=0.8, 
-                   edgecolor='white', linewidth=1)
+    bars1 = ax.bar(x - width, yearly_data['precip'], width, label='Precipitation', 
+                   color='darkblue', alpha=0.8, edgecolor='black', linewidth=1)
+    bars2 = ax.bar(x, yearly_data['glacier_melt'], width, label='Glacier Melt', 
+                   color='grey', alpha=0.8, edgecolor='black', linewidth=1)
+    bars3 = ax.bar(x + width, yearly_data['obs_Q_mm'], width, label='Observed Streamflow', 
+                   color='black', alpha=0.8, edgecolor='white', linewidth=1)
     
     # Add value labels on bars (only show if not too crowded)
-    if len(yearly_data) <= 12:  # Only add labels if not too many years
+    if len(yearly_data) <= 15:  # Only add labels if not too many years
         def add_value_labels(bars, values):
             for bar, value in zip(bars, values):
                 height = bar.get_height()
-                if height > 0:  # Only add label if bar has height
-                    ax.text(bar.get_x() + bar.get_width()/2., height + 
-                           yearly_data[['total_precipitation', 'total_snowmelt', 'total_glacier_melt', 'obs_Q_mm']].max().max() * 0.01,
-                           f'{value:.0f}', ha='center', va='bottom', fontsize=8, rotation=90)
+                ax.text(bar.get_x() + bar.get_width()/2., height + max(yearly_data[['precip', 'glacier_melt', 'obs_Q_mm']].max()) * 0.01,
+                       f'{value:.0f}', ha='center', va='bottom', fontsize=9, rotation=90)
         
-        add_value_labels(bars1, yearly_data['total_precipitation'])
-        add_value_labels(bars2, yearly_data['total_snowmelt'])
-        add_value_labels(bars3, yearly_data['total_glacier_melt'])
-        add_value_labels(bars4, yearly_data['obs_Q_mm'])
+        add_value_labels(bars1, yearly_data['precip'])
+        add_value_labels(bars2, yearly_data['glacier_melt'])
+        add_value_labels(bars3, yearly_data['obs_Q_mm'])
     
     # Formatting
     ax.set_xlabel('Year', fontsize=14, fontweight='bold')
     ax.set_ylabel('Annual Sum (mm/year)', fontsize=14, fontweight='bold')
     ax.set_title(f'Annual Water Balance Components - Catchment {gauge_id}\n'
-                f'Period: {validation_start} to {validation_end} ({"Coupled" if coupled else "Uncoupled"})', 
+                f'Period: {validation_start} to {validation_end}', 
                 fontsize=16, fontweight='bold')
     
     ax.set_xticks(x)
     ax.set_xticklabels([str(int(year)) for year in yearly_data['year']], rotation=45)
-    ax.legend(fontsize=11, loc='upper left')
+    ax.legend(fontsize=12)
     ax.grid(True, axis='y', alpha=0.3)
     
     plt.tight_layout()
@@ -6112,412 +4542,147 @@ def plot_annual_water_balance_bars(config, plot_dirs, validation_start=None, val
     plt.show()
     
     # Print summary statistics
-    yearly_data['input_total'] = yearly_data['total_precipitation'] + yearly_data['total_glacier_melt']
+    yearly_data['input_total'] = yearly_data['precip'] + yearly_data['glacier_melt']
     yearly_data['runoff_ratio'] = yearly_data['obs_Q_mm'] / yearly_data['input_total']
-    yearly_data['glacier_contribution_pct'] = (yearly_data['total_glacier_melt'] / yearly_data['input_total']) * 100
-    yearly_data['snowmelt_contribution_pct'] = (yearly_data['total_snowmelt'] / yearly_data['obs_Q_mm']) * 100
+    yearly_data['glacier_contribution_pct'] = (yearly_data['glacier_melt'] / yearly_data['input_total']) * 100
     
     print(f"\nAnnual Water Balance Summary:")
-    print(f"  Data source: {'GloGEM + HBV' if coupled else 'HBV only'}")
-    print(f"  Mean annual precipitation: {yearly_data['total_precipitation'].mean():.1f} ± {yearly_data['total_precipitation'].std():.1f} mm/year")
-    print(f"  Mean annual snowmelt: {yearly_data['total_snowmelt'].mean():.1f} ± {yearly_data['total_snowmelt'].std():.1f} mm/year")
-    print(f"  Mean annual glacier melt: {yearly_data['total_glacier_melt'].mean():.1f} ± {yearly_data['total_glacier_melt'].std():.1f} mm/year")
+    print(f"  Mean annual precipitation: {yearly_data['precip'].mean():.1f} ± {yearly_data['precip'].std():.1f} mm/year")
+    print(f"  Mean annual glacier melt: {yearly_data['glacier_melt'].mean():.1f} ± {yearly_data['glacier_melt'].std():.1f} mm/year")
     print(f"  Mean annual streamflow: {yearly_data['obs_Q_mm'].mean():.1f} ± {yearly_data['obs_Q_mm'].std():.1f} mm/year")
     print(f"  Mean runoff ratio: {yearly_data['runoff_ratio'].mean():.3f} ± {yearly_data['runoff_ratio'].std():.3f}")
     print(f"  Mean glacier contribution: {yearly_data['glacier_contribution_pct'].mean():.1f} ± {yearly_data['glacier_contribution_pct'].std():.1f}%")
-    print(f"  Mean snowmelt contribution: {yearly_data['snowmelt_contribution_pct'].mean():.1f} ± {yearly_data['snowmelt_contribution_pct'].std():.1f}%")
     
     return yearly_data
 
 
+
 #--------------------------------------------------------------------------------
-#################################### run all ####################################
+##################################### Forcing ###################################
 #--------------------------------------------------------------------------------
 
-def run_complete_postprocessing(config, validation_start=None, validation_end=None):
+def plot_glacier_hru_temperatures(shp_path, temp_csv_path, output_dir=None):
     """
-    Run complete postprocessing analysis for a single model configuration.
-    Creates all diagnostic plots and analyses.
+    Plot temperature data for glacier HRUs (landuse class 7)
     
     Parameters:
-    -----------
-    config : dict
-        Configuration dictionary from namelist
-    validation_start : str, optional
-        Start date for validation period (defaults to cali_end_date from config)
-    validation_end : str, optional
-        End date for validation period (defaults to end_date from config)
-        
-    Returns:
-    --------
-    dict
-        Dictionary containing results from all analyses
+    shp_path (str): Path to the HRU.shp file
+    temp_csv_path (str): Path to the temperature CSV file
+    output_dir (str): Optional directory to save plots
     """
     
-    gauge_id = config['gauge_id']
-    model_type = config.get('model_type', 'HBV')
-    coupled = config.get('coupled', False)
+    # Load HRU shapefile
+    print("Loading HRU shapefile...")
+    hru_gdf = gpd.read_file(shp_path)
     
-    print(f"\n{'='*80}")
-    print(f"COMPLETE POSTPROCESSING ANALYSIS")
-    print(f"{'='*80}")
-    print(f"Catchment: {gauge_id}")
-    print(f"Model: {model_type}")
-    print(f"Coupled: {coupled}")
-    print(f"Validation: {validation_start or config.get('cali_end_date', 'auto')} to {validation_end or config.get('end_date', 'auto')}")
-    print(f"{'='*80}")
+    # Filter for glacier HRUs (landuse class 7)
+    glacier_hrus = hru_gdf[hru_gdf['Landuse_Cl'] == 7]
+    glacier_hru_ids = glacier_hrus.index.tolist()  # Assuming index corresponds to HRU ID
     
-    # Setup output directories
-    print("\n1. Setting up output directories...")
-    try:
-        plot_dirs = setup_output_directories(config)
-        print(f"   ✓ Created plot directories")
-    except Exception as e:
-        print(f"   ✗ Error setting up directories: {e}")
-        return None
+    # If the HRU ID is in a different column, adjust accordingly
+    # glacier_hru_ids = glacier_hrus['HRU_ID'].tolist()  # uncomment if HRU_ID column exists
     
-    # Store results
-    results = {
-        'catchment_id': gauge_id,
-        'model_type': model_type,
-        'coupled': coupled,
-        'success': {},
-        'errors': {}
-    }
+    print(f"Found {len(glacier_hru_ids)} glacier HRUs: {glacier_hru_ids}")
     
-    # ========================
-    # HYDROGRAPH ANALYSIS
-    # ========================
-    print("\n2. Hydrograph Analysis...")
+    # Load temperature data
+    print("Loading temperature data...")
+    temp_df = pd.read_csv(temp_csv_path)
     
-    try:
-        print("   2.1 Performance Metrics Summary...")
-        metrics_result = plot_performance_metrics_summary(config, plot_dirs)
-        results['performance_metrics'] = metrics_result
-        results['success']['performance_metrics'] = True
-        print("       ✓ Performance metrics calculated and plotted")
-    except Exception as e:
-        print(f"       ✗ Error with performance metrics: {e}")
-        results['errors']['performance_metrics'] = str(e)
-        results['success']['performance_metrics'] = False
+    # The first row contains HRU numbers as column names, second row contains 'time', 'day', 'mean', etc.
+    # Let's read it properly
+    temp_df_header = pd.read_csv(temp_csv_path, nrows=1)
+    column_names = temp_df_header.columns.tolist()
     
-    try:
-        print("   2.2 Hydrological Regime...")
-        regime_result = plot_hydrological_regime(config, plot_dirs, validation_start, validation_end)
-        results['hydrological_regime'] = regime_result
-        results['success']['hydrological_regime'] = True
-        print("       ✓ Hydrological regime plotted")
-    except Exception as e:
-        print(f"       ✗ Error with hydrological regime: {e}")
-        results['errors']['hydrological_regime'] = str(e)
-        results['success']['hydrological_regime'] = False
+    # Read the actual data starting from row 2
+    temp_df = pd.read_csv(temp_csv_path, skiprows=1)
+    temp_df.columns = column_names
     
-    try:
-        print("   2.3 Hydrograph Time Series...")
-        timeseries_result = plot_hydrograph_timeseries(config, plot_dirs, validation_start, validation_end)
-        results['hydrograph_timeseries'] = timeseries_result
-        results['success']['hydrograph_timeseries'] = True
-        print("       ✓ Hydrograph time series plotted")
-    except Exception as e:
-        print(f"       ✗ Error with hydrograph time series: {e}")
-        results['errors']['hydrograph_timeseries'] = str(e)
-        results['success']['hydrograph_timeseries'] = False
-    
-    # ========================
-    # SWE ANALYSIS
-    # ========================
-    print("\n3. Snow Water Equivalent Analysis...")
-    
-    try:
-        print("   3.1 Area-Weighted SWE Time Series...")
-        swe_timeseries_result = plot_area_weighted_swe_timeseries(config, plot_dirs, validation_start, validation_end)
-        results['swe_timeseries'] = swe_timeseries_result
-        results['success']['swe_timeseries'] = True
-        print("       ✓ SWE time series plotted")
-    except Exception as e:
-        print(f"       ✗ Error with SWE time series: {e}")
-        results['errors']['swe_timeseries'] = str(e)
-        results['success']['swe_timeseries'] = False
-    
-    try:
-        print("   3.2 SWE by Elevation Bands...")
-        swe_elevation_result = plot_swe_time_series_by_elevation(config, plot_dirs, validation_start=validation_start, validation_end=validation_end)
-        results['swe_elevation'] = swe_elevation_result
-        results['success']['swe_elevation'] = True
-        print("       ✓ SWE elevation bands plotted")
-    except Exception as e:
-        print(f"       ✗ Error with SWE elevation analysis: {e}")
-        results['errors']['swe_elevation'] = str(e)
-        results['success']['swe_elevation'] = False
-    
-    try:
-        print("   3.3 Peak SWE Analysis...")
-        peak_swe_result = analyze_peak_swe(config, plot_dirs, validation_start, validation_end)
-        results['peak_swe_analysis'] = peak_swe_result
-        results['success']['peak_swe_analysis'] = True
-        print("       ✓ Peak SWE analysis completed")
-    except Exception as e:
-        print(f"       ✗ Error with peak SWE analysis: {e}")
-        results['errors']['peak_swe_analysis'] = str(e)
-        results['success']['peak_swe_analysis'] = False
-    
-    try:
-        print("   3.4 Spatial SWE Distribution...")
-        spatial_swe_result = plot_spatial_swe_distribution(config, plot_dirs, validation_start, validation_end)
-        results['spatial_swe_distribution'] = spatial_swe_result
-        results['success']['spatial_swe_distribution'] = True
-        print("       ✓ Spatial SWE distribution plotted")
-    except Exception as e:
-        print(f"       ✗ Error with spatial SWE distribution: {e}")
-        results['errors']['spatial_swe_distribution'] = str(e)
-        results['success']['spatial_swe_distribution'] = False
-    
-    # ========================
-    # PARAMETER ANALYSIS
-    # ========================
-    print("\n4. Parameter Analysis...")
-    
-    try:
-        print("   4.1 Parameter Distributions...")
-        param_result = plot_parameter_boxplots(config, plot_dirs, top_n=100)
-        results['parameter_distributions'] = param_result
-        results['success']['parameter_distributions'] = True
-        print("       ✓ Parameter distributions plotted")
-    except Exception as e:
-        print(f"       ✗ Error with parameter analysis: {e}")
-        results['errors']['parameter_distributions'] = str(e)
-        results['success']['parameter_distributions'] = False
-    
-    # ========================
-    # STORAGE ANALYSIS
-    # ========================
-    print("\n5. Storage Analysis...")
-    
-    try:
-        print("   5.1 Storage Time Series...")
-        storage_result = plot_storage_timeseries(config, plot_dirs, validation_start, validation_end)
-        results['storage_timeseries'] = storage_result
-        results['success']['storage_timeseries'] = True
-        print("       ✓ Storage time series plotted")
-    except Exception as e:
-        print(f"       ✗ Error with storage analysis: {e}")
-        results['errors']['storage_timeseries'] = str(e)
-        results['success']['storage_timeseries'] = False
-    
-    # ========================
-    # CONTRIBUTIONS ANALYSIS
-    # ========================
-    print("\n6. Contributions Analysis...")
-    
-    # Only run detailed contributions analysis if we have the required data
-    if coupled:
+    # Convert the first column to datetime if it's a date column
+    if 'time' in temp_df.columns[0].lower() or 'date' in temp_df.columns[0].lower():
         try:
-            print("   6.1 GloGEM Regime Analysis...")
-            glogem_result = plot_glogem_regime(config, plot_dirs, unit='mm')
-            results['glogem_regime'] = glogem_result
-            results['success']['glogem_regime'] = True
-            print("       ✓ GloGEM regime analysis completed")
-        except Exception as e:
-            print(f"       ✗ Error with GloGEM analysis: {e}")
-            results['errors']['glogem_regime'] = str(e)
-            results['success']['glogem_regime'] = False
-    else:
-        print("   6.1 GloGEM Analysis skipped (uncoupled mode)")
-        results['success']['glogem_regime'] = None
-    
-    try:
-        print("   6.2 Glacier Contributions Regime...")
-        glacier_contrib_result = plot_glacier_contributions_regime(config, plot_dirs, validation_start, validation_end)
-        results['glacier_contributions'] = glacier_contrib_result
-        results['success']['glacier_contributions'] = True
-        print("       ✓ Glacier contributions regime plotted")
-    except Exception as e:
-        print(f"       ✗ Error with glacier contributions: {e}")
-        results['errors']['glacier_contributions'] = str(e)
-        results['success']['glacier_contributions'] = False
-    
-    try:
-        print("   6.3 Non-Glacier Contributions Regime...")
-        nonglacier_contrib_result = plot_nonglacier_contributions_regime(config, plot_dirs, validation_start, validation_end)
-        results['nonglacier_contributions'] = nonglacier_contrib_result
-        results['success']['nonglacier_contributions'] = True
-        print("       ✓ Non-glacier contributions regime plotted")
-    except Exception as e:
-        print(f"       ✗ Error with non-glacier contributions: {e}")
-        results['errors']['nonglacier_contributions'] = str(e)
-        results['success']['nonglacier_contributions'] = False
-    
-    try:
-        print("   6.4 Combined Contributions Dataframes...")
-        glacier_df, nonglacier_df = create_combined_contributions_dataframes(config, plot_dirs, validation_start, validation_end)
-        results['contributions_dataframes'] = {'glacier': glacier_df, 'nonglacier': nonglacier_df}
-        results['success']['contributions_dataframes'] = True
-        print("       ✓ Contributions dataframes created")
-    except Exception as e:
-        print(f"       ✗ Error creating contributions dataframes: {e}")
-        results['errors']['contributions_dataframes'] = str(e)
-        results['success']['contributions_dataframes'] = False
-    
-    try:
-        print("   6.5 Combined Contributions Comparison...")
-        combined_contrib_result = plot_combined_contributions_comparison(config, plot_dirs, validation_start, validation_end)
-        results['combined_contributions'] = combined_contrib_result
-        results['success']['combined_contributions'] = True
-        print("       ✓ Combined contributions comparison plotted")
-    except Exception as e:
-        print(f"       ✗ Error with combined contributions: {e}")
-        results['errors']['combined_contributions'] = str(e)
-        results['success']['combined_contributions'] = False
-    
-    try:
-        print("   6.6 Streamflow Contributions Regime...")
-        streamflow_contrib_result = plot_streamflow_contributions_regime(config, plot_dirs, validation_start, validation_end)
-        results['streamflow_contributions'] = streamflow_contrib_result
-        results['success']['streamflow_contributions'] = True
-        print("       ✓ Streamflow contributions regime plotted")
-    except Exception as e:
-        print(f"       ✗ Error with streamflow contributions: {e}")
-        results['errors']['streamflow_contributions'] = str(e)
-        results['success']['streamflow_contributions'] = False
-    
-    # ========================
-    # WATER BALANCE ANALYSIS
-    # ========================
-    print("\n7. Water Balance Analysis...")
-    
-    try:
-        print("   7.1 Yearly Precipitation vs Streamflow...")
-        yearly_precip_result = plot_yearly_precipitation_streamflow(config, plot_dirs, validation_start, validation_end)
-        results['yearly_precipitation_streamflow'] = yearly_precip_result
-        results['success']['yearly_precipitation_streamflow'] = True
-        print("       ✓ Yearly precipitation vs streamflow plotted")
-    except Exception as e:
-        print(f"       ✗ Error with yearly precipitation analysis: {e}")
-        results['errors']['yearly_precipitation_streamflow'] = str(e)
-        results['success']['yearly_precipitation_streamflow'] = False
-    
-    try:
-        print("   7.2 Input vs Streamflow Scatter Plot...")
-        scatter_result = plot_precipitation_glacier_melt_vs_streamflow_scatter(config, plot_dirs, validation_start, validation_end)
-        results['input_streamflow_scatter'] = scatter_result
-        results['success']['input_streamflow_scatter'] = True
-        print("       ✓ Input vs streamflow scatter plot created")
-    except Exception as e:
-        print(f"       ✗ Error with scatter plot: {e}")
-        results['errors']['input_streamflow_scatter'] = str(e)
-        results['success']['input_streamflow_scatter'] = False
-    
-    try:
-        print("   7.3 Annual Water Balance Bars...")
-        bar_result = plot_annual_water_balance_bars(config, plot_dirs, validation_start, validation_end)
-        results['annual_water_balance_bars'] = bar_result
-        results['success']['annual_water_balance_bars'] = True
-        print("       ✓ Annual water balance bars plotted")
-    except Exception as e:
-        print(f"       ✗ Error with annual water balance bars: {e}")
-        results['errors']['annual_water_balance_bars'] = str(e)
-        results['success']['annual_water_balance_bars'] = False
-    
-    try:
-        print("   7.4 Average Yearly Water Balance...")
-        avg_balance_result = plot_average_yearly_water_balance(config, plot_dirs, validation_start, validation_end)
-        results['average_yearly_water_balance'] = avg_balance_result
-        results['success']['average_yearly_water_balance'] = True
-        print("       ✓ Average yearly water balance plotted")
-    except Exception as e:
-        print(f"       ✗ Error with average yearly water balance: {e}")
-        results['errors']['average_yearly_water_balance'] = str(e)
-        results['success']['average_yearly_water_balance'] = False
-    
-    # ========================
-    # UNCERTAINTY ANALYSIS
-    # ========================
-    print("\n8. Uncertainty Analysis...")
-    
-    #try:
-    #    print("   8.1 Combined Uncertainty with Envelope...")
-        #uncertainty_result = plot_combined_uncertainty_with_envelope(config, plot_dirs, n_runs=100, validation_start=validation_start, validation_end=validation_end)
-        #results['uncertainty_analysis'] = uncertainty_result
-        #results['success']['uncertainty_analysis'] = True
-        #print("       ✓ Uncertainty analysis completed")
-    #except Exception as e:
-        #print(f"       ✗ Error with uncertainty analysis: {e}")
-        #results['errors']['uncertainty_analysis'] = str(e)
-        #results['success']['uncertainty_analysis'] = False
-    
-    # ========================
-    # SUMMARY
-    # ========================
-    print(f"\n{'='*80}")
-    print(f"POSTPROCESSING SUMMARY")
-    print(f"{'='*80}")
-    
-    success_count = sum(1 for success in results['success'].values() if success is True)
-    total_analyses = len([k for k, v in results['success'].items() if v is not None])
-    error_count = len(results['errors'])
-    
-    print(f"Catchment: {gauge_id}")
-    print(f"Model: {model_type} ({'Coupled' if coupled else 'Uncoupled'})")
-    print(f"Successful analyses: {success_count}/{total_analyses}")
-    print(f"Failed analyses: {error_count}")
-    
-    if error_count > 0:
-        print(f"\nErrors encountered:")
-        for analysis, error in results['errors'].items():
-            print(f"  - {analysis}: {error}")
-    
-    # List successful outputs
-    config_dir = Path(config['main_dir']) / config['config_dir']
-    output_base = config_dir / f"catchment_{gauge_id}" / model_type / "output"
-    
-    print(f"\nOutput locations:")
-    print(f"  - Plots: {output_base / 'plots'}")
-    print(f"  - Results: {output_base / 'results'}")
-    
-    # Print key results if available
-    if results['success'].get('performance_metrics') and results['performance_metrics']:
-        try:
-            val_metrics = results['performance_metrics'].get('validation')
-            if val_metrics:
-                print(f"\nKey Performance Metrics (Validation):")
-                print(f"  - NSE: {val_metrics['NSE']:.3f}")
-                print(f"  - KGE: {val_metrics['KGE']:.3f}")
-                print(f"  - KGE_NP: {val_metrics['KGE_NP']:.3f}")
+            temp_df[temp_df.columns[0]] = pd.to_datetime(temp_df[temp_df.columns[0]])
         except:
-            pass
+            print("Could not convert first column to datetime, using as is")
     
-    if results['success'].get('average_yearly_water_balance') and results['average_yearly_water_balance']:
-        try:
-            wb = results['average_yearly_water_balance']
-            print(f"\nKey Water Balance Results:")
-            print(f"  - Glacier contribution: {wb['glacier_pct']:.1f}% of simulated streamflow")
-            print(f"  - Snowmelt contribution: {wb['snowmelt_pct']:.1f}% of simulated streamflow")
-            print(f"  - Total melt contribution: {wb['glacier_pct'] + wb['snowmelt_pct']:.1f}% of simulated streamflow")
-        except:
-            pass
+    # Plot temperatures for glacier HRUs
+    plt.figure(figsize=(15, 10))
     
-    if results['success'].get('uncertainty_analysis') and results['uncertainty_analysis']:
-        try:
-            unc = results['uncertainty_analysis']
-            if unc.get('contribution_statistics'):
-                stats = unc['contribution_statistics']
-                print(f"\nUncertainty Ranges:")
-                print(f"  - Glacier contribution: {stats['glacier_contribution']['min']:.1f}% - {stats['glacier_contribution']['max']:.1f}%")
-                print(f"  - Snowmelt contribution: {stats['snowmelt_contribution']['min']:.1f}% - {stats['snowmelt_contribution']['max']:.1f}%")
-                print(f"  - Successful runs analyzed: {unc['successful_runs']}")
-        except:
-            pass
+    colors = plt.cm.tab10(np.linspace(0, 1, len(glacier_hru_ids)))
     
-    # Calculate success rate
-    success_rate = (success_count / total_analyses * 100) if total_analyses > 0 else 0
+    for i, hru_id in enumerate(glacier_hru_ids):
+        # Find the column corresponding to this HRU
+        hru_col = None
+        for col in temp_df.columns[1:]:  # Skip the first column (time/date)
+            try:
+                if int(col) == hru_id or str(hru_id) in str(col):
+                    hru_col = col
+                    break
+            except:
+                continue
+        
+        if hru_col is not None:
+            plt.plot(temp_df[temp_df.columns[0]], temp_df[hru_col], 
+                    label=f'HRU {hru_id}', color=colors[i], alpha=0.7)
+            
+            # Check for winter melting (temperature > 0 in winter months)
+            if temp_df[temp_df.columns[0]].dtype == 'datetime64[ns]':
+                winter_mask = temp_df[temp_df.columns[0]].dt.month.isin([12, 1, 2])
+                winter_positive = temp_df[winter_mask & (temp_df[hru_col] > 0)]
+                if len(winter_positive) > 0:
+                    print(f"WARNING: HRU {hru_id} has {len(winter_positive)} days with positive temperatures in winter!")
+        else:
+            print(f"Warning: Could not find temperature data for HRU {hru_id}")
     
-    if success_rate >= 80:
-        print(f"\n🎉 POSTPROCESSING COMPLETED SUCCESSFULLY! ({success_rate:.1f}% success rate)")
-    elif success_rate >= 60:
-        print(f"\n⚠️  POSTPROCESSING COMPLETED WITH SOME ISSUES ({success_rate:.1f}% success rate)")
-    else:
-        print(f"\n❌ POSTPROCESSING COMPLETED WITH SIGNIFICANT ISSUES ({success_rate:.1f}% success rate)")
+    plt.axhline(y=0, color='red', linestyle='--', alpha=0.5, label='Freezing point')
+    plt.xlabel('Time')
+    plt.ylabel('Temperature (°C)')
+    plt.title('Mean Temperature for Glacier HRUs (Landuse Class 7)')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
     
-    print(f"{'='*80}")
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, 'glacier_hru_temperatures.png'), 
+                   dpi=300, bbox_inches='tight')
     
-    return results
+    plt.show()
+    
+    # Create a summary plot showing temperature statistics
+    plt.figure(figsize=(12, 8))
+    
+    temp_stats = []
+    hru_labels = []
+    
+    for hru_id in glacier_hru_ids:
+        hru_col = None
+        for col in temp_df.columns[1:]:
+            try:
+                if int(col) == hru_id or str(hru_id) in str(col):
+                    hru_col = col
+                    break
+            except:
+                continue
+        
+        if hru_col is not None:
+            temps = temp_df[hru_col].dropna()
+            temp_stats.append(temps)
+            hru_labels.append(f'HRU {hru_id}')
+    
+    if temp_stats:
+        plt.boxplot(temp_stats, labels=hru_labels)
+        plt.axhline(y=0, color='red', linestyle='--', alpha=0.5, label='Freezing point')
+        plt.ylabel('Temperature (°C)')
+        plt.title('Temperature Distribution for Glacier HRUs')
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        
+        if output_dir:
+            plt.savefig(os.path.join(output_dir, 'glacier_hru_temperature_boxplot.png'), 
+                       dpi=300, bbox_inches='tight')
+        
+        plt.show()
+    
+    return glacier_hru_ids

@@ -57,61 +57,126 @@ def get_extent_from_shapefile(shapefile_path, buffer_degrees=0.01):
 
 def download_esa_worldcover_direct(bounds, output_path):
     """
-    Download ESA WorldCover from direct ESA servers (the working method)
+    Download ESA WorldCover tiles and merge if catchment spans multiple tiles
     """
     try:
         print("Downloading ESA WorldCover from direct servers...")
         
         minx, miny, maxx, maxy = bounds
         
-        # Calculate the tile name based on coordinates
-        center_lon = (minx + maxx) / 2
-        center_lat = (miny + maxy) / 2
+        # Determine ALL tiles needed
+        tiles_needed = set()
         
-        # Tile coordinates (3-degree tiles)
-        tile_lon = int((center_lon + 180) // 3) * 3 - 180
-        tile_lat = int((center_lat + 60) // 3) * 3 - 60
+        # Check longitude tiles (3-degree tiles)
+        lon_start = int((minx + 180) // 3) * 3 - 180
+        lon_end = int((maxx + 180) // 3) * 3 - 180
         
-        # Format tile name
-        lat_str = f"S{abs(tile_lat):02d}" if tile_lat < 0 else f"N{tile_lat:02d}"
-        lon_str = f"W{abs(tile_lon):03d}" if tile_lon < 0 else f"E{tile_lon:03d}"
+        # Check latitude tiles
+        lat_start = int((miny + 60) // 3) * 3 - 60
+        lat_end = int((maxy + 60) // 3) * 3 - 60
         
-        tile_name = f"ESA_WorldCover_10m_2021_v200_{lat_str}{lon_str}_Map"
-        print(f"Need tile: {tile_name}")
+        # Generate all tile combinations needed
+        for tile_lon in range(lon_start, lon_end + 3, 3):
+            for tile_lat in range(lat_start, lat_end + 3, 3):
+                lat_str = f"S{abs(tile_lat):02d}" if tile_lat < 0 else f"N{tile_lat:02d}"
+                lon_str = f"W{abs(tile_lon):03d}" if tile_lon < 0 else f"E{tile_lon:03d}"
+                tile_name = f"ESA_WorldCover_10m_2021_v200_{lat_str}{lon_str}_Map"
+                tiles_needed.add((tile_name, tile_lon, tile_lat))
         
-        # Try direct download URLs
-        urls = [
-            f"https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/{tile_name}.tif",
-            f"http://2018-cfs.esa-worldcover.org/v200/2021/map/{tile_name}.tif",
-            f"https://worldcover2021.esa.int/data/v200/2021/map/{tile_name}.tif"
-        ]
+        print(f"Catchment spans {len(tiles_needed)} tile(s):")
+        for tile_name, _, _ in tiles_needed:
+            print(f"  - {tile_name}")
         
-        for i, url in enumerate(urls):
-            try:
-                print(f"  Trying URL {i+1}/{len(urls)}...")
-                response = requests.get(url, stream=True, timeout=300)
-                
-                if response.status_code == 200:
-                    with open(output_path, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                    
-                    if os.path.getsize(output_path) > 1000:
-                        print(f"Successfully downloaded ESA WorldCover tile")
-                        return True
-                    else:
-                        os.remove(output_path)
-                        
-                print(f"  URL {i+1} failed: HTTP {response.status_code}")
-                        
-            except Exception as e:
-                print(f"  URL {i+1} error: {str(e)}")
+        # Download each tile
+        downloaded_tiles = []
+        temp_dir = os.path.dirname(output_path)
+        
+        for tile_name, _, _ in tiles_needed:
+            tile_path = os.path.join(temp_dir, f"{tile_name}.tif")
+            
+            if os.path.exists(tile_path):
+                print(f"  Tile already downloaded: {tile_name}")
+                downloaded_tiles.append(tile_path)
                 continue
+            
+            # Try direct download URLs
+            urls = [
+                f"https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/{tile_name}.tif",
+                f"http://2018-cfs.esa-worldcover.org/v200/2021/map/{tile_name}.tif",
+                f"https://worldcover2021.esa.int/data/v200/2021/map/{tile_name}.tif"
+            ]
+            
+            downloaded = False
+            for i, url in enumerate(urls):
+                try:
+                    print(f"  Downloading {tile_name} from URL {i+1}/{len(urls)}...")
+                    response = requests.get(url, stream=True, timeout=300)
+                    
+                    if response.status_code == 200:
+                        with open(tile_path, 'wb') as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        
+                        if os.path.getsize(tile_path) > 1000:
+                            print(f"  ✅ Downloaded {tile_name}")
+                            downloaded_tiles.append(tile_path)
+                            downloaded = True
+                            break
+                        else:
+                            os.remove(tile_path)
+                            
+                except Exception as e:
+                    print(f"  URL {i+1} error: {str(e)}")
+                    continue
+            
+            if not downloaded:
+                print(f"  ⚠️  Failed to download {tile_name}")
         
-        return False
+        if not downloaded_tiles:
+            return False
+        
+        # If only one tile, just use it
+        if len(downloaded_tiles) == 1:
+            shutil.copy(downloaded_tiles[0], output_path)
+            print(f"Successfully downloaded ESA WorldCover tile")
+            return True
+        
+        # Multiple tiles - merge them
+        print(f"Merging {len(downloaded_tiles)} tiles...")
+        
+        from rasterio.merge import merge
+        
+        src_files_to_mosaic = []
+        for tile_path in downloaded_tiles:
+            src = rasterio.open(tile_path)
+            src_files_to_mosaic.append(src)
+        
+        mosaic, out_trans = merge(src_files_to_mosaic)
+        
+        # Copy metadata from first tile
+        out_meta = src_files_to_mosaic[0].meta.copy()
+        out_meta.update({
+            "driver": "GTiff",
+            "height": mosaic.shape[1],
+            "width": mosaic.shape[2],
+            "transform": out_trans,
+            "compress": "lzw"
+        })
+        
+        with rasterio.open(output_path, "w", **out_meta) as dest:
+            dest.write(mosaic)
+        
+        # Close all source files
+        for src in src_files_to_mosaic:
+            src.close()
+        
+        print(f"✅ Successfully merged {len(downloaded_tiles)} tiles")
+        return True
         
     except Exception as e:
         print(f"Error with direct download: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def clip_raster_to_shapefile(raster_path, shapefile_path, output_path):

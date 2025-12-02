@@ -2259,7 +2259,7 @@ class HRUConnectivityCalculator:
         self.logger.debug(f"Writing connectivity to {output_file}")
         
         with open(output_file, 'w') as f:
-            f.write(":LateralConnections\n")
+            f.write(":LateralConnections  SNOW_REDISTRIBUTE\n")
             f.write("#HRU_ID\tConnected_HRU_ID\tWeight\n")
             
             connection_count = 0
