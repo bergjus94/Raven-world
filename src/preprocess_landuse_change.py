@@ -527,102 +527,33 @@ class GloGEMAreaChangeProcessor:
         plt.close()
         
         self.logger.info(f"✅ Area difference plots saved to {plots_dir}")
-    
-    def create_combined_map(self, gdf: gpd.GeoDataFrame, save_plot: bool = True) -> Path:
-        """
-        Create a combined shapefile with all glaciers and years, and visualize on a map.
+
         
-        Parameters
-        ----------
-        gdf : GeoDataFrame
-            GeoDataFrame with all glacier polygons
-        save_plot : bool
-            If True, saves the plot to output directory
-            
-        Returns
-        -------
-        Path
-            Path to the saved combined shapefile
+    
+    def create_combined_map(self, gdf, save_plot=True):
         """
+        Create a combined map showing all glacier extents for all years overlaid.
+        
+        Args:
+            gdf: GeoDataFrame with glacier data
+            save_plot: Whether to save the plot
+            
+        Returns:
+            Path to saved combined shapefile
+        """
+        self.logger.info("Creating combined map visualization...")
+
         import matplotlib.pyplot as plt
         from matplotlib.colors import LinearSegmentedColormap, Normalize
         from matplotlib.cm import ScalarMappable
         
-        self.logger.info("Creating combined map...")
-        
-        # Save combined shapefile
-        combined_shp_path = self.output_dir / "all_glaciers_all_years.shp"
-        gdf.to_file(combined_shp_path)
-        self.logger.info(f"Saved combined shapefile: {combined_shp_path}")
+        # Get unique years
+        years = sorted(gdf['year'].unique())
+        self.logger.info(f"Years available: {years}")
         
         # Create plots directory
         plots_dir = self.output_dir / "plots"
-        plots_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Get unique years and glaciers
-        years = sorted(gdf['year'].unique())
-        glacier_ids = sorted(gdf['glacier_id'].unique())
-        n_years = len(years)
-        
-        # Create figure with subplots for each year
-        n_cols = min(3, n_years)  # Max 3 columns
-        n_rows = int(np.ceil(n_years / n_cols))
-        
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))
-        if n_years == 1:
-            axes = [axes]
-        else:
-            axes = axes.flatten() if n_years > 1 else [axes]
-        
-        # Create color map for different glaciers
-        colors = plt.cm.Set3(np.linspace(0, 1, len(glacier_ids)))
-        glacier_colors = {glacier_id: colors[i] for i, glacier_id in enumerate(glacier_ids)}
-        
-        # Plot each year in a separate subplot
-        for idx, year in enumerate(years):
-            ax = axes[idx]
-            year_data = gdf[gdf['year'] == year]
-            
-            # Plot each glacier
-            for glacier_id in glacier_ids:
-                glacier_year_data = year_data[year_data['glacier_id'] == glacier_id]
-                
-                if len(glacier_year_data) > 0:
-                    glacier_year_data.plot(ax=ax, 
-                                          color=glacier_colors[glacier_id],
-                                          edgecolor='black',
-                                          linewidth=1.5,
-                                          alpha=0.7,
-                                          label=f'Glacier {glacier_id}')
-            
-            ax.set_title(f'Year {year}\nTotal Area: {year_data["area_km2"].sum():.2f} km²', 
-                        fontsize=12, fontweight='bold')
-            ax.set_xlabel('Easting (m)', fontsize=10)
-            ax.set_ylabel('Northing (m)', fontsize=10)
-            ax.set_aspect('equal')
-            ax.grid(True, alpha=0.3)
-            
-            # Add legend only to first subplot
-            if idx == 0:
-                ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
-        
-        # Hide unused subplots
-        for idx in range(n_years, len(axes)):
-            axes[idx].axis('off')
-        
-        plt.suptitle('All Glaciers - Spatial Evolution Over Time', 
-                    fontsize=16, fontweight='bold', y=0.995)
-        plt.tight_layout()
-        
-        if save_plot:
-            output_path = plots_dir / "all_glaciers_map_evolution.png"
-            plt.savefig(output_path, dpi=300, bbox_inches='tight')
-            self.logger.info(f"Saved combined map: {output_path}")
-        
-        if self.logger.level == logging.DEBUG:
-            plt.show()
-        
-        plt.close()
+        plots_dir.mkdir(exist_ok=True)
         
         # --- Create a single map with all years overlaid ---
         fig, ax = plt.subplots(figsize=(14, 12))
@@ -637,59 +568,27 @@ class GloGEMAreaChangeProcessor:
             color = year_cmap(year_norm(year))
             
             year_data.plot(ax=ax,
-                          color=color,
-                          edgecolor='black',
-                          linewidth=0.8,
-                          alpha=0.4,
-                          label=f'{year}')
+                        color=color,
+                        edgecolor='black',
+                        linewidth=0.8,
+                        alpha=0.4)
         
-        ax.set_title('All Glaciers - All Years Overlaid\n(Color gradient: blue=oldest, red=most recent)', 
-                    fontsize=14, fontweight='bold')
-        ax.set_xlabel('Easting (m)', fontsize=12)
-        ax.set_ylabel('Northing (m)', fontsize=12)
+        # ✅ BIGGER FONTS FOR AXIS LABELS
+        ax.set_xlabel('Easting [m]', fontsize=28, fontweight='bold')
+        ax.set_ylabel('Northing [m]', fontsize=28, fontweight='bold')
+        
+        # ✅ BIGGER TICK LABELS
+        ax.tick_params(axis='both', which='major', labelsize=24)
+        
         ax.set_aspect('equal')
         ax.grid(True, alpha=0.3)
         
-        # Add colorbar
+        # Add colorbar with bigger font
         sm = ScalarMappable(cmap=year_cmap, norm=year_norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, orientation='vertical', pad=0.02, shrink=0.8)
-        cbar.set_label('Year', fontsize=12)
-        
-        # Add legend with year labels
-        handles, labels = ax.get_legend_handles_labels()
-        # Only show every other year in legend if too many
-        if len(years) > 10:
-            step = len(years) // 10
-            handles = handles[::step]
-            labels = labels[::step]
-        ax.legend(handles, labels, loc='upper right', fontsize=9, framealpha=0.9, 
-                 title='Years', title_fontsize=10)
-        
-        # Add north arrow
-        ax.annotate('N', xy=(0.95, 0.95), xycoords='axes fraction',
-                   fontsize=20, fontweight='bold', ha='center', va='center',
-                   bbox=dict(boxstyle='circle', facecolor='white', edgecolor='black'))
-        ax.annotate('↑', xy=(0.95, 0.92), xycoords='axes fraction',
-                   fontsize=24, ha='center', va='center')
-        
-        # Add statistics text
-        total_initial_area = gdf[gdf['year'] == years[0]]['area_km2'].sum()
-        total_final_area = gdf[gdf['year'] == years[-1]]['area_km2'].sum()
-        total_change = total_final_area - total_initial_area
-        total_change_pct = (total_change / total_initial_area) * 100
-        
-        stats_text = (
-            f"Summary:\n"
-            f"Glaciers: {len(glacier_ids)}\n"
-            f"Initial ({years[0]}): {total_initial_area:.2f} km²\n"
-            f"Final ({years[-1]}): {total_final_area:.2f} km²\n"
-            f"Change: {total_change:.2f} km² ({total_change_pct:.1f}%)"
-        )
-        
-        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-               fontsize=10, verticalalignment='top',
-               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        cbar.set_label('Year', fontsize=28, fontweight='bold')
+        cbar.ax.tick_params(labelsize=24)
         
         plt.tight_layout()
         
@@ -703,7 +602,10 @@ class GloGEMAreaChangeProcessor:
         
         plt.close()
         
-        self.logger.info(f"✅ Combined map visualizations saved to {plots_dir}")
+        # Save combined shapefile
+        combined_shp_path = self.output_dir / "combined_all_years.shp"
+        gdf.to_file(combined_shp_path)
+        self.logger.info(f"Saved combined shapefile: {combined_shp_path}")
         
         return combined_shp_path
 

@@ -1,13 +1,13 @@
 """
-HBV Model Preprocessing Module for Raven Hydrological Modeling Framework
+HMETS Model Preprocessing Module for Raven Hydrological Modeling Framework
 
-This module provides a comprehensive preprocessing class for setting up HBV model
+This module provides a comprehensive preprocessing class for setting up HMETS model
 runs in the Raven hydrological modeling framework. It handles the creation of
-all necessary Raven input files (.rvh, .rvt, .rvp, .rvi, .rvc) with HBV-specific
+all necessary Raven input files (.rvh, .rvt, .rvp, .rvi, .rvc) with HMETS-specific
 configurations.
 
 Author: Justine Berg
-Date: August 2025
+Date: January 2026
 """
 
 #--------------------------------------------------------------------------------
@@ -22,20 +22,20 @@ import shutil
 from typing import Dict, List, Optional, Union, Tuple
 import os
 import yaml
-import preprocess_general
 import numpy as np
 import rasterio
-import pyproj
+from pyproj import Transformer
+import preprocess_general
 
 #--------------------------------------------------------------------------------
-############################ HBV Preprocessor Class ############################
+############################ HMETS Preprocessor Class ###########################
 #--------------------------------------------------------------------------------
 
-class HBVProcessor:
+class HMETSPreprocessor:
     """
-    A comprehensive preprocessor for HBV model setup in Raven.
+    A comprehensive preprocessor for HMETS model setup in Raven.
     
-    This class handles all aspects of HBV model preprocessing including:
+    This class handles all aspects of HMETS model preprocessing including:
     - Creation of Raven input files (.rvh, .rvt, .rvp, .rvi, .rvc)
     - HRU management and elevation band grouping
     - Parameter handling for both template and initialized files
@@ -44,15 +44,11 @@ class HBVProcessor:
     
     def __init__(self, namelist_path: Union[str, Path]):
         """
-        Initialize the HBV preprocessor with namelist file.
+        Initialize the HMETS preprocessor with namelist file.
         
         Args:
             namelist_path: Path to the YAML namelist file
         """
-
-        import logging
-        logging.getLogger('rasterio').setLevel(logging.WARNING)
-
         # Load namelist file
         namelist_path = Path(namelist_path)
         if not namelist_path.exists():
@@ -72,22 +68,40 @@ class HBVProcessor:
         self.coupled = namelist.get('coupled', False)
         self.author = namelist.get('author', 'Justine Berg')
         
-        # ✅ LOAD PARAMETERS FROM NAMELIST
+        # ✅ LOAD PARAMETERS FROM NAMELIST (like HYMOD and MOHYSE)
         params_path = namelist.get('params_dir', 'config/default_params.yaml')
         
-        # Handle relative paths
+        # Handle relative paths - try multiple locations
         if not Path(params_path).is_absolute():
-            params_path = Path(namelist_path).parent / params_path
-        
-        params_path = Path(params_path)
-        if not params_path.exists():
-            raise FileNotFoundError(f"Parameters file not found: {params_path}")
+            # Try relative to namelist file
+            candidate1 = Path(namelist_path).parent / params_path
+            # Try relative to current working directory
+            candidate2 = Path.cwd() / params_path
+            # Try relative to src directory (where this file is)
+            candidate3 = Path(__file__).parent / params_path
+            
+            for candidate in [candidate1, candidate2, candidate3]:
+                if candidate.exists():
+                    params_path = candidate
+                    break
+            else:
+                raise FileNotFoundError(
+                    f"Parameters file not found. Tried:\n"
+                    f"  - {candidate1}\n"
+                    f"  - {candidate2}\n"
+                    f"  - {candidate3}"
+                )
+        else:
+            params_path = Path(params_path)
+            if not params_path.exists():
+                raise FileNotFoundError(f"Parameters file not found: {params_path}")
         
         with open(params_path, 'r') as f:
             self.params = yaml.safe_load(f)
         
         print(f"✅ Loaded parameters from: {params_path}")
         
+        # ✅ REMOVE CAMELS-specific gauge info - get from DEM like HBV/HYMOD/MOHYSE
         self.gauge_lat = None
         self.gauge_lon = None
         self.station_elevation = None
@@ -95,9 +109,9 @@ class HBVProcessor:
         # Set up directory structure
         self.model_dir = self.main_dir / self.config_dir
         self.catchment_dir = self.model_dir / f'catchment_{self.gauge_id}'
-        self.hbv_dir = self.catchment_dir / self.model_type
-        self.templates_dir = self.hbv_dir / 'templates'
-        self.data_obs_dir = self.hbv_dir / 'data_obs'
+        self.hmets_dir = self.catchment_dir / self.model_type
+        self.templates_dir = self.hmets_dir / 'templates'
+        self.data_obs_dir = self.hmets_dir / 'data_obs'
         self.topo_files_dir = self.catchment_dir / 'topo_files'
         
         # Ensure directories exist
@@ -105,57 +119,8 @@ class HBVProcessor:
         
     def _create_directories(self):
         """Create necessary directories if they don't exist."""
-        for directory in [self.hbv_dir, self.templates_dir, self.data_obs_dir]:
+        for directory in [self.hmets_dir, self.templates_dir, self.data_obs_dir]:
             directory.mkdir(parents=True, exist_ok=True)
-    
-    def get_hrus_by_elevation_band(self) -> Dict[str, List[int]]:
-        """
-        Load HRU shapefile and create a dictionary of HRU IDs for each elevation band.
-        
-        Returns:
-            Dictionary with elevation bands as keys and lists of HRU IDs as values.
-            Returns empty dict if no elevation bands are available.
-        """
-        hru_path = self.topo_files_dir / 'HRU.shp'
-        
-        try:
-            hru_gdf = gpd.read_file(hru_path)
-        except Exception as e:
-            print(f"Error reading HRU shapefile from {hru_path}: {e}")
-            return {}
-        
-        # Check if elevation columns exist and have valid data
-        if ('Elev_Min' not in hru_gdf.columns or 'Elev_Max' not in hru_gdf.columns or
-            hru_gdf['Elev_Min'].isna().all() or hru_gdf['Elev_Max'].isna().all()):
-            print(f"No elevation band data available for catchment {self.gauge_id}")
-            return {}
-        
-        # Filter out landuse classes 7 and 8 if needed
-        filtered_hru = hru_gdf[~hru_gdf['Landuse_Cl'].isin([7, 8])]
-        
-        # Filter out rows with NaN elevation values
-        filtered_hru = filtered_hru.dropna(subset=['Elev_Min', 'Elev_Max'])
-        
-        if len(filtered_hru) == 0:
-            print(f"No HRUs with valid elevation data for catchment {self.gauge_id}")
-            return {}
-        
-        # Create elevation band labels
-        filtered_hru['ElevationBand'] = filtered_hru.apply(
-            lambda row: f"{int(row['Elev_Min'])}-{int(row['Elev_Max'])}m", axis=1)
-        
-        # Group by elevation band and collect HRU IDs
-        hrus_by_band = {}
-        for band in filtered_hru['ElevationBand'].unique():
-            band_hrus = filtered_hru[filtered_hru['ElevationBand'] == band]['HRU_ID'].tolist()
-            hrus_by_band[band] = band_hrus
-        
-        # Print summary
-        print(f"Found {len(hrus_by_band)} elevation bands with a total of {len(filtered_hru)} HRUs")
-        for band in sorted(hrus_by_band.keys(), key=lambda x: int(x.split('-')[0])):
-            print(f"  {band}: {len(hrus_by_band[band])} HRUs")
-        
-        return hrus_by_band
 
     def _create_header(self, rvx_type: str) -> List[str]:
         """
@@ -174,7 +139,7 @@ class HBVProcessor:
         creation_date_line = f":CreationDate      {creation_date}"
         description = [
             "#",
-            f"# Emulation of HBV simulation of {self.gauge_id}",
+            f"# Emulation of HMETS simulation of {self.gauge_id}",
             "#------------------------------------------------------------------------ \n"
         ]
         return [header_line, file_type, author_line, creation_date_line, *description]
@@ -192,12 +157,12 @@ class HBVProcessor:
         """
         if template:
             param_or_name = "names"
-            file_name = f"{self.gauge_id}_HBV.{file_type}.tpl"
+            file_name = f"{self.gauge_id}_HMETS.{file_type}.tpl"
             file_path = self.templates_dir / file_name
         else:
             param_or_name = "init"
-            file_name = f"{self.gauge_id}_HBV.{file_type}"
-            file_path = self.hbv_dir / file_name
+            file_name = f"{self.gauge_id}_HMETS.{file_type}"
+            file_path = self.hmets_dir / file_name
         
         return file_path, param_or_name
     
@@ -232,12 +197,12 @@ class HBVProcessor:
                 if nodata is not None:
                     valid_mask = (dem_data != nodata) & ~np.isnan(dem_data)
                     if not valid_mask.any():
-                        raise ValueError("No valid data found in DEM - all pixels are NoData")
+                        raise ValueError("No valid elevation data found in DEM (all nodata)")
                     dem_data_valid = dem_data[valid_mask]
                 else:
                     valid_mask = ~np.isnan(dem_data) & (dem_data > -9999)
                     if not valid_mask.any():
-                        raise ValueError("No valid data found in DEM - all pixels are NaN or NoData")
+                        raise ValueError("No valid elevation data found in DEM")
                     dem_data_valid = dem_data[valid_mask]
                 
                 if len(dem_data_valid) == 0:
@@ -258,8 +223,7 @@ class HBVProcessor:
                     )
                     
                     if len(close_indices[0]) == 0:
-                        raise ValueError(f"Could not find any valid pixels near minimum elevation {min_elevation}")
-                    
+                        raise ValueError(f"Could not find pixel with minimum elevation {min_elevation:.1f}m")
                     min_indices = close_indices
                 
                 # Take the first pixel with minimum elevation
@@ -271,9 +235,8 @@ class HBVProcessor:
                 
                 # Convert to WGS84 if needed
                 if dem.crs != 'EPSG:4326':
-                    transformer = pyproj.Transformer.from_crs(dem.crs, 'EPSG:4326', always_xy=True)
-                    lon_wgs84, lat_wgs84 = transformer.transform(lon, lat)
-                    lon, lat = lon_wgs84, lat_wgs84
+                    transformer = Transformer.from_crs(dem.crs, 'EPSG:4326', always_xy=True)
+                    lon, lat = transformer.transform(lon, lat)
                 
                 print(f"Gauge location: Lat={lat:.6f}, Lon={lon:.6f}, Elev={min_elevation:.1f}m")
                 
@@ -283,18 +246,73 @@ class HBVProcessor:
             print(f"Error reading DEM file: {e}")
             raise
 
+    def get_hrus_by_elevation_band(self) -> Dict[str, List[int]]:
+        """
+        Load HRU shapefile and create a dictionary of HRU IDs for each elevation band.
+        Excludes GLACIER and MASKED_GLACIER land use classes from elevation bands.
+        
+        Returns:
+            Dictionary with elevation bands as keys and lists of HRU IDs as values.
+            Returns empty dict if no elevation bands are available.
+        """
+        hru_path = self.topo_files_dir / 'HRU.shp'
+        
+        try:
+            hru_gdf = gpd.read_file(hru_path)
+        except Exception as e:
+            print(f"Error reading HRU shapefile from {hru_path}: {e}")
+            return {}
+        
+        # Check if elevation columns exist and have valid data
+        if ('Elev_Min' not in hru_gdf.columns or 'Elev_Max' not in hru_gdf.columns or
+            hru_gdf['Elev_Min'].isna().all() or hru_gdf['Elev_Max'].isna().all()):
+            print(f"No elevation band data available for catchment {self.gauge_id}")
+            return {}
+        
+        # Define land use classes to exclude from elevation bands
+        elevation_excluded_landuse = ['GLACIER', 'MASKED_GLACIER']
+        
+        # Filter out excluded landuse classes for elevation bands
+        filtered_hru = hru_gdf[~hru_gdf['Landuse_Cl'].isin(elevation_excluded_landuse)]
+        
+        # Filter out rows with NaN elevation values
+        filtered_hru = filtered_hru.dropna(subset=['Elev_Min', 'Elev_Max'])
+        
+        if len(filtered_hru) == 0:
+            print(f"No HRUs with valid elevation data for catchment {self.gauge_id} after excluding {elevation_excluded_landuse}")
+            return {}
+        
+        # Print info about excluded HRUs
+        total_excluded = len(hru_gdf) - len(filtered_hru)
+        if total_excluded > 0:
+            print(f"Excluded {total_excluded} HRUs from elevation bands (land use: {elevation_excluded_landuse})")
+        
+        # Create elevation band labels
+        filtered_hru['ElevationBand'] = filtered_hru.apply(
+            lambda row: f"{int(row['Elev_Min'])}-{int(row['Elev_Max'])}m", axis=1)
+        
+        # Group by elevation band and collect HRU IDs
+        hrus_by_band = {}
+        for band in filtered_hru['ElevationBand'].unique():
+            band_hrus = filtered_hru[filtered_hru['ElevationBand'] == band]['HRU_ID'].tolist()
+            hrus_by_band[band] = band_hrus
+        
+        # Print summary
+        print(f"Found {len(hrus_by_band)} elevation bands with a total of {len(filtered_hru)} HRUs (glaciers excluded)")
+        for band in sorted(hrus_by_band.keys(), key=lambda x: int(x.split('-')[0])):
+            print(f"  {band}: {len(hrus_by_band[band])} HRUs")
+        
+        return hrus_by_band
+
     def create_rvh_file(self, template: bool = False):
         """
-        Write Raven .rvh file for HBV model.
+        Write Raven .rvh file for HMETS model.
         
         Args:
             template: Whether to create a template file
         """
         file_path, param_or_name = self._get_file_path('rvh', template)
-        # DEBUG: Print what param_or_name actually is
-        print(f"DEBUG: template={template}, param_or_name={param_or_name}")
-        print(f"DEBUG: Available keys in self.params['HBV']['{param_or_name}']: {list(self.params['HBV'][param_or_name].keys())[:5]}...")
-            
+        
         # Read HRU table from CSV file
         hru_table_path = self.topo_files_dir / 'HRU_table.csv'
         
@@ -339,28 +357,16 @@ class HBVProcessor:
             ":EndSubBasins"
         ]
 
-        # Define subbasin properties
-        subbasin_properties = [
-            ":SubBasinProperties",
-            "#                       HBV_T_CONC_MAX_BAS, DERIVED FROM HBV_T_CONC_MAX_BAS,",
-            "#                            MAXBAS,                 MAXBAS/2,",
-            "   :Parameters,           TIME_CONC,             TIME_TO_PEAK,",
-            "   :Units,                        d,                        d,",
-            f"              1,          {self.params['HBV'][param_or_name]['X11']},                  {self.params['HBV'][param_or_name]['HBV_Time_To_Peak']},",
-            ":EndSubBasinProperties"
-        ]
-
         # Write the file
         with open(file_path, 'w') as ff:
             ff.writelines(f"{line}\n" for line in self._create_header("rvh"))
             ff.writelines(f"{line}\n" for line in subbasins)
-            ff.writelines(f"{line}\n" for line in subbasin_properties)
             ff.writelines(f"{line}\n" for line in hru_list)
             ff.writelines(f"{line}\n" for line in lateral_connections)
             ff.write("\n# HRU Groups\n")
             ff.writelines(f"{line}\n" for line in hru_groups)
                 
-        print(f"Successfully wrote HBV RVH file to {file_path}")
+        print(f"Successfully wrote HMETS RVH file to {file_path}")
 
     def _create_hru_groups(self, hru_df: pd.DataFrame) -> List[str]:
         """Create HRU groups including filtered AllHRUs, elevation bands, and glacier groups."""
@@ -499,7 +505,7 @@ class HBVProcessor:
 
     def create_rvt_file(self, template: bool = False):
         """
-        Write Raven .rvt file for HBV model.
+        Write Raven .rvt file for HMETS model.
         
         Args:
             template: Whether to create template file
@@ -513,12 +519,11 @@ class HBVProcessor:
             print(f"Error: Could not extract gauge location from DEM: {e}")
             return
 
-        # Use namelist values
-        gauge_info = self._create_gauge_info(self.gauge_lat, self.gauge_lon, 
-                                        self.station_elevation, param_or_name)
+        # Create gauge info
+        gauge_info = self._create_gauge_info(gauge_lat, gauge_lon, station_elevation)
         
-        # Create forcing data using namelist coupled setting
-        forcing_data = self._create_forcing_block(param_or_name, self.coupled)
+        # ✅ CREATE FORCING DATA - ERA5-LAND ONLY (no coupled parameter)
+        forcing_data = self._create_forcing_block()
 
         # Write the file
         with open(file_path, 'w') as ff:
@@ -531,26 +536,25 @@ class HBVProcessor:
             ff.write(f":RedirectToFile data_obs/Q_daily.rvt\n")
 
     def _create_gauge_info(self, gauge_lat: float, gauge_lon: float, 
-                            station_elevation: float, param_or_name: str) -> List[str]:
-            """Create gauge information section for RVT file."""
-            gauge_info = [
-                f":Gauge {self.gauge_id}\n",
-                f"  :Latitude    {gauge_lat}\n",
-                f"  :Longitude {gauge_lon}\n",
-                f"  :Elevation  {station_elevation}\n\n"
-            ]
-            
-            # Add monthly data if available
-            monthly_data = self._get_monthly_data()
-            if monthly_data:
-                gauge_info.extend(monthly_data)
-            
-            # Add gauge corrections
-            gauge_info.extend([
-                f":EndGauge\n\n"
-            ])
-            
-            return gauge_info
+                        station_elevation: float) -> List[str]:
+        """Create gauge information section for RVT file."""
+        gauge_info = [
+            f":Gauge {self.gauge_id}\n",
+            f"  :Latitude    {gauge_lat}\n",
+            f"  :Longitude {gauge_lon}\n",
+            f"  :Elevation  {station_elevation}\n\n"
+        ]
+        
+        # Add monthly data if available
+        monthly_data = self._get_monthly_data()
+        if monthly_data:
+            gauge_info.extend(monthly_data)
+        
+        gauge_info.extend([
+            f":EndGauge\n\n"
+        ])
+        
+        return gauge_info
 
     def _get_monthly_data(self) -> List[str]:
         """Read and format monthly temperature and PET data if available."""
@@ -579,64 +583,31 @@ class HBVProcessor:
             print(f"Error reading monthly data: {e}")
             return []
 
-    def _create_forcing_block(self, param_or_name: str, coupled: bool) -> Dict[str, List[str]]:
+    def _create_forcing_block(self) -> Dict[str, List[str]]:
         """Create forcing data configuration for RVT file - ERA5-Land version."""
         grid_weights_file_path = "data_obs/GridWeights.txt"
         
-        # ✅ USE ERA5-LAND VARIABLE NAMES
+        # ✅ ERA5-LAND VARIABLE NAMES (always the same, no coupled option)
         var_names = {
             'rainfall': 'tp',
             'temp_ave': 't2m',
             'temp_max': 't2m', 
-            'temp_min': 't2m'
+            'temp_min': 't2m',
+            'pet': 'pev'  # ✅ ADDED PET variable
         }
         dim_names = "longitude latitude time"
 
-        # Get optional parameters with default values
-        rain_corr = self.params['HBV'][param_or_name].get('X20', 1.0)
-        snow_corr = self.params['HBV'][param_or_name].get('X21', 1.0)
-
-        # ✅ USE ERA5-LAND FILE NAMES
+        # ✅ ERA5-LAND FILE NAMES - ADDED PET
         forcing_types = [
             ('Rainfall', 'RAINFALL', 'era5_land_precip.nc', var_names['rainfall']),
             ('Average Temperature', 'TEMP_AVE', 'era5_land_temp_mean.nc', var_names['temp_ave']),
             ('Maximum Temperature', 'TEMP_MAX', 'era5_land_temp_max.nc', var_names['temp_max']),
-            ('Minimum Temperature', 'TEMP_MIN', 'era5_land_temp_min.nc', var_names['temp_min'])
+            ('Minimum Temperature', 'TEMP_MIN', 'era5_land_temp_min.nc', var_names['temp_min']),
+            ('PET', 'PET', 'era5_land_pet.nc', var_names['pet'])  # ✅ ADDED PET FORCING
         ]
 
         forcing_data = {}
-        
-        # Rainfall with correction factors
-        forcing_data['Rainfall'] = [
-            f":GriddedForcing           Rainfall",
-            f"    :ForcingType          RAINFALL",
-            f"    :FileNameNC           data_obs/era5_land_precip.nc",
-            f"    :VarNameNC            {var_names['rainfall']}",
-            f"    :DimNamesNC           {dim_names}",
-            "    :ElevationVarNameNC   elevation",
-            f"#    :RainCorrection       {rain_corr}",
-            f"#    :SnowCorrection       {snow_corr}",
-            f"    :RedirectToFile       {grid_weights_file_path}",
-            ":EndGriddedForcing",
-            ''
-        ]
-        
-        # Add Irrigation forcing block
-        forcing_data['Irrigation'] = [
-            ":GriddedForcing           Irrigation",
-            "    :ForcingType          IRRIGATION",
-            "    :FileNameNC           data_obs/irrigation.nc",
-            "    :VarNameNC            data",
-            "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
-            "    :ElevationVarNameNC   elevation",
-            "    :RedirectToFile       data_obs/GridWeights_Irrigation.txt",
-            ":EndGriddedForcing",
-            ''
-        ]
-        
-        # Temperature forcing blocks
-        temp_types = forcing_types[1:]  # Skip rainfall (already done)
-        for name, forcing_type, filename, var_name in temp_types:
+        for name, forcing_type, filename, var_name in forcing_types:
             forcing_data[name] = [
                 f":GriddedForcing           {name}",
                 f"    :ForcingType          {forcing_type}",
@@ -664,10 +635,9 @@ class HBVProcessor:
 
         return forcing_data
 
-
     def create_rvp_file(self, template: bool = False):
         """
-        Write Raven .rvp file for HBV model.
+        Write Raven .rvp file for HMETS model.
         
         Args:
             template: Whether to create template file
@@ -701,7 +671,7 @@ class HBVProcessor:
             ":EndVegetationClasses"
         ]
 
-        # Create HBV-specific parameter structure
+        # Create HMETS-specific parameter structure
         rvp_sections = self._create_rvp_sections(param_or_name, 
                                                 land_use_classes, vegetation_classes)
         
@@ -714,82 +684,70 @@ class HBVProcessor:
                 ff.write('\n')
 
     def _create_rvp_sections(self, param_or_name: str, 
-                        land_use_classes: List[str], vegetation_classes: List[str]) -> Dict[str, List[str]]:
+                           land_use_classes: List[str], vegetation_classes: List[str]) -> Dict[str, List[str]]:
         """Create all sections for RVP file."""
-        
-        # Get optional glacier parameter with default
-        glac_storage_coeff = self.params['HBV'][param_or_name].get('X19', 0.05)
-        
         return {
             "#Soil Classes": [
                 ":SoilClasses",
                 "   :Attributes,",
                 "   :Units,",
-                "       TOPSOIL,      1.0,    0.0,       0",
-                "       SLOW_RES,     1.0,    0.0,       0",
-                "       FAST_RES,     1.0,    0.0,       0",
+                "       TOPSOIL,",
+                "       PHREATIC,",
                 ":EndSoilClasses"
             ],
             "#Soil Profiles": [
                 "#     name,#horizons,{soiltype,thickness}x{#horizons}",
-                "# ",
                 ":SoilProfiles",
-                "    GLACIER, 0",
-                "    LAKE, 0",
-                "    ROCK, 0",
-                "    MASKED_GLACIER, 0",
-                f"   DEFAULT_P,      3,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0",
+                "   LAKE, 0",
+                "   ROCK, 0",
+                "   GLACIER, 0",
+                "   MASKED_GLACIER, 0",
+                f"   DEFAULT_P, 2, TOPSOIL,     {self.params['HMETS'][param_or_name]['X20']}, PHREATIC,     {self.params['HMETS'][param_or_name]['X21']},",
                 ":EndSoilProfiles"
             ],
             "#Vegetation Classes": vegetation_classes,
-            "#Vegetation Parameters": [
-                ":VegetationParameterList",
-                "   :Parameters,  MAX_CAPACITY, MAX_SNOW_CAPACITY,  TFRAIN,  TFSNOW,",
-                "   :Units,                 mm,                mm,    frac,    frac,",
-                "       [DEFAULT],             10000,             10000,    0.88,    0.88,",
-                ":EndVegetationParameterList"
-            ],
             "#Land Use Classes": land_use_classes,
             "#Global Parameters": [
-                f":GlobalParameter RAINSNOW_TEMP       {self.params['HBV'][param_or_name]['X01']}",
+                f":GlobalParameter  SNOW_SWI_MIN {self.params['HMETS'][param_or_name]['X09']} # x(9)",
+                f":GlobalParameter  SNOW_SWI_MAX {self.params['HMETS'][param_or_name]['X10']} # x(9)+x(10)",
+                f":GlobalParameter  SWI_REDUCT_COEFF {self.params['HMETS'][param_or_name]['X11']} # x(11)",
+                ":GlobalParameter SNOW_SWI 0.05",
+                ":GlobalParameter RAINSNOW_THRESHOLD      0.0 #constant",
                 ":GlobalParameter RAINSNOW_DELTA      1.0 #constant",
-                f":GlobalParameter PRECIP_LAPSE       2.0 # RECIP_LAPSE",
-                f":GlobalParameter ADIABATIC_LAPSE    6.0 # ADIABATIC_LAPSE",
-                f":GlobalParameter SNOW_SWI  {self.params['HBV'][param_or_name]['X04']} #SNOW_SWI"
+            ],
+            "#Vegetation Parameters": [
+                ":VegetationParameterList",
+                "   :Parameters,  RAIN_ICEPT_PCT,  SNOW_ICEPT_PCT,",
+                "   :Units,               -,               -,",
+                "       [DEFAULT],             0.0,             0.0,",
+                ":EndVegetationParameterList"
             ],
             "#Land Use Parameters": [
                 ":LandUseParameterList",
-                "  :Parameters,   MELT_FACTOR, MIN_MELT_FACTOR,   HBV_MELT_FOR_CORR, REFREEZE_FACTOR, HBV_MELT_ASP_CORR",
-                "  :Units     ,        mm/d/K,          mm/d/K,                none,          mm/d/K,              none",
-                "  #              MELT_FACTOR,        CONSTANT,         HBV_MELT_FOR_CORR,     REFREEZE_FACTOR,          CONSTANT",
-                f"    [DEFAULT],  {self.params['HBV'][param_or_name]['X02']},             2.2,        {self.params['HBV'][param_or_name]['X18']},    {self.params['HBV'][param_or_name]['X03']},              0.48",
+                "   :Parameters, MIN_MELT_FACTOR, MAX_MELT_FACTOR,    DD_MELT_TEMP,  DD_AGGRADATION, REFREEZE_FACTOR,    REFREEZE_EXP, DD_REFREEZE_TEMP, HMETS_RUNOFF_COEFF,",
+                "   :Units,          mm/d/C,          mm/d/C,               C,            1/mm,          mm/d/C,               -,                C,                  -,",
+                f"      [DEFAULT],  {self.params['HMETS'][param_or_name]['X05']}, {self.params['HMETS'][param_or_name]['X06']},  {self.params['HMETS'][param_or_name]['X07']},  {self.params['HMETS'][param_or_name]['X08']},  {self.params['HMETS'][param_or_name]['X13']},  {self.params['HMETS'][param_or_name]['X14']},   {self.params['HMETS'][param_or_name]['X12']},     {self.params['HMETS'][param_or_name]['X16']},",
                 ":EndLandUseParameterList",
                 "",
-                "#:LandUseParameterList",
-                "# :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG",
-                "# :Units     ,                  none,                1/d,                1/d,           1/mm",
-                "#   #                       CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT,",
-                f"#   [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05",
-                "#:EndLandUseParameterList"
+                ":LandUseParameterList",
+                "   :Parameters,     GAMMA_SHAPE,     GAMMA_SCALE,    GAMMA_SHAPE2,    GAMMA_SCALE2,",
+                "   :Units,               -,             1/d,               -,             1/d,",
+                f"      [DEFAULT],  {self.params['HMETS'][param_or_name]['X01']},  {self.params['HMETS'][param_or_name]['X02']},  {self.params['HMETS'][param_or_name]['X03']},  {self.params['HMETS'][param_or_name]['X04']},",
+                ":EndLandUseParameterList"
             ],
             "#Soil Parameters": [
-                f"#For Ostrich:HBV_Alpha= {self.params['HBV'][param_or_name]['X15']}",
                 ":SoilParameterList",
-                "  :Parameters,                POROSITY,FIELD_CAPACITY,     SAT_WILT,     HBV_BETA, MAX_CAP_RISE_RATE,  MAX_PERC_RATE,  BASEFLOW_COEFF,            BASEFLOW_N",
-                "  :Units     ,                    none,          none,         none,         none,              mm/d,           mm/d,             1/d,                  none",
-                "  #                        POROSITY,   FIELD_CAPACITY,  SAT_WILT,  BETA,       MAX_CAP_RISE_RATE,       CONSTANT,        CONSTANT,              CONSTANT,",
-                f"    [DEFAULT],            {self.params['HBV'][param_or_name]['X05']},  {self.params['HBV'][param_or_name]['X06']}, {self.params['HBV'][param_or_name]['X14']}, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
-                "  #                                                        CONSTANT,                                     MAX_PERC_RATE,     BASEFLOW_COEFF_FAST, 1+BASEFLOW_N=1+ALPHA,",
-                f"     FAST_RES,                _DEFAULT,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
-                "  #                                                        CONSTANT,                                                      BASEFLOW_COEFF_SLOW,              CONSTANT,",
-                f"     SLOW_RES,                _DEFAULT,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X10']},                   1.0",
+                "   :Parameters,        POROSITY,      PERC_COEFF,  PET_CORRECTION, BASEFLOW_COEFF",
+                "   :Units,               -,             1/d,               -,            1/d",
+                f"      TOPSOIL,             1.0,  {self.params['HMETS'][param_or_name]['X17']},  {self.params['HMETS'][param_or_name]['X15']}, {self.params['HMETS'][param_or_name]['X18']}",
+                f"      PHREATIC,             1.0,             0.0,             0.0, {self.params['HMETS'][param_or_name]['X19']}",
                 ":EndSoilParameterList"
             ]
         }
 
     def create_rvi_file(self, template: bool = False):
         """
-        Write Raven .rvi file for HBV model.
+        Write Raven .rvi file for HMETS model.
         
         Args:
             template: Whether to create template file
@@ -799,7 +757,7 @@ class HBVProcessor:
         # Get HRU groups definition
         hru_groups_definition = self._get_hru_groups_definition()
         
-        # Use namelist dates
+        # Create RVI sections
         rvi_sections = self._create_rvi_sections(self.start_date, self.end_date, 
                                             self.cali_end_date, hru_groups_definition)
 
@@ -833,76 +791,54 @@ class HBVProcessor:
                 f":StartDate             {start_date} 00:00:00",
                 f":EndDate               {end_date} 00:00:00",
                 ":TimeStep              1.0",
-                f":RunName               {self.gauge_id}_HBV"
+                ":Method                ORDERED_SERIES",
+                f":RunName               {self.gauge_id}_HMETS"
             ],
             "#Model Options": [
-                ":Routing             	    ROUTE_NONE",
-                ":CatchmentRoute      	    TRIANGULAR_UH",
-                ":Evaporation         	    PET_FROMMONTHLY",
-                ":OW_Evaporation      	    PET_FROMMONTHLY",
-                ":SWRadiationMethod   	    SW_RAD_DEFAULT",
-                ":SWCloudCorrect      	    SW_CLOUD_CORR_NONE",
-                ":SWCanopyCorrect     	    SW_CANOPY_CORR_NONE",
-                ":LWRadiationMethod   	    LW_RAD_DEFAULT",
-                ":RainSnowFraction    	    RAINSNOW_HBV",
-                ":PotentialMeltMethod 	    POTMELT_HBV",
-                ":OroTempCorrect      	    OROCORR_HBV",
-                ":OroPrecipCorrect    	    OROCORR_HBV",
-                ":OroPETCorrect       	    OROCORR_HBV",
-                ":CloudCoverMethod    	    CLOUDCOV_NONE",
-                ":PrecipIceptFract    	    PRECIP_ICEPT_USER",
-                ":MonthlyInterpolationMethod MONTHINT_LINEAR_21",
-                ":SoilModel                  SOIL_MULTILAYER 3",
+                ":SoilModel                  SOIL_MULTILAYER 2",
+                ":Routing                    ROUTE_NONE",
+                ":CatchmentRoute             ROUTE_DUMP",
+                ":Evaporation                PET_DATA",
+                ":RainSnowFraction           RAINSNOW_THRESHOLD",
+                ":PotentialMeltMethod        POTMELT_HMETS",
+                ":OroTempCorrect             OROCORR_SIMPLELAPSE",
+                ":OroPrecipCorrect           OROCORR_SIMPLELAPSE",
                 f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",
                 f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}"
             ],
-            "#Soil Alias Layer Definitions": [
-                ":Alias       FAST_RESERVOIR SOIL[1]",
-                ":Alias       SLOW_RESERVOIR SOIL[2]",
-                ":LakeStorage SLOW_RESERVOIR"
+            "#Soil Layer Alias Definitions": [
+                ":Alias       TOPSOIL SOIL[0]",
+                ":Alias       PHREATIC SOIL[1]"
             ],
             "#HRU Groups Definition": [
                 hru_groups_definition
             ] if hru_groups_definition else [],
             "#Hydrologic Process Order": [
+                ":AllowSoilOverfill",
                 ":HydrologicProcesses",
-                "#   :Flush             RAVEN_DEFAULT      SNOW            ATMOSPHERE",
-                "#       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
-                "   :SnowRefreeze      FREEZE_DEGREE_DAY  SNOW_LIQ        SNOW",
-                "   :Precipitation     PRECIP_RAVEN       ATMOS_PRECIP    MULTIPLE",
-                "   :CanopyEvaporation CANEVP_ALL         CANOPY          ATMOSPHERE",
-                "   :CanopySnowEvap    CANEVP_ALL         CANOPY_SNOW     ATMOSPHERE",
-                "   :SnowBalance       SNOBAL_SIMPLE_MELT SNOW            SNOW_LIQ",
-                "       :-->Overflow     RAVEN_DEFAULT      SNOW_LIQ        PONDED_WATER",
-                "#   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER",
-                "#       :-->Conditional HRU_TYPE IS GLACIER",
-                "#   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER",
-                "#   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER",
-                "   :Infiltration      INF_HBV            PONDED_WATER    MULTIPLE",
-                "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
-                "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
-                "       :-->Conditional HRU_TYPE IS_NOT ROCK",
-                "       :-->Conditional HRU_TYPE IS_NOT LAKE",
-                "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
-                "   :CapillaryRise     RISE_HBV           FAST_RESERVOIR 	SOIL[0]",
-                "   :LakeEvaporation   LAKE_EVAP_BASIC    SLOW_RESERVOIR  ATMOSPHERE",
-                "   :Percolation       PERC_CONSTANT      FAST_RESERVOIR 	SLOW_RESERVOIR",
-                "   :Baseflow          BASE_POWER_LAW     FAST_RESERVOIR  SURFACE_WATER",
-                "   :Baseflow          BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER",
-                "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
-                "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs FAST_RESERVOIR 1.0",
-                "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SLOW_RESERVOIR 1.0",
+                "   :SnowBalance              SNOBAL_HMETS       MULTIPLE        MULTIPLE",
+                "   :Precipitation            RAVEN_DEFAULT      ATMOS_PRECIP    MULTIPLE",
+                "   :Infiltration             INF_HMETS          PONDED_WATER    MULTIPLE",
+                "   :Overflow                 OVERFLOW_RAVEN     SOIL[0]         CONVOLUTION[1]",
+                "   :Baseflow                 BASE_LINEAR        SOIL[0]         SURFACE_WATER    #interflow",
+                "   :Percolation              PERC_LINEAR        SOIL[0]         SOIL[1]          #recharge",
+                "   :Overflow                 OVERFLOW_RAVEN     SOIL[1]         CONVOLUTION[1]",
+                "   :SoilEvaporation          SOILEVAP_ALL       SOIL[0]         ATMOSPHERE       #AET",
+                "   :Convolve                 CONVOL_GAMMA       CONVOLUTION[0]  SURFACE_WATER    #surf. runoff",
+                "   :Convolve                 CONVOL_GAMMA_2     CONVOLUTION[1]  SURFACE_WATER    #delay. runoff",
+                "   :Baseflow                 BASE_LINEAR        SOIL[1]         SURFACE_WATER",
+                "   :SnowRedistribute         THRESHOLD          SNOW            35000.0",
                 ":EndHydrologicProcesses"
             ],
             "#Output Options": [
                 "  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE ",
                 "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP",
-            ],
+                                    ],
             "#Transport for Snowmelt and Glacier Melt Tracking": [
                 "",
                 ":Transport SNOWMELT TRACER",
                 ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0",
+                ":FixedConcentration SNOWMELT SLOW_RESERVOIR 0.0",
                 "",
                 ":Transport GLACIERMELT_ALL TRACER",
                 ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER",
@@ -917,7 +853,7 @@ class HBVProcessor:
 
     def create_rvc_file(self, template: bool = False):
         """
-        Write Raven .rvc file for HBV model.
+        Write Raven .rvc file for HMETS model.
         
         Args:
             template: Whether to create template file
@@ -926,21 +862,12 @@ class HBVProcessor:
 
         # Define RVC configuration
         rvc_sections = {
-            "#Basin": [
+            "#Basin Initial Conditions": [
                 ":BasinInitialConditions",
                 ":Attributes, ID,              Q",
                 ":Units,      none,         m3/s",
-                "#                  HBV_PARA_???",
                 "1,             1.0",
                 ":EndBasinInitialConditions"
-            ],
-            "#Lower Groundwater Storage": [
-                "# Initial Lower groundwater storage - for each HRU",
-                "",
-                ":InitialConditions SOIL[2]",
-                "# derived from thickness: HBV_THICKNESS_TOPSOIL [m] * 1000.0 / 2.0",
-                f"{self.params['HBV'][param_or_name]['HBV_Initial_Thickness_Topsoil']}",
-                ":EndInitialConditions"
             ]
         }
 
@@ -954,12 +881,12 @@ class HBVProcessor:
 
     def create_all_files(self, template: bool = False):
         """
-        Create all Raven input files for HBV model using namelist configuration.
+        Create all Raven input files for HMETS model using namelist configuration.
         
         Args:
             template: Whether to create template files
         """
-        print(f"Creating {'template' if template else 'initialized'} HBV files for catchment {self.gauge_id}")
+        print(f"Creating {'template' if template else 'initialized'} HMETS files for catchment {self.gauge_id}")
         
         try:
             self.create_rvh_file(template)
@@ -968,9 +895,8 @@ class HBVProcessor:
             self.create_rvi_file(template)
             self.create_rvc_file(template)
             
-            print(f"Successfully created all {'template' if template else 'initialized'} HBV files!")
+            print(f"Successfully created all {'template' if template else 'initialized'} HMETS files!")
             
         except Exception as e:
-            print(f"Error creating HBV files: {e}")
+            print(f"Error creating HMETS files: {e}")
             raise
-

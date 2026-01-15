@@ -380,12 +380,12 @@ class MOHYSEPreprocessor:
         print(f"Successfully wrote MOHYSE RVH file to {file_path}")
 
     def _create_hru_groups(self, hru_df: pd.DataFrame) -> List[str]:
-        """Create HRU groups including filtered AllHRUs and elevation bands."""
+        """Create HRU groups including filtered AllHRUs, elevation bands, and glacier groups."""
         hru_groups = []
         
         # Different exclusion rules for different groups
         allhrus_excluded_landuse = ['GLACIER', 'ROCK', 'MASKED_GLACIER', 'LAKE']
-        elevation_excluded_landuse = ['GLACIER', 'MASKED_GLACIER']
+        elevation_excluded_landuse = ['GLACIER', 'MASKED_GLACIER']  # Only exclude glaciers for elevation bands
         
         # Get all HRU IDs excluding the specified land use classes for AllHRUs
         filtered_hrus = hru_df[~hru_df['LAND_USE_CLASS'].isin(allhrus_excluded_landuse)]
@@ -412,17 +412,103 @@ class MOHYSEPreprocessor:
                 ""
             ])
 
-        # Add elevation band groups
+        # ✅ ADD GLACIER-RELATED HRU GROUPS
+        
+        # ALL_GLACIER group - all glacier HRUs (GLACIER and MASKED_GLACIER)
+        all_glacier_hrus = hru_df[hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
+        if all_glacier_hrus:
+            hru_groups.extend([
+                ":HRUGroup ALL_GLACIER",
+                f"  {' '.join(map(str, all_glacier_hrus))}",
+                ":EndHRUGroup",
+                ""
+            ])
+            print(f"ALL_GLACIER group: {len(all_glacier_hrus)} HRUs")
+        else:
+            print("WARNING: No glacier HRUs found for ALL_GLACIER group")
+            hru_groups.extend([
+                ":HRUGroup ALL_GLACIER",
+                "  # No glacier HRUs available",
+                ":EndHRUGroup",
+                ""
+            ])
+        
+        # SMALL_GLACIER group - glacier HRUs with area < 2 km²
+        small_glacier_hrus = hru_df[
+            (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
+            (hru_df['AREA'] < 2)
+        ][':ATTRIBUTES'].tolist()
+        if small_glacier_hrus:
+            hru_groups.extend([
+                ":HRUGroup SMALL_GLACIER",
+                f"  {' '.join(map(str, small_glacier_hrus))}",
+                ":EndHRUGroup",
+                ""
+            ])
+            print(f"SMALL_GLACIER group: {len(small_glacier_hrus)} HRUs (area < 2 km²)")
+        else:
+            print("WARNING: No small glacier HRUs found")
+            hru_groups.extend([
+                ":HRUGroup SMALL_GLACIER",
+                "  # No small glacier HRUs available",
+                ":EndHRUGroup",
+                ""
+            ])
+        
+        # LARGE_GLACIER group - glacier HRUs with area >= 2 km²
+        large_glacier_hrus = hru_df[
+            (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
+            (hru_df['AREA'] >= 2)
+        ][':ATTRIBUTES'].tolist()
+        if large_glacier_hrus:
+            hru_groups.extend([
+                ":HRUGroup LARGE_GLACIER",
+                f"  {' '.join(map(str, large_glacier_hrus))}",
+                ":EndHRUGroup",
+                ""
+            ])
+            print(f"LARGE_GLACIER group: {len(large_glacier_hrus)} HRUs (area >= 2 km²)")
+        else:
+            print("WARNING: No large glacier HRUs found")
+            hru_groups.extend([
+                ":HRUGroup LARGE_GLACIER",
+                "  # No large glacier HRUs available",
+                ":EndHRUGroup",
+                ""
+            ])
+        
+        # NO_GLACIER group - all non-glacier HRUs
+        no_glacier_hrus = hru_df[~hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
+        if no_glacier_hrus:
+            hru_groups.extend([
+                ":HRUGroup NO_GLACIER",
+                f"  {' '.join(map(str, no_glacier_hrus))}",
+                ":EndHRUGroup",
+                ""
+            ])
+            print(f"NO_GLACIER group: {len(no_glacier_hrus)} HRUs")
+        else:
+            print("WARNING: No non-glacier HRUs found")
+
+        # Add elevation band groups with DIFFERENT filtering (only exclude glaciers)
         hrus_by_band = self.get_hrus_by_elevation_band()
         if hrus_by_band:
             for band, hru_ids in hrus_by_band.items():
                 if hru_ids:
-                    hru_groups.extend([
-                        f":HRUGroup {band}",
-                        f"  {' '.join(map(str, hru_ids))}",
-                        ":EndHRUGroup",
-                        ""
-                    ])
+                    # Apply DIFFERENT filtering for elevation bands (only exclude glaciers)
+                    band_hru_df = hru_df[hru_df[':ATTRIBUTES'].isin(hru_ids)]
+                    filtered_band_hrus = band_hru_df[~band_hru_df['LAND_USE_CLASS'].isin(elevation_excluded_landuse)]
+                    filtered_band_hru_ids = filtered_band_hrus[':ATTRIBUTES'].tolist()
+                    
+                    print(f"Elevation band {band}: {len(hru_ids)} total HRUs, {len(filtered_band_hru_ids)} after excluding {elevation_excluded_landuse}")
+                    
+                    if filtered_band_hru_ids:
+                        hru_groups.extend([
+                            f":HRUGroup {band}",
+                            f"  {' '.join(map(str, filtered_band_hru_ids))}",
+                            ":EndHRUGroup",
+                            ""
+                        ])
         else:
             print(f"No elevation bands available for catchment {self.gauge_id}")
 
@@ -691,12 +777,15 @@ class MOHYSEPreprocessor:
         """Get HRU groups definition string."""
         hrus_by_band = self.get_hrus_by_elevation_band()
         
+        # ✅ ADD GLACIER GROUPS TO DEFINITION
+        base_groups = "AllHRUs ALL_GLACIER SMALL_GLACIER LARGE_GLACIER NO_GLACIER"
+        
         if hrus_by_band:
             elevation_bands = sorted(hrus_by_band.keys(), key=lambda x: int(x.split('-')[0]))
-            return ":DefineHRUGroups AllHRUs " + " ".join(elevation_bands)
+            return f":DefineHRUGroups {base_groups} " + " ".join(elevation_bands)
         else:
-            print(f"No elevation bands available for catchment {self.gauge_id}, only defining AllHRUs group")
-            return ":DefineHRUGroups AllHRUs"
+            print(f"No elevation bands available for catchment {self.gauge_id}, only defining base groups")
+            return f":DefineHRUGroups {base_groups}"
 
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
                            hru_groups_definition: str) -> Dict[str, List[str]]:
@@ -745,6 +834,21 @@ class MOHYSEPreprocessor:
             "#Output Options": [
                 "  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE ",
                 "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP",
+            ],
+            "#Transport for Snowmelt and Glacier Melt Tracking": [
+                "",
+                ":Transport SNOWMELT TRACER",
+                ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0",
+                ":FixedConcentration SNOWMELT SLOW_RESERVOIR 0.0",
+                "",
+                ":Transport GLACIERMELT_ALL TRACER",
+                ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER",
+                "",
+                ":Transport GLACIERMELT_SMALL TRACER",
+                ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER",
+                "",
+                ":Transport GLACIERMELT_LARGE TRACER",
+                ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER"
             ]
         }
     

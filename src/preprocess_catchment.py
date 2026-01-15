@@ -173,6 +173,8 @@ class CatchmentProcessor:
         logging.getLogger('matplotlib').setLevel(logging.WARNING)
         logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
         logging.getLogger('matplotlib.pyplot').setLevel(logging.WARNING)
+        logging.getLogger('fiona').setLevel(logging.WARNING)
+        logging.getLogger('numba').setLevel(logging.WARNING)
         logging.getLogger('rasterio').setLevel(logging.WARNING)
         
         # Create logger with appropriate name
@@ -1561,6 +1563,39 @@ class CatchmentProcessor:
         """
         self.logger.info(f"Processing catchment {self.gauge_id}")
         
+        # ✅ CHECK: Skip if final output files already exist
+        hru_shapefile = self.get_path('HRU.shp')
+        hru_table = self.get_path('HRU_table.csv')
+        hru_txt = self.get_path('HRU.txt')
+        
+        all_final_outputs_exist = (
+            hru_shapefile.exists() and 
+            hru_table.exists() and 
+            hru_txt.exists()
+        )
+        
+        if all_final_outputs_exist:
+            self.logger.info("✅ All catchment processing outputs already exist")
+            self.logger.info("⏭️  Skipping catchment processing")
+            self.logger.info("💡 Delete files to force reprocessing:")
+            self.logger.info(f"   rm {hru_shapefile}")
+            self.logger.info(f"   rm {hru_table}")
+            self.logger.info(f"   rm {hru_txt}")
+            
+            # Load and return existing HRU table
+            self.logger.info(f"Loading existing HRU table from {hru_table}")
+            existing_table = pd.read_csv(hru_table)
+            
+            # Also load the stats for consistency
+            stats_file = self.get_path('HRU_statistics.csv')
+            if stats_file.exists():
+                self.hru_stats = pd.read_csv(stats_file)
+            
+            self.logger.info(f"✅ Loaded existing HRU table with {len(existing_table)} HRUs")
+            return existing_table
+        
+        # ===== NORMAL PROCESSING (if files don't exist) =====
+        
         try:
             # Step 1: Extract catchment shape
             self.extract_catchment_shape()
@@ -1589,32 +1624,16 @@ class CatchmentProcessor:
             self.create_hru_shapefile()
             
             # Step 9: Create HRU table
-            hru_table = self.create_hru_table()
+            hru_table_df = self.create_hru_table()
             
             self.logger.info(f"Catchment processing completed for gauge ID {self.gauge_id}")
             
-            return hru_table
+            return hru_table_df
             
         except Exception as e:
             self.logger.error(f"Error processing catchment: {str(e)}")
             raise
 
-#---------------------------------------------------------------------------------
-
-def main():
-    """Example usage of the CatchmentProcessor"""
-    
-    # Path to namelist configuration file
-    namelist_path = '/home/jberg/OneDrive/Raven-world/namelist.yaml'
-    
-    # Create processor and run analysis
-    processor = CatchmentProcessor(namelist_path)
-    hru_table = processor.process_catchment()
-    
-    print(f"Created HRU table with {len(hru_table)} HRUs")
-
-if __name__ == "__main__":
-    main()
 
 #--------------------------------------------------------------------------------
 ############################### HRU connectivity ################################
@@ -1849,17 +1868,12 @@ class HRUConnectivityCalculator:
         return hru_raster
     
     #---------------------------------------------------------------------------------
-
+    
     def calculate_flow_accumulation(self) -> np.ndarray:
         """
-        Calculate flow accumulation for each HRU
-        
-        Returns
-        -------
-        np.ndarray
-            Combined flow accumulation raster
+        Calculate flow accumulation for each HRU (OPTIMIZED - single accumulation)
         """
-        self.logger.info("Calculating flow accumulation")
+        self.logger.info("Calculating flow accumulation (optimized)")
         
         # Initialize DataFrame for connectivity
         hru_df = self.hru_shapefile[['HRU_ID']].copy()
@@ -1871,113 +1885,123 @@ class HRUConnectivityCalculator:
             
         hru_df['connectivity'] = [{} for _ in range(len(hru_df))]
         
-        # Loop over every HRU and compute the flow accumulation
-        flow_acc_tot = np.zeros_like(self.hru_raster)
+        # ✅ OPTIMIZATION: Calculate flow accumulation ONCE for entire catchment
+        # Instead of once per HRU (huge speedup!)
+        self.logger.info("Calculating catchment-wide flow accumulation...")
         
-        self.logger.debug(f"Processing flow accumulation for {len(hru_df)} HRUs")
-        for unit_id in hru_df['HRU_ID']:
-            mask_unit = self.hru_raster == unit_id
-            flow_acc = self.dem_grid.accumulation(
-                self.flow_dir, 
-                mask=mask_unit, 
-                routing='d8',
-                nodata_out=np.float64(0)
-            )
-            flow_acc_np = flow_acc.view(np.ndarray)
-            flow_acc_tot = np.maximum(flow_acc_tot, flow_acc_np)
+        flow_acc_total = self.dem_grid.accumulation(
+            self.flow_dir,
+            routing='d8',
+            nodata_out=np.float64(0)
+        )
         
-        self.flow_acc = flow_acc_tot
+        self.flow_acc = flow_acc_total.view(np.ndarray)
         self.connectivity_df = hru_df
         
         self.logger.info("Flow accumulation calculation complete")
-        return flow_acc_tot
+        return self.flow_acc
     
     #---------------------------------------------------------------------------------
 
     def _sum_contributing_flow_acc(self) -> None:
         """
-        Calculate connectivity between HRUs based on flow accumulation
+        Calculate connectivity between HRUs based on flow accumulation (VECTORIZED VERSION)
         """
-        self.logger.info("Calculating connectivity between HRUs")
+        self.logger.info("Calculating connectivity between HRUs (vectorized)")
         
         flow_dir = self.flow_dir.view(np.ndarray)
-        
-        # Loop over every cell in the flow accumulation grid
         height, width = self.flow_acc.shape
         
-        processed_cells = 0
-        total_cells = height * width
+        # ✅ OPTIMIZATION: Single combined mask (slightly faster)
+        valid_mask = (
+            ~np.isnan(self.hru_raster) & 
+            (self.hru_raster > 0) & 
+            (flow_dir > 0)
+        )
         
-        for i in range(height):
-            for j in range(width):
-                # Get the unit id of the current cell
-                if np.isnan(self.hru_raster[i, j]):
-                    continue
-                    
-                unit_id = int(self.hru_raster[i, j])
-                if unit_id == 0:
-                    continue
-                
-                # Get the flow direction of the current cell
-                flow_dir_cell = flow_dir[i, j]
-                if flow_dir_cell <= 0:
-                    continue
-                
-                # Get the unit id of the cell to which the current cell flows
-                # Flow directions:
-                # [N,  NE,  E, SE, S, SW, W, NW]
-                # [64, 128, 1, 2,  4, 8, 16, 32]
-                if flow_dir_cell == 1:
-                    i_next, j_next = i, j + 1
-                elif flow_dir_cell == 2:
-                    i_next, j_next = i + 1, j + 1
-                elif flow_dir_cell == 4:
-                    i_next, j_next = i + 1, j
-                elif flow_dir_cell == 8:
-                    i_next, j_next = i + 1, j - 1
-                elif flow_dir_cell == 16:
-                    i_next, j_next = i, j - 1
-                elif flow_dir_cell == 32:
-                    i_next, j_next = i - 1, j - 1
-                elif flow_dir_cell == 64:
-                    i_next, j_next = i - 1, j
-                elif flow_dir_cell == 128:
-                    i_next, j_next = i - 1, j + 1
-                else:
-                    continue
-                
-                # Check if next cell is within grid boundaries
-                if (i_next < 0 or i_next >= height or
-                        j_next < 0 or j_next >= width):
-                    continue
-                
-                # Check if next cell has a valid HRU ID
-                if np.isnan(self.hru_raster[i_next, j_next]):
-                    continue
-                    
-                unit_id_next = int(self.hru_raster[i_next, j_next])
-                
-                # Skip if the current cell flows to the same unit
-                if unit_id_next == unit_id:
-                    continue
-                
-                # Add connection from current HRU to next HRU
-                idx = self.connectivity_df.index[self.connectivity_df['HRU_ID'] == unit_id].tolist()[0]
-                connectivity = self.connectivity_df.at[idx, 'connectivity']
-                
-                if unit_id_next not in connectivity:
-                    connectivity[unit_id_next] = 0
-                    
-                connectivity[unit_id_next] += float(self.flow_acc[i, j])
-                self.connectivity_df.at[idx, 'connectivity'] = connectivity
-                
-                processed_cells += 1
-                
-                # Log progress periodically
-                if processed_cells % 10000 == 0:
-                    self.logger.debug(f"Processed {processed_cells}/{total_cells} cells ({processed_cells/total_cells:.1%})")
+        # Early exit if no valid cells
+        if not np.any(valid_mask):
+            self.logger.warning("No valid cells found for connectivity calculation")
+            return
         
-        self.logger.info(f"Connectivity calculation complete: processed {processed_cells} connections")
+        # Extract valid cells (only once)
+        valid_rows, valid_cols = np.where(valid_mask)
+        valid_flow_dir = flow_dir[valid_mask]
+        valid_hru_ids = self.hru_raster[valid_mask].astype(np.int32)  # int32 is faster than int
+        valid_flow_acc = self.flow_acc[valid_mask]
+        
+        # Vectorized calculation of next cell coordinates
+        # Flow direction mapping: [E, SE, S, SW, W, NW, N, NE] = [1, 2, 4, 8, 16, 32, 64, 128]
+        delta_map = {
+            1: (0, 1),    # E
+            2: (1, 1),    # SE
+            4: (1, 0),    # S
+            8: (1, -1),   # SW
+            16: (0, -1),  # W
+            32: (-1, -1), # NW
+            64: (-1, 0),  # N
+            128: (-1, 1)  # NE
+        }
+        
+        # Initialize arrays for next cell coordinates
+        next_rows = np.zeros_like(valid_rows)
+        next_cols = np.zeros_like(valid_cols)
+        
+        # Apply deltas based on flow direction
+        for dir_code, (di, dj) in delta_map.items():
+            mask = valid_flow_dir == dir_code
+            next_rows[mask] = valid_rows[mask] + di
+            next_cols[mask] = valid_cols[mask] + dj
+        
+        # Check bounds
+        bounds_mask = (
+            (next_rows >= 0) & (next_rows < height) &
+            (next_cols >= 0) & (next_cols < width)
+        )
+        
+        # Filter to valid next cells
+        next_rows = next_rows[bounds_mask]
+        next_cols = next_cols[bounds_mask]
+        valid_hru_ids = valid_hru_ids[bounds_mask]
+        valid_flow_acc = valid_flow_acc[bounds_mask]
+        
+        # Get next HRU IDs
+        next_hru_ids = self.hru_raster[next_rows, next_cols]
+        
+        # Filter out NaN and same-HRU connections
+        valid_next_mask = (~np.isnan(next_hru_ids)) & (next_hru_ids != valid_hru_ids)
+        
+        from_hrus = valid_hru_ids[valid_next_mask]
+        to_hrus = next_hru_ids[valid_next_mask].astype(int)
+        flow_values = valid_flow_acc[valid_next_mask]
+        
+        # Create unique connection pairs
+        connection_pairs = np.column_stack([from_hrus, to_hrus])
+        
+        # Use numpy's unique with return_inverse for grouping
+        unique_pairs, inverse_indices = np.unique(
+            connection_pairs, axis=0, return_inverse=True
+        )
+        
+        # Sum flow values for each unique pair using numpy (faster than pandas)
+        aggregated_flow = np.zeros(len(unique_pairs), dtype=flow_values.dtype)
+        np.add.at(aggregated_flow, inverse_indices, flow_values)
+        
+        connectivity_updates = {}
+        for i, (from_hru, to_hru) in enumerate(unique_pairs):
+            from_hru_int = int(from_hru)
+            if from_hru_int not in connectivity_updates:
+                connectivity_updates[from_hru_int] = {}
+            connectivity_updates[from_hru_int][int(to_hru)] = float(aggregated_flow[i])
+        
+        # Update connectivity_df in one pass
+        for idx, row in self.connectivity_df.iterrows():
+            hru_id = row['HRU_ID']
+            if hru_id in connectivity_updates:
+                self.connectivity_df.at[idx, 'connectivity'] = connectivity_updates[hru_id]
+        
+        total_connections = len(unique_pairs)
+        self.logger.info(f"Connectivity calculation complete: {total_connections} connections found")
 
     #---------------------------------------------------------------------------------
 
@@ -2087,14 +2111,14 @@ class HRUConnectivityCalculator:
 
     def find_nearest_hru(self) -> None:
         """
-        Find the nearest HRU for HRUs without connectivity
+        Find the nearest HRU for HRUs without connectivity (OPTIMIZED VERSION)
         """
         self.logger.info("Finding nearest HRUs for disconnected HRUs")
         
-        # First, identify HRUs with no connectivity
+        # Identify HRUs with no connectivity
         hrus_without_connections = []
         for idx, row in self.connectivity_df.iterrows():
-            if not row['connectivity']:  # Empty dictionary means no connections
+            if not row['connectivity']:
                 hrus_without_connections.append(row['HRU_ID'])
         
         if not hrus_without_connections:
@@ -2103,53 +2127,50 @@ class HRUConnectivityCalculator:
             
         self.logger.debug(f"Found {len(hrus_without_connections)} HRUs without connections")
         
-        # Create a mapping of HRU IDs to centroid coordinates
+        # ✅ OPTIMIZATION: Vectorized centroid calculation
+        unique_hrus = self.connectivity_df['HRU_ID'].unique()
         hru_centroids = {}
-        for hru_id in self.connectivity_df['HRU_ID'].unique():
-            mask = (self.hru_raster == hru_id)
-            if np.any(mask):  # Check if HRU exists in the raster
-                rows, cols = np.where(mask)
-                hru_centroids[hru_id] = (np.mean(rows), np.mean(cols))
         
-        # For each HRU without connections, find the closest HRU
+        for hru_id in unique_hrus:
+            mask = (self.hru_raster == hru_id)
+            if np.any(mask):
+                rows, cols = np.where(mask)
+                hru_centroids[hru_id] = np.array([np.mean(rows), np.mean(cols)])
+        
+        # ✅ OPTIMIZATION: Use scipy KDTree for nearest neighbor search
+        from scipy.spatial import cKDTree
+        
+        # Build KDTree from all HRU centroids
+        all_hru_ids = list(hru_centroids.keys())
+        all_centroids = np.array([hru_centroids[hru_id] for hru_id in all_hru_ids])
+        tree = cKDTree(all_centroids)
+        
+        # For each disconnected HRU, find nearest neighbor
         for hru_id in hrus_without_connections:
             if hru_id not in hru_centroids:
                 self.logger.warning(f"HRU {hru_id} not found in raster, skipping")
                 continue
             
             src_centroid = hru_centroids[hru_id]
-            min_distance = float('inf')
-            closest_hru = None
             
-            # Compute distance to all other HRUs
-            for other_id, other_centroid in hru_centroids.items():
-                if other_id == hru_id:
-                    continue
-                    
-                # Compute Euclidean distance between centroids
-                distance = ((src_centroid[0] - other_centroid[0])**2 + 
-                             (src_centroid[1] - other_centroid[1])**2)**0.5
-                
-                if distance < min_distance:
-                    min_distance = distance
-                    closest_hru = other_id
+            # Query tree for 2 nearest neighbors (first will be itself)
+            distances, indices = tree.query(src_centroid, k=2)
             
-            if closest_hru is not None:
-                # Create a connection to the closest HRU
-                self.logger.debug(f"Creating connection from HRU {hru_id} to closest HRU {closest_hru}")
-                
-                # Get index for the HRU without connections
-                idx = self.connectivity_df.index[self.connectivity_df['HRU_ID'] == hru_id].tolist()[0]
-                
-                # Add connection with a reasonable weight
-                # For single mode, just add one connection
-                if self.mode == 'single':
-                    self.connectivity_df.at[idx, 'connectivity'] = {closest_hru: 1.0}
-                # For multiple mode, add a connection but allow for other connections to be added later
-                else:
-                    connect = self.connectivity_df.at[idx, 'connectivity']
-                    connect[closest_hru] = 1.0
-                    self.connectivity_df.at[idx, 'connectivity'] = connect
+            # Get the second nearest (first is itself)
+            closest_hru = all_hru_ids[indices[1]]
+            
+            self.logger.debug(f"Creating connection from HRU {hru_id} to closest HRU {closest_hru}")
+            
+            # Get index for the HRU without connections
+            idx = self.connectivity_df.index[self.connectivity_df['HRU_ID'] == hru_id].tolist()[0]
+            
+            # Add connection
+            if self.mode == 'single':
+                self.connectivity_df.at[idx, 'connectivity'] = {closest_hru: 1.0}
+            else:
+                connect = self.connectivity_df.at[idx, 'connectivity']
+                connect[closest_hru] = 1.0
+                self.connectivity_df.at[idx, 'connectivity'] = connect
         
         self.logger.info(f"Connected {len(hrus_without_connections)} disconnected HRUs to nearest neighbors")
 
@@ -2289,6 +2310,26 @@ class HRUConnectivityCalculator:
         """
         self.logger.info(f"Calculating HRU connectivity for gauge {self.gauge_id}")
         
+        # ✅ CHECK: Skip if connectivity file already exists
+        connections_file = self.get_path('connections.rvh')
+        connectivity_csv = self.get_path('HRU_connectivity.csv')
+        
+        if connections_file.exists() and connectivity_csv.exists():
+            self.logger.info("✅ Connectivity files already exist")
+            self.logger.info("⏭️  Skipping connectivity calculation")
+            self.logger.info("💡 Delete files to force reprocessing:")
+            self.logger.info(f"   rm {connections_file}")
+            self.logger.info(f"   rm {connectivity_csv}")
+            
+            # Load and return existing connectivity DataFrame
+            self.logger.info(f"Loading existing connectivity data from {connectivity_csv}")
+            existing_connectivity = pd.read_csv(connectivity_csv)
+            
+            self.logger.info(f"✅ Loaded connectivity for {len(existing_connectivity)} HRUs")
+            return existing_connectivity
+        
+        # ===== NORMAL PROCESSING (if files don't exist) =====
+        
         # Step 1: Load required data
         self.load_data()
         
@@ -2328,9 +2369,8 @@ class HRUConnectivityCalculator:
         self.write_connectivity_file()
         
         # Step 11: Save connectivity DataFrame
-        connectivity_csv_path = self.get_path('HRU_connectivity.csv')
-        self.connectivity_df.to_csv(connectivity_csv_path, index=False)
-        self.logger.debug(f"Saved connectivity DataFrame to {connectivity_csv_path}")
+        self.connectivity_df.to_csv(connectivity_csv, index=False)
+        self.logger.debug(f"Saved connectivity DataFrame to {connectivity_csv}")
         
         self.logger.info("Connectivity calculation complete")
         return self.connectivity_df

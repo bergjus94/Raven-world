@@ -58,6 +58,7 @@ class ERA5LandAnalyzer:
         # Store configuration parameters
         self.main_dir = Path(self.config.get('main_dir'))
         self.gauge_id = self.config.get('gauge_id')
+        self.basin_id = self.config.get('basin_id', self.gauge_id)  # ✅ NEW: Use basin_id if provided, otherwise use gauge_id
         self.start_date = pd.to_datetime(self.config.get('start_date'))
         self.end_date = pd.to_datetime(self.config.get('end_date'))
         self.model_type = self.config.get('model_type')
@@ -65,8 +66,13 @@ class ERA5LandAnalyzer:
         self.coupled = self.config.get('coupled', False)
         self.model_dir = self.main_dir / self.config.get('config_dir')
         
-        # Setup directories
-        self.era5_data_dir = Path(self.config['meteo_dir'].format(gauge_id=self.gauge_id))
+        # ✅ NEW: Setup directories using basin_id for meteo data
+        meteo_dir_template = self.config.get('meteo_dir', '01_data/meteo/gauge_{gauge_id}')
+        self.era5_data_dir = Path(meteo_dir_template.format(basin_id=self.basin_id, gauge_id=self.basin_id))
+        
+        # Make absolute path if needed
+        if not self.era5_data_dir.is_absolute():
+            self.era5_data_dir = self.main_dir / self.era5_data_dir
         
         # Updated plots directory structure
         self.plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'plots'
@@ -100,7 +106,7 @@ class ERA5LandAnalyzer:
                 'cmap': 'Blues',
                 'convert_kelvin': False
             },
-            'pev': {  # Add PET variable
+            'pev': {
                 'name': 'Potential Evapotranspiration',
                 'units': 'mm',
                 'cmap': 'Oranges',
@@ -111,11 +117,15 @@ class ERA5LandAnalyzer:
         # Setup logger
         self.logger = self._setup_logger()
         
+        # ✅ NEW: Load catchment shapefile for clipping
+        self.catchment_extent = self._load_catchment_shapefile()
+        
         # Log the output directory
-        self.logger.info(f"Processing for gauge {self.gauge_id}")
+        self.logger.info(f"Processing for gauge {self.gauge_id} using basin {self.basin_id} meteo data")
         self.logger.info(f"Model type: {self.model_type}")
         self.logger.info(f"Coupled mode: {self.coupled}")
         self.logger.info(f"Model directory: {self.model_dir}")
+        self.logger.info(f"ERA5 data directory: {self.era5_data_dir}")
         self.logger.info(f"Plots will be saved to: {self.plots_dir}")
         self.logger.info(f"Processed meteo files will be saved to: {self.output_path}")
         
@@ -162,6 +172,59 @@ class ERA5LandAnalyzer:
             self.analyze_all_files()
         else:
             self.logger.warning("No files processed - skipping analysis")
+
+    #---------------------------------------------------------------------------------
+
+    def _load_catchment_shapefile(self) -> Optional[gpd.GeoDataFrame]:
+        """
+        Load the catchment shapefile for the gauge_id for clipping ERA5-Land data
+        
+        Returns
+        -------
+        Optional[gpd.GeoDataFrame]
+            Catchment shapefile in WGS84 (EPSG:4326) or None if not found
+        """
+        self.logger.debug(f"Loading catchment shapefile for gauge ID: {self.gauge_id}")
+        
+        try:
+            # Get shapefile path from config
+            shape_dir_template = self.config.get('shape_dir', '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp')
+            shape_path = Path(shape_dir_template.format(gauge_id=self.gauge_id))
+            
+            # Make absolute path if needed
+            if not shape_path.is_absolute():
+                shape_path = self.main_dir / shape_path
+            
+            self.logger.debug(f"Looking for catchment shapefile at: {shape_path}")
+            
+            if not shape_path.exists():
+                self.logger.warning(f"Catchment shapefile not found: {shape_path}")
+                self.logger.warning("⚠️ Processing will continue without catchment clipping")
+                return None
+            
+            # Read the catchment shapefile
+            extent = gpd.read_file(shape_path)
+            
+            self.logger.info(f"✅ Loaded catchment shapefile with {len(extent)} features")
+            self.logger.info(f"   Original CRS: {extent.crs}")
+            
+            # Reproject to WGS84 (EPSG:4326) to match ERA5-Land data
+            if extent.crs != 'EPSG:4326':
+                extent = extent.to_crs('EPSG:4326')
+                self.logger.info("   Reprojected to WGS84 (EPSG:4326)")
+            
+            # Get catchment bounds for logging
+            bounds = extent.total_bounds
+            self.logger.info(f"   Catchment bounds: lon [{bounds[0]:.4f}, {bounds[2]:.4f}], lat [{bounds[1]:.4f}, {bounds[3]:.4f}]")
+            
+            return extent
+            
+        except Exception as e:
+            self.logger.error(f"Error loading catchment shapefile: {e}")
+            self.logger.warning("⚠️ Processing will continue without catchment clipping")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return None
 
     #---------------------------------------------------------------------------------
 
@@ -228,9 +291,21 @@ class ERA5LandAnalyzer:
 
     #---------------------------------------------------------------------------------
 
-    def _find_monthly_files(self) -> Dict[str, List[Path]]:
+    def _find_monthly_files(self, need_temperature: bool = True, 
+                        need_precipitation: bool = True, 
+                        need_pet: bool = True) -> Dict[str, List[Path]]:
         """
         Find all monthly files in the ERA5-Land data directory, including geopotential
+        MODIFIED: Only search for file types that are actually needed
+
+        Parameters
+        ----------
+        need_temperature : bool
+            Whether to search for temperature files
+        need_precipitation : bool
+            Whether to search for precipitation files
+        need_pet : bool
+            Whether to search for PET files
 
         Returns
         -------
@@ -266,47 +341,50 @@ class ERA5LandAnalyzer:
         missing_files = []
 
         for year, month in year_months:
-            # Temperature files
-            temp_pattern = f"era5_land_2m_temperature_{year}_{month:02d}.nc"
-            temp_file = self.era5_data_dir / temp_pattern
+            # ✅ Temperature files (only if needed)
+            if need_temperature:
+                temp_pattern = f"era5_land_2m_temperature_{year}_{month:02d}.nc"
+                temp_file = self.era5_data_dir / temp_pattern
 
-            if temp_file.exists() and temp_file.stat().st_size > 0:
-                monthly_files['temperature'].append(temp_file)
-                self.logger.debug(f"Found temperature file: {temp_file.name}")
-            elif temp_file.exists() and temp_file.stat().st_size == 0:
-                missing_files.append(str(temp_file))
-                self.logger.warning(f"Empty temperature file (0 bytes): {temp_file}")
-            else:
-                missing_files.append(str(temp_file))
-                self.logger.warning(f"Missing temperature file: {temp_file}")
+                if temp_file.exists() and temp_file.stat().st_size > 0:
+                    monthly_files['temperature'].append(temp_file)
+                    self.logger.debug(f"Found temperature file: {temp_file.name}")
+                elif temp_file.exists() and temp_file.stat().st_size == 0:
+                    missing_files.append(str(temp_file))
+                    self.logger.warning(f"Empty temperature file (0 bytes): {temp_file}")
+                else:
+                    missing_files.append(str(temp_file))
+                    self.logger.warning(f"Missing temperature file: {temp_file}")
 
-            # Precipitation files
-            precip_pattern = f"era5_land_total_precipitation_{year}_{month:02d}.nc"
-            precip_file = self.era5_data_dir / precip_pattern
+            # ✅ Precipitation files (only if needed)
+            if need_precipitation:
+                precip_pattern = f"era5_land_total_precipitation_{year}_{month:02d}.nc"
+                precip_file = self.era5_data_dir / precip_pattern
 
-            if precip_file.exists() and precip_file.stat().st_size > 0:
-                monthly_files['precipitation'].append(precip_file)
-                self.logger.debug(f"Found precipitation file: {precip_file.name}")
-            elif precip_file.exists() and precip_file.stat().st_size == 0:
-                missing_files.append(str(precip_file))
-                self.logger.warning(f"Empty precipitation file (0 bytes): {precip_file}")
-            else:
-                missing_files.append(str(precip_file))
-                self.logger.warning(f"Missing precipitation file: {precip_file}")
+                if precip_file.exists() and precip_file.stat().st_size > 0:
+                    monthly_files['precipitation'].append(precip_file)
+                    self.logger.debug(f"Found precipitation file: {precip_file.name}")
+                elif precip_file.exists() and precip_file.stat().st_size == 0:
+                    missing_files.append(str(precip_file))
+                    self.logger.warning(f"Empty precipitation file (0 bytes): {precip_file}")
+                else:
+                    missing_files.append(str(precip_file))
+                    self.logger.warning(f"Missing precipitation file: {precip_file}")
 
-            # PET files
-            pet_pattern = f"era5_land_potential_evaporation_{year}_{month:02d}.nc"
-            pet_file = self.era5_data_dir / pet_pattern
+            # ✅ PET files (only if needed)
+            if need_pet:
+                pet_pattern = f"era5_land_potential_evaporation_{year}_{month:02d}.nc"
+                pet_file = self.era5_data_dir / pet_pattern
 
-            if pet_file.exists() and pet_file.stat().st_size > 0:
-                monthly_files['potential_evaporation'].append(pet_file)
-                self.logger.debug(f"Found PET file: {pet_file.name}")
-            elif pet_file.exists() and pet_file.stat().st_size == 0:
-                missing_files.append(str(pet_file))
-                self.logger.warning(f"Empty PET file (0 bytes): {pet_file}")
-            else:
-                missing_files.append(str(pet_file))
-                self.logger.warning(f"Missing PET file: {pet_file}")
+                if pet_file.exists() and pet_file.stat().st_size > 0:
+                    monthly_files['potential_evaporation'].append(pet_file)
+                    self.logger.debug(f"Found PET file: {pet_file.name}")
+                elif pet_file.exists() and pet_file.stat().st_size == 0:
+                    missing_files.append(str(pet_file))
+                    self.logger.warning(f"Empty PET file (0 bytes): {pet_file}")
+                else:
+                    missing_files.append(str(pet_file))
+                    self.logger.warning(f"Missing PET file: {pet_file}")
 
         # 🏔️ Look for geopotential file (only need to find it once since it's time-invariant)
         geopotential_file = self.era5_data_dir / "era5_land_geopotential.nc"
@@ -573,6 +651,7 @@ class ERA5LandAnalyzer:
             return dataset
 
     #---------------------------------------------------------------------------------
+    
 
     def _aggregate_to_daily(self, dataset: xr.Dataset, variable_type: str) -> Dict[str, xr.Dataset]:
         """
@@ -748,6 +827,8 @@ class ERA5LandAnalyzer:
         except Exception as e:
             self.logger.error(f"Error aggregating {variable_type}: {str(e)}")
             return {}
+        
+    #---------------------------------------------------------------------------------
 
     def process_geopotential_to_elevation(self) -> Optional[Path]:
         """
@@ -929,139 +1010,6 @@ class ERA5LandAnalyzer:
             self.logger.debug("✅ Latitude coordinates are correctly oriented (increasing)")
             return data_array
 
-    def plot_elevation_with_cell_numbers(self, elevation_file: Optional[Path] = None) -> None:
-        """
-        Plot elevation data using cell numbers - shows single elevation value per cell
-        
-        Parameters
-        ----------
-        elevation_file : Optional[Path]
-            Path to elevation file. If None, looks for era5_land_elevation.nc in output directory
-        """
-        if elevation_file is None:
-            elevation_file = self.output_path / 'era5_land_elevation.nc'
-        
-        if not elevation_file.exists():
-            self.logger.error(f"❌ Elevation file not found: {elevation_file}")
-            return
-        
-        self.logger.info(f"🗺️ Plotting elevation data with cell numbers: {elevation_file.name}")
-        
-        try:
-            # Load elevation data
-            ds = xr.open_dataset(elevation_file)
-            elevation = ds['elevation']
-            
-            self.logger.info(f"📊 Elevation data info:")
-            self.logger.info(f"  Shape: {elevation.shape}")
-            self.logger.info(f"  Dimensions: {elevation.dims}")
-            self.logger.info(f"  Coordinates: {list(elevation.coords)}")
-            
-            # Get coordinate information
-            if 'latitude' in elevation.coords and 'longitude' in elevation.coords:
-                lat_coords = elevation.coords['latitude'].values
-                lon_coords = elevation.coords['longitude'].values
-                lat_name, lon_name = 'latitude', 'longitude'
-            elif 'lat' in elevation.coords and 'lon' in elevation.coords:
-                lat_coords = elevation.coords['lat'].values
-                lon_coords = elevation.coords['lon'].values
-                lat_name, lon_name = 'lat', 'lon'
-            else:
-                self.logger.error("❌ Cannot find latitude/longitude coordinates")
-                return
-            
-            self.logger.info(f"  Latitude range: {lat_coords.min():.4f} to {lat_coords.max():.4f}")
-            self.logger.info(f"  Longitude range: {lon_coords.min():.4f} to {lon_coords.max():.4f}")
-            self.logger.info(f"  Number of lat cells: {len(lat_coords)}")
-            self.logger.info(f"  Number of lon cells: {len(lon_coords)}")
-            
-            # Get elevation values
-            elev_values = elevation.values
-            
-            # Create figure
-            fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-            
-            # Plot 1: Elevation with cell numbers as coordinates
-            ax1 = axes[0]
-            
-            # Create cell number arrays
-            lon_cells = np.arange(len(lon_coords))  # X-axis: longitude cell numbers
-            lat_cells = np.arange(len(lat_coords))  # Y-axis: latitude cell numbers
-            
-            # 🔧 SIMPLE APPROACH: Use pcolormesh for clean cell-by-cell display
-            im1 = ax1.pcolormesh(lon_cells, lat_cells, elev_values, 
-                                cmap='terrain', shading='nearest')
-            
-            # Add colorbar
-            cbar1 = plt.colorbar(im1, ax=ax1, shrink=0.8)
-            cbar1.set_label('Elevation (m)', rotation=270, labelpad=20)
-            
-            # Customize plot 1
-            ax1.set_title(f'ERA5-Land Elevation - Cell Numbers\nGauge {self.gauge_id}', 
-                        fontsize=12, fontweight='bold')
-            ax1.set_xlabel('Longitude Cell Number')
-            ax1.set_ylabel('Latitude Cell Number')
-            ax1.grid(True, alpha=0.3)
-            
-            # Add cell number annotations on key points
-            rows, cols = elev_values.shape
-            for i in range(0, rows, max(1, rows//5)):  # Show ~5 labels per axis
-                for j in range(0, cols, max(1, cols//5)):
-                    if not np.isnan(elev_values[i, j]):
-                        ax1.annotate(f'({j},{i})\n{elev_values[i,j]:.0f}m', 
-                                (j, i), ha='center', va='center',
-                                fontsize=7, alpha=0.8,
-                                bbox=dict(boxstyle='round,pad=0.2', 
-                                        facecolor='white', alpha=0.7))
-            
-            # Plot 2: Same data with geographic coordinates
-            ax2 = axes[1]
-            
-            # Use pcolormesh for geographic coordinates too
-            im2 = ax2.pcolormesh(lon_coords, lat_coords, elev_values,
-                                cmap='terrain', shading='nearest')
-            
-            # Add colorbar
-            cbar2 = plt.colorbar(im2, ax=ax2, shrink=0.8)
-            cbar2.set_label('Elevation (m)', rotation=270, labelpad=20)
-            
-            # Customize plot 2
-            ax2.set_title(f'ERA5-Land Elevation - Geographic Coordinates\nGauge {self.gauge_id}', 
-                        fontsize=12, fontweight='bold')
-            ax2.set_xlabel('Longitude (°)')
-            ax2.set_ylabel('Latitude (°)')
-            ax2.grid(True, alpha=0.3)
-            ax2.set_aspect('equal')
-            
-            # Add statistics text box
-            stats_text = f'''Elevation Stats:
-    Min: {np.nanmin(elev_values):.0f} m
-    Max: {np.nanmax(elev_values):.0f} m
-    Mean: {np.nanmean(elev_values):.0f} m
-    Grid: {len(lon_coords)} × {len(lat_coords)} cells
-    Type: Single value per cell'''
-            
-            ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes,
-                    verticalalignment='top', fontsize=9,
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-            
-            plt.tight_layout()
-            
-            # Save plot
-            save_path = self.plots_dir / f'era5_elevation_cell_values_gauge_{self.gauge_id}.png'
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            self.logger.info(f"📊 Elevation plot saved: {save_path}")
-            
-            plt.show()
-            
-            # Close dataset
-            ds.close()
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error plotting elevation: {e}")
-            import traceback
-            self.logger.error(f"Full traceback: {traceback.format_exc()}")
-
     #---------------------------------------------------------------------------------
 
     def _check_and_fix_coordinate_flipping(self, dataset: xr.Dataset) -> xr.Dataset:
@@ -1112,9 +1060,118 @@ class ERA5LandAnalyzer:
         
     #---------------------------------------------------------------------------------
 
+    def _clip_to_catchment(self, dataset: xr.Dataset) -> xr.Dataset:
+        """
+        Clip ERA5-Land dataset to catchment extent
+        
+        Parameters
+        ----------
+        dataset : xr.Dataset
+            ERA5-Land dataset to clip
+            
+        Returns
+        -------
+        xr.Dataset
+            Clipped dataset
+        """
+        # ✅ NEW: If gauge_id equals basin_id, no clipping needed
+        if self.gauge_id == self.basin_id:
+            self.logger.debug(f"gauge_id ({self.gauge_id}) == basin_id ({self.basin_id}) - skipping clipping")
+            self.logger.info("✅ Using meteo data from same basin - no clipping required")
+            return dataset
+        
+        if self.catchment_extent is None:
+            self.logger.debug("No catchment extent available - skipping clipping")
+            return dataset
+        
+        try:
+            self.logger.info("✂️ Clipping dataset to catchment extent...")
+            
+            # Get catchment bounds
+            bounds = self.catchment_extent.total_bounds  # [minx, miny, maxx, maxy]
+            
+            self.logger.debug(f"Catchment bounds: lon [{bounds[0]:.4f}, {bounds[2]:.4f}], lat [{bounds[1]:.4f}, {bounds[3]:.4f}]")
+            
+            # Get data bounds before clipping
+            if 'latitude' in dataset.coords and 'longitude' in dataset.coords:
+                data_lat_min = float(dataset.latitude.min())
+                data_lat_max = float(dataset.latitude.max())
+                data_lon_min = float(dataset.longitude.min())
+                data_lon_max = float(dataset.longitude.max())
+                
+                self.logger.debug(f"Data bounds before clipping: lon [{data_lon_min:.4f}, {data_lon_max:.4f}], lat [{data_lat_min:.4f}, {data_lat_max:.4f}]")
+            
+            # Add buffer to catchment extent (e.g., 0.1 degrees ~ 10km)
+            buffer_deg = 0.1
+            buffered_extent = self.catchment_extent.buffer(buffer_deg)
+            
+            self.logger.debug(f"Applied buffer of {buffer_deg}° to catchment extent")
+            
+            # Get buffered bounds
+            buffered_bounds = buffered_extent.total_bounds
+            
+            # 🔧 FIX: Check if latitude coordinates are increasing or decreasing
+            lat_coords = dataset.latitude.values
+            lat_increasing = lat_coords[0] < lat_coords[-1]
+            
+            if lat_increasing:
+                # Standard case: latitude increases (south to north)
+                lat_slice = slice(buffered_bounds[1], buffered_bounds[3])
+            else:
+                # Reversed case: latitude decreases (north to south)
+                # Need to reverse the slice bounds for proper selection
+                lat_slice = slice(buffered_bounds[3], buffered_bounds[1])
+            
+            # Longitude should always work with standard slice
+            lon_slice = slice(buffered_bounds[0], buffered_bounds[2])
+            
+            self.logger.debug(f"Using latitude slice: {lat_slice}")
+            self.logger.debug(f"Using longitude slice: {lon_slice}")
+            
+            # Clip dataset to buffered catchment bounds
+            clipped = dataset.sel(
+                latitude=lat_slice,
+                longitude=lon_slice
+            )
+            
+            # Verify we got data
+            if clipped.latitude.size == 0 or clipped.longitude.size == 0:
+                self.logger.error("❌ Clipping resulted in empty dataset!")
+                self.logger.error(f"Latitude size: {clipped.latitude.size}, Longitude size: {clipped.longitude.size}")
+                self.logger.warning("Returning unclipped dataset")
+                return dataset
+            
+            # Log clipped dataset info
+            if 'latitude' in clipped.coords and 'longitude' in clipped.coords:
+                clipped_lat_min = float(clipped.latitude.min())
+                clipped_lat_max = float(clipped.latitude.max())
+                clipped_lon_min = float(clipped.longitude.min())
+                clipped_lon_max = float(clipped.longitude.max())
+                
+                self.logger.info(f"   Clipped bounds: lon [{clipped_lon_min:.4f}, {clipped_lon_max:.4f}], lat [{clipped_lat_min:.4f}, {clipped_lat_max:.4f}]")
+                
+                # Calculate reduction in data size
+                original_size = dataset.latitude.size * dataset.longitude.size
+                clipped_size = clipped.latitude.size * clipped.longitude.size
+                reduction = (1 - clipped_size/original_size) * 100
+                
+                self.logger.info(f"✅ Dataset clipped: {original_size} → {clipped_size} grid cells ({reduction:.1f}% reduction)")
+            
+            return clipped
+            
+        except Exception as e:
+            self.logger.error(f"Error clipping dataset to catchment: {e}")
+            self.logger.warning("Returning unclipped dataset")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return dataset
+
+    #---------------------------------------------------------------------------------
+
     def _save_daily_files(self, daily_datasets: Dict[str, xr.Dataset]) -> List[Path]:
         """
         Save daily aggregated datasets to NetCDF files with correct coordinate orientation and elevation data
+        MODIFIED: Add elevation FIRST, then clip the combined dataset to ensure matching extents
 
         Parameters
         ----------
@@ -1128,34 +1185,28 @@ class ERA5LandAnalyzer:
         """
         saved_files = []
 
-        # 🏔️ Load elevation data once (if it exists)
+        # 🏔️ LOAD ELEVATION ONCE (outside the loop)
         elevation_dataset = None
         elevation_file = self.output_path / 'era5_land_elevation.nc'
 
         if elevation_file.exists():
             try:
-                self.logger.info(f"📍 Loading elevation data from: {elevation_file.name}")
+                self.logger.debug(f"📍 Loading elevation data from: {elevation_file.name}")
                 elevation_dataset = xr.open_dataset(elevation_file)
 
-                # Verify elevation data structure
                 if 'elevation' in elevation_dataset.data_vars:
-                    elev_shape = elevation_dataset['elevation'].shape
-                    elev_dims = elevation_dataset['elevation'].dims
-                    self.logger.info(f"   Elevation shape: {elev_shape}, dimensions: {elev_dims}")
-
-                    # 🔧 CRITICAL FIX: Apply coordinate flipping to elevation data too!
+                    # Apply coordinate flipping to elevation data
                     self.logger.debug("Applying coordinate flipping to elevation data...")
-                    elevation_corrected = self._check_and_fix_coordinate_flipping(elevation_dataset)
-                    elevation_dataset.close()  # Close original
-                    elevation_dataset = elevation_corrected
-                    self.logger.debug("✅ Elevation data coordinate flipping applied")
-
+                    elevation_dataset = self._check_and_fix_coordinate_flipping(elevation_dataset)
+                    self.logger.debug("✅ Elevation data coordinate-flipped")
                 else:
                     self.logger.warning("❌ No 'elevation' variable found in elevation file")
                     elevation_dataset = None
 
             except Exception as e:
                 self.logger.error(f"❌ Error loading elevation file: {e}")
+                import traceback
+                self.logger.debug(f"Full traceback: {traceback.format_exc()}")
                 elevation_dataset = None
         else:
             self.logger.debug("📍 No elevation file found - saving without elevation data")
@@ -1168,64 +1219,70 @@ class ERA5LandAnalyzer:
                 self.logger.debug(f"Checking coordinate orientation for {var_name} before saving...")
                 dataset_corrected = self._check_and_fix_coordinate_flipping(dataset)
 
-                # 🏔️ ADD ELEVATION: Now both datasets should have matching coordinates
+                # ✅ NEW: Add elevation BEFORE clipping (if available)
                 elevation_added = False
                 if elevation_dataset is not None:
                     try:
-                        self.logger.debug(f"Adding elevation data to {var_name}...")
-
-                        # Get coordinates from both datasets
-                        dataset_lat = dataset_corrected.coords.get('latitude', dataset_corrected.coords.get('lat'))
-                        dataset_lon = dataset_corrected.coords.get('longitude', dataset_corrected.coords.get('lon'))
+                        # Get coordinates from meteorological data
+                        meteo_lat = dataset_corrected.coords.get('latitude', dataset_corrected.coords.get('lat'))
+                        meteo_lon = dataset_corrected.coords.get('longitude', dataset_corrected.coords.get('lon'))
                         elev_lat = elevation_dataset.coords.get('latitude', elevation_dataset.coords.get('lat'))
                         elev_lon = elevation_dataset.coords.get('longitude', elevation_dataset.coords.get('lon'))
 
-                        if (dataset_lat is not None and dataset_lon is not None and
+                        if (meteo_lat is not None and meteo_lon is not None and
                             elev_lat is not None and elev_lon is not None):
 
-                            # 🔧 DEBUG: Log coordinate values for comparison
-                            self.logger.debug(f"Meteorological data coordinates (after flip):")
-                            self.logger.debug(f"  Lat: {dataset_lat.values[0]:.6f} to {dataset_lat.values[-1]:.6f} ({len(dataset_lat)} points)")
-                            self.logger.debug(f"  Lon: {dataset_lon.values[0]:.6f} to {dataset_lon.values[-1]:.6f} ({len(dataset_lon)} points)")
-
-                            self.logger.debug(f"Elevation data coordinates (after flip):")
-                            self.logger.debug(f"  Lat: {elev_lat.values[0]:.6f} to {elev_lat.values[-1]:.6f} ({len(elev_lat)} points)")
-                            self.logger.debug(f"  Lon: {elev_lon.values[0]:.6f} to {elev_lon.values[-1]:.6f} ({len(elev_lon)} points)")
-
-                            # Check if coordinates match with reasonable tolerance
-                            lat_match = (len(dataset_lat) == len(elev_lat)) and np.allclose(dataset_lat.values, elev_lat.values, rtol=1e-8, atol=1e-8)
-                            lon_match = (len(dataset_lon) == len(elev_lon)) and np.allclose(dataset_lon.values, elev_lon.values, rtol=1e-8, atol=1e-8)
+                            # Check if coordinates match (before clipping)
+                            lat_match = (len(meteo_lat) == len(elev_lat)) and np.allclose(meteo_lat.values, elev_lat.values, rtol=1e-8, atol=1e-8)
+                            lon_match = (len(meteo_lon) == len(elev_lon)) and np.allclose(meteo_lon.values, elev_lon.values, rtol=1e-8, atol=1e-8)
 
                             if lat_match and lon_match:
-                                # Add elevation variable to the dataset
+                                # Direct assignment - coordinates match exactly
                                 dataset_corrected['elevation'] = elevation_dataset['elevation']
                                 elevation_added = True
-
-                                self.logger.debug(f"✅ Successfully added elevation to {var_name}")
-                                self.logger.debug(f"   Final dataset variables: {list(dataset_corrected.data_vars)}")
+                                self.logger.debug(f"✅ Added elevation to {var_name} (exact coordinate match)")
 
                             else:
-                                # 🔧 INTERPOLATE elevation if shapes do not match
-                                self.logger.warning("⚠️ Elevation grid does not match meteo grid - interpolating elevation data")
+                                # Interpolate elevation to match meteo grid
+                                self.logger.debug("⚠️ Elevation grid doesn't match meteo grid - interpolating...")
                                 try:
                                     elev_interp = elevation_dataset['elevation'].interp(
-                                        latitude=dataset_lat,
-                                        longitude=dataset_lon
+                                        latitude=meteo_lat,
+                                        longitude=meteo_lon,
+                                        method='linear'
                                     )
                                     dataset_corrected['elevation'] = elev_interp
                                     elevation_added = True
-                                    self.logger.info("✅ Successfully interpolated elevation to meteo grid")
+                                    self.logger.debug("✅ Successfully interpolated elevation to meteo grid")
                                 except Exception as e:
                                     self.logger.error(f"❌ Error interpolating elevation: {e}")
                                     elevation_added = False
 
-                        else:
-                            self.logger.warning(f"⚠️ Cannot find matching coordinates - skipping elevation for {var_name}")
-
                     except Exception as e:
-                        self.logger.error(f"❌ Error adding elevation to {var_name}: {e}")
+                        self.logger.error(f"❌ Error adding elevation: {e}")
                         import traceback
                         self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+
+                # ✅ NOW: Clip the COMBINED dataset (meteo + elevation together)
+                self.logger.debug("Clipping combined dataset (meteo + elevation) to catchment extent...")
+                dataset_corrected = self._clip_to_catchment(dataset_corrected)
+                self.logger.debug("✅ Combined dataset clipped")
+
+                # Log final coordinates
+                final_lat = dataset_corrected.coords.get('latitude', dataset_corrected.coords.get('lat'))
+                final_lon = dataset_corrected.coords.get('longitude', dataset_corrected.coords.get('lon'))
+                
+                if final_lat is not None and final_lon is not None:
+                    self.logger.debug(f"Final {var_name} coordinates after clipping:")
+                    self.logger.debug(f"  Lat: {final_lat.values[0]:.6f} to {final_lat.values[-1]:.6f} ({len(final_lat)} points)")
+                    self.logger.debug(f"  Lon: {final_lon.values[0]:.6f} to {final_lon.values[-1]:.6f} ({len(final_lon)} points)")
+
+                # Verify elevation is still in the dataset if it was added
+                if elevation_added and 'elevation' in dataset_corrected.data_vars:
+                    self.logger.debug(f"✅ Elevation successfully included in final {var_name} dataset")
+                elif elevation_added and 'elevation' not in dataset_corrected.data_vars:
+                    self.logger.warning(f"⚠️ Elevation was added but disappeared during clipping for {var_name}")
+                    elevation_added = False
 
                 # 🔧 CRITICAL FIX: Ensure we actually have data variables before saving
                 if len(list(dataset_corrected.data_vars)) == 0:
@@ -1237,19 +1294,20 @@ class ERA5LandAnalyzer:
                 output_file_path = self.output_path / filename
 
                 # 🔧 FIX: Convert boolean to string for NetCDF compatibility
-                elevation_status = "true" if elevation_added else "false"  # Convert boolean to string
+                elevation_status = "true" if elevation_added else "false"
 
                 # Add metadata with proper data types
                 dataset_corrected.attrs.update({
                     'title': f'ERA5-Land {var_name} daily data',
-                    'gauge_id': str(self.gauge_id),  # Ensure string type
+                    'gauge_id': str(self.gauge_id),
                     'time_range': f"{self.start_date.date()} to {self.end_date.date()}",
                     'processed_by': 'ERA5LandAnalyzer',
                     'creation_date': pd.Timestamp.now().isoformat(),
-                    'model_type': str(self.model_type),  # Ensure string type
+                    'model_type': str(self.model_type),
                     'catchment': f'catchment_{self.gauge_id}',
                     'coordinate_orientation': 'Corrected for consistent north-up orientation',
-                    'elevation_included': elevation_status  # Use string instead of boolean
+                    'elevation_included': elevation_status,
+                    'clipped_to_catchment': 'true' if self.catchment_extent is not None else 'false'
                 })
 
                 # Log what we're about to save
@@ -1275,10 +1333,9 @@ class ERA5LandAnalyzer:
                 import traceback
                 self.logger.error(f"Full traceback: {traceback.format_exc()}")
 
-        # Close elevation dataset if it was loaded
+        # Close elevation dataset at the end
         if elevation_dataset is not None:
             elevation_dataset.close()
-            self.logger.debug("Closed elevation dataset")
 
         return saved_files
 
@@ -1307,19 +1364,44 @@ class ERA5LandAnalyzer:
         }
         
         existing_files = {}
+        missing_files = []
+        
         for var_type, filename in expected_files.items():
             file_path = self.output_path / filename
             if file_path.exists() and not self.force_reprocess:
                 existing_files[var_type] = file_path
                 self.logger.info(f"✅ Using existing file: {filename}")
+            else:
+                missing_files.append(var_type)
         
-        # Step 1: Find monthly files
-        monthly_files = self._find_monthly_files()
+        # ✅ FIX: If all files exist and not force_reprocess, return immediately
+        if len(missing_files) == 0 and not self.force_reprocess:
+            self.logger.info("✅ All required files already exist - skipping monthly file processing")
+            return list(existing_files.values())
         
-        if not any(monthly_files.values()):
-            self.logger.error("No monthly files found!")
-            return list(existing_files.values())  # Return existing files if any
-        
+        # ✅ NEW: Only find monthly files for the variables we actually need
+        if missing_files or self.force_reprocess:
+            self.logger.info(f"📂 Need to process: {missing_files if missing_files else 'all files (force_reprocess=True)'}")
+            
+            # Determine which file types to search for
+            need_temperature = any('temperature' in mf for mf in missing_files) or self.force_reprocess
+            need_precipitation = 'precipitation' in missing_files or self.force_reprocess
+            need_pet = 'potential_evaporation' in missing_files or self.force_reprocess
+            
+            # Step 1: Find monthly files (ONLY for what we need!)
+            monthly_files = self._find_monthly_files(
+                need_temperature=need_temperature,
+                need_precipitation=need_precipitation, 
+                need_pet=need_pet
+            )
+            
+            if not any(monthly_files.values()):
+                self.logger.error("No monthly files found!")
+                return list(existing_files.values())  # Return existing files if any
+        else:
+            # No need to find monthly files
+            monthly_files = {'temperature': [], 'precipitation': [], 'potential_evaporation': [], 'geopotential': []}
+
         # 🏔️ Step 2: Process geopotential to elevation FIRST (if it doesn't exist)
         elevation_file = self.output_path / 'era5_land_elevation.nc'
         
@@ -1446,95 +1528,165 @@ class ERA5LandAnalyzer:
         return ds
     
     #---------------------------------------------------------------------------------
-    
-    def _filter_time_range(self, dataset: xr.Dataset) -> xr.Dataset:
+
+    def create_warmup_data(self, n_repetitions: int = None) -> Dict[str, xr.Dataset]:
         """
-        Filter dataset to the specified time range from namelist
+        Create warm-up data by repeating the first year of simulation data
+        
+        This is the most common approach in hydrological modeling. The first year
+        of the simulation period is repeated to allow the model to reach equilibrium
+        before the actual calibration/validation period begins.
         
         Parameters
         ----------
-        dataset : xr.Dataset
-            Input dataset
+        n_repetitions : int, optional
+            Number of times to repeat the first year (default: auto-calculate from warm_up_date)
+            If None, calculates based on the difference between warm_up_date and start_date
             
         Returns
         -------
-        xr.Dataset
-            Filtered dataset
-        """
-        # Handle different time coordinate names
-        time_coord = None
-        for coord in ['time', 'valid_time', 'datetime']:
-            if coord in dataset.dims:
-                time_coord = coord
-                break
-        
-        if time_coord is None:
-            self.logger.warning("No time coordinate found in dataset")
-            return dataset
-        
-        # Rename to standard 'time' if needed
-        if time_coord != 'time':
-            dataset = dataset.rename({time_coord: 'time'})
-        
-        # Filter to specified date range
-        filtered_ds = dataset.sel(time=slice(self.start_date, self.end_date))
-        
-        self.logger.info(f"Filtered dataset from {self.start_date} to {self.end_date}")
-        self.logger.info(f"Original time range: {dataset.time.min().values} to {dataset.time.max().values}")
-        self.logger.info(f"Filtered time range: {filtered_ds.time.min().values} to {filtered_ds.time.max().values}")
-        
-        return filtered_ds
-    
-    #---------------------------------------------------------------------------------
-    
-    def process_and_save_netcdf(self, netcdf_file: Path) -> Optional[Path]:
-        """
-        Process NetCDF file (filter time range, convert units) and save
-        
-        Parameters
-        ----------
-        netcdf_file : Path
-            Path to the NetCDF file to process
+        Dict[str, xr.Dataset]
+            Dictionary with warm-up datasets for each variable
             
-        Returns
-        -------
-        Path or None
-            Path to processed file if successful, None otherwise
+        Notes
+        -----
+        Warm-up data is saved with '_warmup' suffix in filenames.
+        The warm-up period starts from self.warmup_date and ends one day before self.start_date.
+        
+        Examples
+        --------
+        With warm_up_date: '2001-01-01' and start_date: '2002-01-01':
+        - Warm-up period: 2001-01-01 to 2001-12-31 (1 year)
+        - First year repeated: 1 time
+        
+        With warm_up_date: '2000-01-01' and start_date: '2002-01-01':
+        - Warm-up period: 2000-01-01 to 2001-12-31 (2 years)
+        - First year repeated: 2 times
         """
-        self.logger.info(f"Processing file: {netcdf_file.name}")
+        if not hasattr(self, 'warmup_date') or self.warmup_date is None:
+            self.logger.warning("⚠️ No warm_up_date specified in namelist - skipping warm-up data creation")
+            self.logger.info("💡 Add 'warm_up_date: YYYY-MM-DD' to your namelist to enable warm-up period")
+            return {}
+        
+        # Calculate number of repetitions from dates if not specified
+        if n_repetitions is None:
+            # Calculate years between warm_up_date and start_date
+            years_diff = (self.start_date - self.warmup_date).days / 365.25
+            n_repetitions = max(1, int(np.ceil(years_diff)))
+            self.logger.info(f"📅 Auto-calculated warm-up repetitions: {n_repetitions} year(s)")
+            self.logger.info(f"   Based on: {self.warmup_date.date()} to {self.start_date.date()} = {years_diff:.2f} years")
+        
+        self.logger.info(f"🔄 Creating warm-up data using 'repeat_first_year' method")
+        self.logger.info(f"   Warm-up period: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
+        self.logger.info(f"   Number of repetitions: {n_repetitions}")
+        
+        warmup_datasets = {}
         
         try:
-            # Open the dataset
-            ds = xr.open_dataset(netcdf_file, chunks={'time': 100})
+            # Find all processed daily files
+            processed_files = {
+                'temp_mean': self.output_path / 'era5_land_temp_mean.nc',
+                'temp_min': self.output_path / 'era5_land_temp_min.nc',
+                'temp_max': self.output_path / 'era5_land_temp_max.nc',
+                'precip': self.output_path / 'era5_land_precip.nc',
+                'pet': self.output_path / 'era5_land_pet.nc'
+            }
             
-            # Filter time range
-            ds_filtered = self._filter_time_range(ds)
+            for var_name, file_path in processed_files.items():
+                if not file_path.exists():
+                    self.logger.warning(f"⚠️ File not found: {file_path.name} - skipping for warm-up")
+                    continue
+                
+                self.logger.debug(f"Processing {var_name} for warm-up...")
+                
+                # Load the processed data
+                ds = xr.open_dataset(file_path)
+                
+                # Extract first year of simulation data
+                first_year_end = self.start_date + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+                
+                # Make sure we don't go beyond the end date
+                if first_year_end > self.end_date:
+                    first_year_end = self.end_date
+                    self.logger.warning(f"⚠️ First year extends beyond end_date - using full available period")
+                
+                first_year_data = ds.sel(time=slice(self.start_date, first_year_end))
+                
+                self.logger.debug(f"  First year: {first_year_data.time.min().values} to {first_year_data.time.max().values}")
+                self.logger.debug(f"  First year length: {len(first_year_data.time)} days")
+                
+                # Repeat the first year n_repetitions times
+                repeated_datasets = []
+                current_time = pd.to_datetime(self.warmup_date)
+                
+                for i in range(n_repetitions):
+                    # Create a copy with adjusted time coordinates
+                    year_copy = first_year_data.copy(deep=True)
+                    
+                    # Calculate new time coordinates
+                    time_deltas = first_year_data.time - first_year_data.time[0]
+                    new_times = current_time + time_deltas
+                    
+                    year_copy['time'] = new_times
+                    repeated_datasets.append(year_copy)
+                    
+                    # Move to next year
+                    current_time = new_times[-1].values + pd.Timedelta(days=1)
+                    
+                    self.logger.debug(f"  Repetition {i+1}: {new_times[0].values} to {new_times[-1].values}")
+                
+                # Concatenate all repetitions
+                warmup_data = xr.concat(repeated_datasets, dim='time')
+                
+                # Trim to exact warm-up period (warm_up_date to start_date - 1 day)
+                warmup_end = self.start_date - pd.Timedelta(days=1)
+                warmup_data = warmup_data.sel(time=slice(self.warmup_date, warmup_end))
+                
+                # Add metadata
+                warmup_data.attrs.update({
+                    'title': f'ERA5-Land {var_name} warm-up data',
+                    'warmup_method': 'repeat_first_year',
+                    'warmup_repetitions': n_repetitions,
+                    'warmup_period': f"{self.warmup_date.date()} to {warmup_end.date()}",
+                    'original_period': f"{self.start_date.date()} to {self.end_date.date()}",
+                    'gauge_id': str(self.gauge_id),
+                    'model_type': str(self.model_type),
+                    'created': pd.Timestamp.now().isoformat(),
+                    'description': f'Warm-up data created by repeating first year {n_repetitions} time(s)'
+                })
+                
+                # Save warm-up data
+                warmup_filename = f"era5_land_{var_name}_warmup.nc"
+                warmup_filepath = self.output_path / warmup_filename
+                
+                warmup_data.to_netcdf(warmup_filepath)
+                self.logger.info(f"✅ Saved warm-up data: {warmup_filename}")
+                self.logger.info(f"   Time range: {warmup_data.time.min().values} to {warmup_data.time.max().values}")
+                self.logger.info(f"   Number of days: {len(warmup_data.time)}")
+                
+                warmup_datasets[var_name] = warmup_data
+                
+                # Close datasets
+                ds.close()
+                warmup_data.close()
             
-            # Get data variables and convert units
-            data_vars = [var for var in ds_filtered.data_vars if len(ds_filtered[var].dims) >= 2]
+            self.logger.info(f"✅ Warm-up data creation completed for {len(warmup_datasets)} variables")
+            self.logger.info(f"📁 Warm-up files saved in: {self.output_path}")
             
-            for var_name in data_vars:
-                ds_filtered = self._convert_units(ds_filtered, var_name)
-            
-            # Create output filename
-            output_filename = f"processed_{self.gauge_id}_{netcdf_file.stem}_{self.start_date.strftime('%Y')}_{self.end_date.strftime('%Y')}.nc"
-            output_path = self.processed_data_dir / output_filename
-            
-            # Save processed dataset
-            ds_filtered.to_netcdf(output_path)
-            self.logger.info(f"Processed file saved to: {output_path}")
-            
-            return output_path
+            return warmup_datasets
             
         except Exception as e:
-            self.logger.error(f"Error processing {netcdf_file.name}: {str(e)}")
-            return None
-    
+            self.logger.error(f"❌ Error creating warm-up data: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return {}
+
     #---------------------------------------------------------------------------------
     
     def plot_spatial_overview(self, netcdf_file: Path) -> None:
         """
         Plot spatial overview of the first timestep for each variable in the NetCDF file
+        INCLUDING elevation data if available
         
         Parameters
         ----------
@@ -1548,7 +1700,37 @@ class ERA5LandAnalyzer:
             ds = xr.open_dataset(netcdf_file, chunks={'time': 100})
             
             # Filter time range
-            ds = self._filter_time_range(ds)
+            ds = self._filter_time_range_exact(ds)
+            
+            # Get data variables (exclude coordinates and elevation)
+            data_vars = [var for var in ds.data_vars if len(ds[var].dims) >= 2 and var != 'elevation']
+            
+            # ✅ Check if elevation is available in this file
+            has_elevation = 'elevation' in ds.data_vars
+            
+            if has_elevation:
+                self.logger.info("✅ Elevation data found in file - will include in plots")
+            else:
+                self.logger.debug("No elevation data in this file")
+            
+            if not data_vars and not has_elevation:
+                self.logger.warning(f"No suitable variables found in {netcdf_file.name}")
+                return
+            
+            # ✅ Calculate total number of subplots (meteo vars + elevation if available)
+            total_plots = len(data_vars) + (1 if has_elevation else 0)
+            
+            # Create subplots
+            cols = min(3, total_plots)
+            rows = (total_plots + cols - 1) // cols
+            
+            fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 4*rows))
+            if total_plots == 1:
+                axes = [axes]
+            elif rows == 1:
+                axes = axes.flatten()
+            else:
+                axes = axes.flatten()
             
             # Load catchment shapefile
             catchment_shape = None
@@ -1601,29 +1783,10 @@ class ERA5LandAnalyzer:
                 import traceback
                 traceback.print_exc()
             
-            # Get data variables (exclude coordinates)
-            data_vars = [var for var in ds.data_vars if len(ds[var].dims) >= 2]
-            
-            if not data_vars:
-                self.logger.warning(f"No suitable variables found in {netcdf_file.name}")
-                return
-            
-            # Create subplots for each variable
-            n_vars = len(data_vars)
-            cols = min(3, n_vars)
-            rows = (n_vars + cols - 1) // cols
-            
-            fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 4*rows))
-            if n_vars == 1:
-                axes = [axes]
-            elif rows == 1:
-                axes = axes.flatten()
-            else:
-                axes = axes.flatten()
-            
             fig.suptitle(f'Spatial Overview - Gauge {self.gauge_id}\n{netcdf_file.stem} - First Timestep\nDate Range: {self.start_date.strftime("%Y-%m-%d")} to {self.end_date.strftime("%Y-%m-%d")}', 
                         fontsize=14, fontweight='bold')
             
+            # Plot each meteorological variable
             for i, var_name in enumerate(data_vars):
                 ax = axes[i]
                 
@@ -1649,20 +1812,11 @@ class ERA5LandAnalyzer:
                 # Overlay catchment boundary if available
                 if catchment_shape is not None:
                     try:
-                        self.logger.debug(f"Plotting catchment boundary on subplot {i+1}")
                         catchment_shape.boundary.plot(ax=ax, color='red', linewidth=3, alpha=0.9, label='Catchment boundary')
-                        
-                        # Also plot the filled area with transparency
                         catchment_shape.plot(ax=ax, facecolor='none', edgecolor='red', linewidth=3, alpha=0.9)
-                        
-                        # Add legend
                         ax.legend(loc='upper right', fontsize=10, framealpha=0.8)
-                        self.logger.debug("✅ Catchment boundary plotted successfully")
-                        
                     except Exception as e:
                         self.logger.error(f"Error plotting catchment boundary: {e}")
-                        import traceback
-                        traceback.print_exc()
                 
                 # Add colorbar
                 divider = make_axes_locatable(ax)
@@ -1674,15 +1828,49 @@ class ERA5LandAnalyzer:
                 ax.set_title(f"{var_info['name']}")
                 ax.set_xlabel('Longitude')
                 ax.set_ylabel('Latitude')
-                
-                # Add grid
                 ax.grid(True, alpha=0.3)
-                
-                # Set aspect ratio to equal for proper geographic display
                 ax.set_aspect('equal')
             
+            # ✅ Plot elevation in the last subplot if available
+            if has_elevation:
+                ax = axes[len(data_vars)]  # Use next available subplot
+                
+                elevation_data = ds['elevation']
+                
+                self.logger.debug(f"Plotting elevation data - shape: {elevation_data.shape}, dims: {elevation_data.dims}")
+                
+                # Plot elevation
+                if hasattr(ds, 'longitude') and hasattr(ds, 'latitude'):
+                    im = elevation_data.plot(ax=ax, x='longitude', y='latitude', cmap='terrain', add_colorbar=False)
+                else:
+                    im = elevation_data.plot(ax=ax, cmap='terrain', add_colorbar=False)
+                
+                # Overlay catchment boundary
+                if catchment_shape is not None:
+                    try:
+                        catchment_shape.boundary.plot(ax=ax, color='red', linewidth=3, alpha=0.9, label='Catchment boundary')
+                        catchment_shape.plot(ax=ax, facecolor='none', edgecolor='red', linewidth=3, alpha=0.9)
+                        ax.legend(loc='upper right', fontsize=10, framealpha=0.8)
+                    except Exception as e:
+                        self.logger.error(f"Error plotting catchment boundary on elevation: {e}")
+                
+                # Add colorbar
+                divider = make_axes_locatable(ax)
+                cax = divider.append_axes("right", size="5%", pad=0.1)
+                cbar = plt.colorbar(im, cax=cax)
+                cbar.set_label("m asl", rotation=270, labelpad=15)
+                
+                # Customize plot
+                ax.set_title("Elevation")
+                ax.set_xlabel('Longitude')
+                ax.set_ylabel('Latitude')
+                ax.grid(True, alpha=0.3)
+                ax.set_aspect('equal')
+                
+                self.logger.debug("✅ Elevation plot completed")
+            
             # Hide unused subplots
-            for i in range(n_vars, len(axes)):
+            for i in range(total_plots, len(axes)):
                 axes[i].set_visible(False)
             
             plt.tight_layout()
@@ -1723,7 +1911,7 @@ class ERA5LandAnalyzer:
             ds = xr.open_dataset(netcdf_file, chunks={'time': 100})
             
             # Filter time range
-            ds = self._filter_time_range(ds)
+            ds = self._filter_time_range_exact(ds)
             
             # Get data variables
             data_vars = [var for var in ds.data_vars if len(ds[var].dims) >= 2]
@@ -2248,6 +2436,8 @@ class ERA5LandAnalyzer:
         
         return file_info
     
+    #---------------------------------------------------------------------------------
+    
     def debug_precipitation_values(self, netcdf_file: Path) -> None:
         """
         Debug precipitation values to understand the extreme values
@@ -2311,6 +2501,7 @@ class ERA5LandAnalyzer:
         except Exception as e:
             self.logger.error(f"Error debugging precipitation: {e}")
 
+    #---------------------------------------------------------------------------------
 
     def debug_hourly_precipitation(self, monthly_files: List[Path]) -> None:
         """
@@ -2356,32 +2547,6 @@ class ERA5LandAnalyzer:
             
         except Exception as e:
             self.logger.error(f"Error debugging hourly precipitation: {e}")
-
-#--------------------------------------------------------------------------------
-############################### Main execution ################################
-#--------------------------------------------------------------------------------
-
-def main():
-    """Example usage of the ERA5LandAnalyzer"""
-    
-    # Path to namelist configuration file
-    namelist_path = '/home/jberg/OneDrive/Raven-world/namelist.yaml'
-    
-    # Create analyzer and run processing & analysis
-    analyzer = ERA5LandAnalyzer(namelist_path)
-    
-    # Get info about processed files
-    file_info = analyzer.get_processed_files_info()
-    print("\n📁 Processed Files:")
-    for var_name, file_path in file_info.items():
-        print(f"  {var_name}: {file_path.name}")
-    
-    # Run analysis
-    analyzer.analyze_all_files()
-
-if __name__ == "__main__":
-    main()
-
 
 
 #--------------------------------------------------------------------------------
@@ -2619,108 +2784,58 @@ class GridWeightsGenerator:
 
     def make_polygon_shape_from_point_shape(self, gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """
-        Create a polygon grid from ERA5-Land point data
-        
-        Parameters
-        ----------
-        gdf : gpd.GeoDataFrame
-            GeoDataFrame with point geometries in WGS84
-            
-        Returns
-        -------
-        gpd.GeoDataFrame
-            GeoDataFrame with polygon geometries
+        Create a polygon grid from ERA5-Land point data (OPTIMIZED)
         """
         self.logger.debug("Creating polygon grid from ERA5-Land point data")
         
-        # From the GeoDataFrame that contains the netCDF grid, get the extent as points
-        xmin, ymin, xmax, ymax = gdf.total_bounds
-        self.logger.debug(f"Grid bounds (WGS84): xmin={xmin:.6f}, xmax={xmax:.6f}, ymin={ymin:.6f}, ymax={ymax:.6f}")
+        # Get unique coordinates
+        sorted_x = np.sort(gdf.geometry.x.unique())
+        sorted_y = np.sort(gdf.geometry.y.unique())
         
-        # For ERA5-Land, infer cell size from the data points
-        self.logger.debug("Inferring cell size from ERA5-Land grid spacing")
+        self.logger.debug(f"Grid: {len(sorted_x)} x {len(sorted_y)} cells")
         
-        # Sort points by coordinates to find adjacent points
-        sorted_x = sorted(gdf.geometry.x.unique())
-        sorted_y = sorted(gdf.geometry.y.unique())
+        # Infer cell size
+        width = np.median(np.diff(sorted_x)) if len(sorted_x) > 1 else 0.1
+        height = np.median(np.diff(sorted_y)) if len(sorted_y) > 1 else 0.1
         
-        self.logger.debug(f"Number of unique X coordinates: {len(sorted_x)}")
-        self.logger.debug(f"Number of unique Y coordinates: {len(sorted_y)}")
+        self.logger.debug(f"Cell size: {width:.6f}° x {height:.6f}°")
         
-        # Calculate distances between adjacent points (in degrees)
-        x_diffs = [sorted_x[i+1] - sorted_x[i] for i in range(len(sorted_x)-1)]
-        y_diffs = [sorted_y[i+1] - sorted_y[i] for i in range(len(sorted_y)-1)]
+        # ✅ OPTIMIZED: Create boundaries using numpy operations
+        cols = np.concatenate([
+            [sorted_x[0] - width/2],
+            sorted_x + width/2
+        ])
         
-        if x_diffs and y_diffs:
-            width = np.median(x_diffs)
-            height = np.median(y_diffs)
-            self.logger.debug(f"Inferred ERA5-Land cell size: width={width:.6f}°, height={height:.6f}°")
-        else:
-            # Default ERA5-Land resolution is 0.1° x 0.1°
-            width = 0.1
-            height = 0.1
-            self.logger.warning(f"Could not infer cell size, using default ERA5-Land resolution: {width}° x {height}°")
+        rows = np.concatenate([
+            [sorted_y[0] - height/2],
+            sorted_y + height/2
+        ])
         
-        # FIX: Create boundaries based on actual data points, not extended bounds
-        # This ensures we only create polygons for actual data cells
-        cols = []
-        rows = []
+        # ✅ OPTIMIZED: Vectorized polygon creation using list comprehension
+        polygons = [
+            Polygon([
+                (cols[ix], rows[iy]),
+                (cols[ix+1], rows[iy]),
+                (cols[ix+1], rows[iy+1]),
+                (cols[ix], rows[iy+1])
+            ])
+            for iy in range(len(rows)-1)
+            for ix in range(len(cols)-1)
+        ]
         
-        # Create column boundaries (X direction)
-        for i, x in enumerate(sorted_x):
-            if i == 0:
-                # First column: start at x - width/2
-                cols.append(x - width/2)
-            # Add the right boundary of current cell
-            cols.append(x + width/2)
+        # ✅ OPTIMIZED: Vectorized cell_id creation
+        cell_ids = [str(iy * (len(cols)-1) + ix) 
+                    for iy in range(len(rows)-1) 
+                    for ix in range(len(cols)-1)]
         
-        # Create row boundaries (Y direction) 
-        for i, y in enumerate(sorted_y):
-            if i == 0:
-                # First row: start at y - height/2
-                rows.append(y - height/2)
-            # Add the top boundary of current cell
-            rows.append(y + height/2)
-        
-        self.logger.debug(f"Creating grid with {len(cols)-1} columns and {len(rows)-1} rows")
-        self.logger.debug(f"Expected total cells: {(len(cols)-1) * (len(rows)-1)}")
-        self.logger.debug(f"Actual data points: {len(gdf)}")
-        
-        # Verify the grid matches the data
-        expected_cells = (len(cols)-1) * (len(rows)-1)
-        if expected_cells != len(gdf):
-            self.logger.warning(f"Grid size mismatch: expected {expected_cells} cells, have {len(gdf)} data points")
-        
-        # initialize the Polygon list
-        polygons = []
-        cell_id = []
-        
-        # Create the GeoDataFrame with the grid
-        grid_cols = ['row', 'col', 'cell_id', 'polygons', 'area', 'area_rel']
-        grid = gpd.GeoDataFrame(columns=grid_cols, geometry='polygons')
-        grid.set_crs(epsg='4326')  # ERA5-Land is in WGS84
-        
-        # Loop over each cell and create the corresponding Polygon
-        # Use len(cols)-1 and len(rows)-1 to avoid creating extra cells
-        for ix in range(len(cols)-1):
-            for iy in range(len(rows)-1):
-                x = cols[ix]
-                y = rows[iy]
-                x_next = cols[ix+1]
-                y_next = rows[iy+1]
-                
-                polygons.append(Polygon([(x, y), (x_next, y), (x_next, y_next), (x, y_next)]))
-                cid = int(iy * (len(cols)-1) + ix)
-                cell_id.append(f"{str(cid)}")
-        
-        # Use the polygon list in the GeoDataFrame
-        grid["polygons"] = polygons
-        grid["cell_id"] = cell_id
-        grid["area_rel"] = 0
-        grid = grid.set_crs('EPSG:4326')  # WGS84 for ERA5-Land
+        # Create GeoDataFrame directly
+        grid = gpd.GeoDataFrame({
+            'cell_id': cell_ids,
+            'area_rel': 0,
+            'geometry': polygons
+        }, crs='EPSG:4326')
         
         self.logger.info(f"Created grid with {len(grid)} cells")
-        self.logger.info(f"This should match the number of data points: {len(gdf)}")
         
         return grid
     
@@ -2763,26 +2878,11 @@ class GridWeightsGenerator:
 
     def calc_relative_area(self, overlay: gpd.GeoDataFrame, hru: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """
-        Calculate the relative area of each HRU in each ERA5-Land grid cell
-        
-        Parameters
-        ----------
-        overlay : gpd.GeoDataFrame
-            Overlay of grid and HRU shapes
-        hru : gpd.GeoDataFrame
-            HRU polygons
-            
-        Returns
-        -------
-        gpd.GeoDataFrame
-            Overlay with calculated relative areas
+        Calculate the relative area of each HRU in each ERA5-Land grid cell (VECTORIZED)
         """
-        self.logger.debug("Calculating relative areas for ERA5-Land grid cells")
+        self.logger.debug("Calculating relative areas for ERA5-Land grid cells (vectorized)")
         
-        column_names_list = list(overlay.columns)
-        result_gdf = gpd.GeoDataFrame(columns=column_names_list)
-        
-        # Get HRU ID column name (might be 'HRU_ID' or 'HRU ID')
+        # Find HRU ID column
         hru_id_col = None
         for col in overlay.columns:
             if 'hru' in col.lower() and 'id' in col.lower():
@@ -2794,48 +2894,41 @@ class GridWeightsGenerator:
         
         self.logger.debug(f"Using HRU ID column: {hru_id_col}")
         
-        # Get unique HRU IDs
-        unique_hrus = sorted(overlay[hru_id_col].unique())
-        self.logger.debug(f"Processing {len(unique_hrus)} HRUs: {unique_hrus}")
+        # ✅ VECTORIZED: Calculate all areas at once
+        overlay_copy = overlay.copy()
         
-        # calculate relative area for each HRU
-        for hru_id in unique_hrus:
-            self.logger.debug(f"Processing HRU {hru_id}")
-            
-            # extract Geodataframe from each HRU
-            mask = (overlay[hru_id_col] == hru_id)
-            filtered_gdf = overlay[mask].copy()
+        # Calculate area in square meters (project if needed)
+        if overlay_copy.crs.to_string() == 'EPSG:4326':
+            overlay_proj = overlay_copy.to_crs('ESRI:54009')
+            overlay_copy["area"] = overlay_proj.geometry.area
+        else:
+            overlay_copy["area"] = overlay_copy.geometry.area
         
-            # calculate area in square meters (project to appropriate UTM if needed)
-            if filtered_gdf.crs.to_string() == 'EPSG:4326':
-                # For WGS84, use equal area projection for accurate area calculation
-                # Use a general equal area projection (World Mollweide)
-                filtered_gdf_proj = filtered_gdf.to_crs('ESRI:54009')
-                filtered_gdf["area"] = filtered_gdf_proj.geometry.area
+        # ✅ VECTORIZED: Group by HRU and calculate relative areas using pandas
+        # Calculate total area per HRU
+        hru_totals = overlay_copy.groupby(hru_id_col)['area'].transform('sum')
+        
+        # Calculate relative area (avoiding division by zero)
+        overlay_copy['area_rel'] = np.where(
+            hru_totals > 0,
+            overlay_copy['area'] / hru_totals,
+            0
+        )
+        
+        # Round to 5 decimal places
+        overlay_copy['area_rel'] = overlay_copy['area_rel'].round(5)
+        
+        # ✅ VECTORIZED: Normalize within each HRU group
+        # Group by HRU and normalize
+        def normalize_group(group):
+            total = group['area_rel'].sum()
+            if total > 0:
+                group['normalized_relative_area'] = (group['area_rel'] / total).round(5)
             else:
-                filtered_gdf["area"] = filtered_gdf.geometry.area
-                
-            area_sum = float(filtered_gdf['area'].sum())
-            
-            if area_sum > 0:
-                for index, row in filtered_gdf.iterrows():
-                    # Calculate relative area
-                    filtered_gdf.at[index, 'area_rel'] = filtered_gdf.loc[index]['area'] / area_sum
-            
-                filtered_gdf['area_rel'] = filtered_gdf['area_rel'].round(5)
-            
-                # Normalize the values in the 'relative_area' column
-                sum_rel_area = filtered_gdf['area_rel'].sum()
-                if sum_rel_area > 0:
-                    filtered_gdf['normalized_relative_area'] = (filtered_gdf['area_rel'] / sum_rel_area)
-                    filtered_gdf['normalized_relative_area'] = filtered_gdf['normalized_relative_area'].round(5)
-                else:
-                    filtered_gdf['normalized_relative_area'] = 0
-            else:
-                filtered_gdf['area_rel'] = 0
-                filtered_gdf['normalized_relative_area'] = 0
+                group['normalized_relative_area'] = 0
+            return group
         
-            result_gdf = pd.concat([result_gdf, filtered_gdf], ignore_index=True)
+        result_gdf = overlay_copy.groupby(hru_id_col, group_keys=False).apply(normalize_group)
         
         self.logger.debug("Relative area calculation completed")
         return result_gdf
@@ -2926,6 +3019,46 @@ class GridWeightsGenerator:
         """
         self.logger.info(f"Generating ERA5-Land grid weights for catchment {self.gauge_id}")
         
+        # ✅ CHECK 1: Skip if GridWeights.txt already exists
+        gridweights_file = self.out_dir / 'GridWeights.txt'
+        
+        if gridweights_file.exists():
+            self.logger.info(f"✅ GridWeights.txt already exists at {gridweights_file}")
+            self.logger.info("⏭️  Skipping grid weights generation")
+            self.logger.info("💡 Delete the file to regenerate: rm " + str(gridweights_file))
+            
+            # Return empty GeoDataFrame since we're skipping
+            return gpd.GeoDataFrame()
+        
+        # ✅ CHECK 2: Check for cached overlay calculation
+        cache_file = self.out_dir / 'grid_overlay_cache.pkl'
+        
+        if cache_file.exists():
+            self.logger.info("📦 Loading cached overlay data...")
+            try:
+                import pickle
+                with open(cache_file, 'rb') as f:
+                    cached_data = pickle.load(f)
+                
+                relative_area = cached_data['relative_area']
+                HRU = cached_data['HRU']
+                era5_grid_polygons = cached_data['era5_grid_polygons']
+                
+                self.logger.info("✅ Loaded from cache - skipping overlay calculations")
+                
+                # Jump straight to writing file
+                self.write_gridWeights(HRU, era5_grid_polygons, relative_area)
+                
+                return relative_area
+                
+            except Exception as e:
+                self.logger.warning(f"⚠️  Failed to load cache: {e}, recalculating...")
+                cache_file.unlink(missing_ok=True)
+        
+        # ===== NORMAL PROCESSING (if no cache) =====
+        
+        self.logger.info("Processing grid weights (no cache found)...")
+        
         # Find ERA5-Land netCDF files
         if use_precipitation:
             era5_file = self.out_dir / f'era5_land_precip.nc'
@@ -3015,6 +3148,28 @@ class GridWeightsGenerator:
         # Calculate relative area for each HRU file
         relative_area = self.calc_relative_area(res_union, HRU)
 
+        # ✅ SAVE TO CACHE for next time
+        try:
+            import pickle
+            self.logger.info("💾 Saving overlay cache...")
+            
+            cached_data = {
+                'relative_area': relative_area,
+                'HRU': HRU,
+                'era5_grid_polygons': era5_grid_polygons
+            }
+            
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cached_data, f)
+            
+            cache_size_mb = cache_file.stat().st_size / (1024 * 1024)
+            self.logger.info(f"✅ Saved overlay cache ({cache_size_mb:.2f} MB)")
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️  Failed to save cache: {e}")
+            # Don't fail if caching fails
+            pass
+
         # Write gridweights file
         self.write_gridWeights(HRU, era5_grid_polygons, relative_area)
         
@@ -3068,38 +3223,5 @@ class GridWeightsGenerator:
         
         self.logger.info("ERA5-Land grid weights generation completed successfully")
         
-        # 🔧 FIX: Return the relative_area GeoDataFrame
         return relative_area
 
-#--------------------------------------------------------------------------------
-# Convenience function for GridWeightsGenerator
-#--------------------------------------------------------------------------------
-
-def generate_era5_grid_weights(namelist_path: Union[str, Path], 
-                              use_precipitation: bool = True,
-                              debug: bool = False) -> gpd.GeoDataFrame:
-    """
-    Generate ERA5-Land grid weights using namelist configuration
-    
-    Parameters
-    ----------
-    namelist_path : str or Path
-        Path to namelist YAML configuration file
-    use_precipitation : bool, optional
-        Whether to use precipitation file (True) or temperature file (False) as grid reference
-    debug : bool, optional
-        Whether to enable debug mode with plots
-        
-    Returns
-    -------
-    gpd.GeoDataFrame
-        Relative area calculations
-    """
-    # Load namelist and add debug parameter
-    with open(namelist_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    config['debug'] = debug
-    
-    generator = GridWeightsGenerator(config)
-    return generator.generate(use_precipitation=use_precipitation)

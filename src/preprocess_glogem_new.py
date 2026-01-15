@@ -149,6 +149,24 @@ class GloGEMProcessor:
             'output': topo_dir / 'GloGEM_melt.csv',
             'rain': topo_dir / 'GloGEM_rain.csv'
         }
+
+        all_exist = all(f.exists() for f in output_files.values())
+    
+        if all_exist:
+            self.logger.info("✅ All GloGEM CSV files already exist")
+            self.logger.info("⏭️  Skipping .dat file processing")
+            self.logger.info("💡 Delete files to force reprocessing:")
+            for path in output_files.values():
+                self.logger.info(f"   rm {path}")
+            
+            # Load and return melt data
+            melt_path = output_files['output']
+            self.logger.info(f"Loading melt data from {melt_path}...")
+            melt_df = pd.read_csv(melt_path, dtype={'id': str})
+            melt_df['date'] = pd.to_datetime(melt_df['date'])
+            
+            self.logger.info(f"✅ Loaded {len(melt_df)} melt records for {melt_df['id'].nunique()} glaciers")
+            return melt_df
         
         # Process each component type
         for component, pattern in file_patterns.items():
@@ -417,17 +435,7 @@ class GloGEMProcessor:
     
     def create_irrigation_netcdf(self, force_reprocess: bool = False) -> xr.Dataset:
         """
-        Create irrigation NetCDF file with GloGEM melt on glacier HRUs, zeros elsewhere.
-        
-        Parameters
-        ----------
-        force_reprocess : bool
-            Force reprocessing even if file exists
-            
-        Returns
-        -------
-        xr.Dataset
-            The created NetCDF dataset
+        Create irrigation NetCDF file with GloGEM melt on glacier HRUs, zeros elsewhere (VECTORIZED)
         """
         self.logger.info("Creating irrigation NetCDF file...")
         
@@ -448,6 +456,7 @@ class GloGEMProcessor:
             self.logger.info("GloGEM melt file not found, processing files first...")
             glogem_df = self.process_glogem_files()
         else:
+            self.logger.info(f"Loading GloGEM melt data from {glogem_path}...")
             glogem_df = pd.read_csv(glogem_path, dtype={'id': str})
         
         glogem_df['date'] = pd.to_datetime(glogem_df['date'])
@@ -474,40 +483,58 @@ class GloGEMProcessor:
         # Generate full date range
         full_date_range = pd.date_range(self.start_date, self.end_date)
         
-        # Initialize result with zeros
-        num_hrus = len(hru_gdf)
-        result_df = pd.DataFrame(
-            np.zeros((len(full_date_range), num_hrus)),
-            columns=range(1, num_hrus + 1)
+        # ✅ VECTORIZED APPROACH: Use pivot and merge
+        self.logger.info(f"Processing {glogem_df['id'].nunique()} glaciers (vectorized)...")
+        
+        # Create mapping: numeric glacier ID -> HRU ID
+        glacier_to_hru = {}
+        
+        glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
+        for idx, row in glacier_hrus.iterrows():
+            full_glacier_id = row['Glacier_Cl']
+            if isinstance(full_glacier_id, str) and rgi_region_code and full_glacier_id.startswith(f'{rgi_region_code}.'):
+                numeric_id = full_glacier_id.replace(f'{rgi_region_code}.', '')
+                hru_id = row['HRU ID']
+                glacier_to_hru[numeric_id] = hru_id
+        
+        self.logger.info(f"Found {len(glacier_to_hru)} glacier-HRU mappings")
+        
+        # Map glacier IDs to HRU IDs
+        glogem_df['hru_id'] = glogem_df['id'].map(glacier_to_hru)
+        
+        # Filter to only mapped glaciers
+        matched_before = len(glogem_df)
+        glogem_df = glogem_df[glogem_df['hru_id'].notna()].copy()
+        matched_after = len(glogem_df)
+        
+        self.logger.info(f"Matched {glogem_df['id'].nunique()} glaciers to HRUs ({matched_after} records)")
+        if matched_before > matched_after:
+            self.logger.warning(f"Dropped {matched_before - matched_after} unmatched records")
+        
+        # ✅ VECTORIZED: Pivot to wide format (dates as rows, HRU IDs as columns)
+        self.logger.info("Pivoting data to wide format...")
+        pivot_df = glogem_df.pivot_table(
+            index='date',
+            columns='hru_id',
+            values='q',
+            aggfunc='first'  # Use 'sum' if multiple glaciers map to same HRU
         )
         
-        # Fill in GloGEM data for glacier HRUs
-        unique_ids = glogem_df['id'].unique()
-        self.logger.info(f"Processing {len(unique_ids)} glacier HRUs")
+        # Reindex to full date range and fill missing with zeros
+        pivot_df = pivot_df.reindex(full_date_range, fill_value=0)
         
-        for glogem_id in unique_ids:
-            # Create full glacier ID
-            full_glacier_id = f"{rgi_region_code}.{glogem_id}" if rgi_region_code else str(glogem_id)
-            
-            # Find matching HRU
-            mask = hru_gdf['Glacier_Cl'].notna() & (hru_gdf['Glacier_Cl'] == full_glacier_id)
-            if not mask.any():
-                self.logger.warning(f"Glacier {full_glacier_id} not found in HRU data")
-                continue
-            
-            # Filter and reindex GloGEM data
-            filtered_glogem = glogem_df[glogem_df['id'] == glogem_id].copy()
-            filtered_glogem = filtered_glogem.set_index('date').reindex(full_date_range, fill_value=0).reset_index()
-            filtered_glogem.rename(columns={'index': 'date'}, inplace=True)
-            
-            # Assign to HRU
-            hru_id = hru_gdf.loc[mask, 'HRU ID'].iloc[0]
-            result_df[hru_id] = filtered_glogem['q'].values
-            
-            self.logger.debug(f"Assigned irrigation to HRU {hru_id} for glacier {full_glacier_id}")
+        # ✅ VECTORIZED: Create result array with all HRUs (fill non-glacier HRUs with zeros)
+        num_hrus = len(hru_gdf)
+        result_array = np.zeros((len(full_date_range), num_hrus))
+        
+        # Assign glacier values to correct columns
+        for col in pivot_df.columns:
+            hru_idx = int(col) - 1  # Convert HRU ID to 0-based index
+            result_array[:, hru_idx] = pivot_df[col].values
+        
+        self.logger.info("✅ Created result array")
         
         # Create xarray Dataset
-        result_array = result_df.to_numpy()
         x_values = np.arange(1, result_array.shape[1] + 1)
         y_values = np.arange(1, 2)
         
@@ -534,8 +561,9 @@ class GloGEMProcessor:
         
         self.logger.info(f"   Glacier HRUs: {glacier_hrus}/{num_hrus}")
         self.logger.info(f"   Non-zero values: {non_zero}/{result_array.size} ({non_zero/result_array.size*100:.2f}%)")
-        self.logger.info(f"   Mean irrigation (glacier HRUs): {result_array[result_array != 0].mean():.3f} mm/day")
-        self.logger.info(f"   Max irrigation: {result_array.max():.3f} mm/day")
+        if non_zero > 0:
+            self.logger.info(f"   Mean irrigation (glacier HRUs): {result_array[result_array != 0].mean():.3f} mm/day")
+            self.logger.info(f"   Max irrigation: {result_array.max():.3f} mm/day")
         
         return ds
     
@@ -1052,6 +1080,33 @@ class GloGEMProcessor:
         self.logger.info(f"Starting GloGEM processing for gauge {self.gauge_id}")
         self.logger.info("="*60)
         
+        # ✅ CHECK: Skip if final output already exists
+        out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
+        irrigation_nc = out_dir / 'irrigation.nc'
+        irrigation_gridweights = out_dir / 'GridWeights_Irrigation.txt'
+        
+        if irrigation_nc.exists() and irrigation_gridweights.exists() and not force_reprocess:
+            self.logger.info("✅ All GloGEM processing outputs already exist")
+            self.logger.info("⏭️  Skipping GloGEM processing")
+            self.logger.info("💡 Files found:")
+            self.logger.info(f"   {irrigation_nc}")
+            self.logger.info(f"   {irrigation_gridweights}")
+            self.logger.info("💡 To force reprocessing:")
+            self.logger.info(f"   rm {irrigation_nc}")
+            self.logger.info(f"   rm {irrigation_gridweights}")
+            self.logger.info("   OR call process_all(force_reprocess=True)")
+            
+            # Return empty results dict
+            return {
+                'glogem_data': pd.DataFrame(),
+                'catchment_averaged_melt': pd.DataFrame(),
+                'irrigation_netcdf': None,
+                'validation': {'matched': [], 'missing_in_glogem': [], 'missing_in_hru': []},
+                'skipped': True
+            }
+        
+        # ===== NORMAL PROCESSING (if files don't exist or force_reprocess=True) =====
+        
         results = {}
         
         # 1. Process GloGEM files (creates individual glacier CSVs)
@@ -1094,11 +1149,6 @@ class GloGEMProcessor:
                         f"{len(validation['missing_in_hru'])} missing in HRU")
         self.logger.info(f"✅ Comparison plots created")
         
+        results['skipped'] = False
+        
         return results
-
-# Example usage
-if __name__ == "__main__":
-    namelist_path = "../namelist.yaml"
-    
-    processor = GloGEMProcessor(namelist_path)
-    results = processor.process_all(force_reprocess=False)
