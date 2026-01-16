@@ -68,6 +68,14 @@ class MOHYSEPreprocessor:
         self.coupled = namelist.get('coupled', False)
         self.author = namelist.get('author', 'Justine Berg')
         
+        # ✅ ADD warm_up_date
+        if 'warm_up_date' in namelist:
+            self.warm_up_date = namelist['warm_up_date']
+            print(f"Warm-up period configured: {self.warm_up_date} to {self.start_date}")
+        else:
+            self.warm_up_date = None
+            print("No warm-up period configured")
+        
         # ✅ LOAD PARAMETERS FROM NAMELIST
         params_path = namelist.get('params_dir', 'config/default_params.yaml')
         
@@ -790,9 +798,18 @@ class MOHYSEPreprocessor:
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
                            hru_groups_definition: str) -> Dict[str, List[str]]:
         """Create all sections for RVI file."""
+        
+        # ✅ DETERMINE ACTUAL START DATE (warm-up or simulation)
+        if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+            actual_start_date = self.warm_up_date
+            print(f"RVI will use warm-up start date: {actual_start_date}")
+        else:
+            actual_start_date = start_date
+            print(f"RVI will use simulation start date: {actual_start_date}")
+        
         return {
             "#Model Organisation": [
-                f":StartDate             {start_date} 00:00:00",
+                f":StartDate             {actual_start_date} 00:00:00",  # ✅ Use warm-up date
                 f":EndDate               {end_date} 00:00:00",
                 ":TimeStep              1.0",
                 ":Method                ORDERED_SERIES",
@@ -807,7 +824,7 @@ class MOHYSEPreprocessor:
                 ":PotentialMeltMethod        POTMELT_DEGREE_DAY",
                 ":OroTempCorrect             OROCORR_SIMPLELAPSE",
                 ":OroPrecipCorrect           OROCORR_SIMPLELAPSE",
-                f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",
+                f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",  # ✅ Keep simulation dates
                 f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}"
             ],
             "#Soil Layer Alias Definitions": [
@@ -832,8 +849,6 @@ class MOHYSEPreprocessor:
                 ":EndHydrologicProcesses"
             ],
             "#Output Options": [
-                "  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE ",
-                "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP",
             ],
             "#Transport for Snowmelt and Glacier Melt Tracking": [
                 "",

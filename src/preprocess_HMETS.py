@@ -68,6 +68,14 @@ class HMETSPreprocessor:
         self.coupled = namelist.get('coupled', False)
         self.author = namelist.get('author', 'Justine Berg')
         
+        # ✅ LOAD WARM-UP DATE IF AVAILABLE
+        if 'warm_up_date' in namelist:
+            self.warm_up_date = namelist['warm_up_date']
+            print(f"Using warm-up period starting from {self.warm_up_date}")
+        else:
+            self.warm_up_date = None
+            print("No warm-up period specified")
+        
         # ✅ LOAD PARAMETERS FROM NAMELIST (like HYMOD and MOHYSE)
         params_path = namelist.get('params_dir', 'config/default_params.yaml')
         
@@ -786,9 +794,13 @@ class HMETSPreprocessor:
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
                         hru_groups_definition: str) -> Dict[str, List[str]]:
         """Create all sections for RVI file."""
+        
+        # Use warm-up date as start date if available, otherwise use simulation start date
+        actual_start_date = self.warm_up_date if self.warm_up_date else start_date
+        
         return {
             "#Model Organisation": [
-                f":StartDate             {start_date} 00:00:00",
+                f":StartDate             {actual_start_date} 00:00:00",
                 f":EndDate               {end_date} 00:00:00",
                 ":TimeStep              1.0",
                 ":Method                ORDERED_SERIES",
@@ -803,7 +815,7 @@ class HMETSPreprocessor:
                 ":PotentialMeltMethod        POTMELT_HMETS",
                 ":OroTempCorrect             OROCORR_SIMPLELAPSE",
                 ":OroPrecipCorrect           OROCORR_SIMPLELAPSE",
-                f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",
+                f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",  # Evaluation periods keep simulation dates
                 f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}"
             ],
             "#Soil Layer Alias Definitions": [
@@ -831,8 +843,6 @@ class HMETSPreprocessor:
                 ":EndHydrologicProcesses"
             ],
             "#Output Options": [
-                "  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE ",
-                "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP",
                                     ],
             "#Transport for Snowmelt and Glacier Melt Tracking": [
                 "",

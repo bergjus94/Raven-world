@@ -71,6 +71,14 @@ class HBVProcessor:
         self.cali_end_date = namelist['cali_end_date']
         self.coupled = namelist.get('coupled', False)
         self.author = namelist.get('author', 'Justine Berg')
+
+        # ✅ ADD ONLY THIS - warm_up_date
+        if 'warm_up_date' in namelist:
+            self.warm_up_date = namelist['warm_up_date']
+            print(f"Warm-up period configured: {self.warm_up_date} to {self.start_date}")
+        else:
+            self.warm_up_date = None
+            print("No warm-up period configured")
         
         # ✅ LOAD PARAMETERS FROM NAMELIST
         params_path = namelist.get('params_dir', 'config/default_params.yaml')
@@ -828,12 +836,28 @@ class HBVProcessor:
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
                         hru_groups_definition: str) -> Dict[str, List[str]]:
         """Create all sections for RVI file."""
+        
+        # ✅ DETERMINE ACTUAL START DATE (warm-up or simulation)
+        if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+            actual_start_date = self.warm_up_date
+            print(f"RVI will use warm-up start date: {actual_start_date}")
+        else:
+            actual_start_date = start_date
+            print(f"RVI will use simulation start date: {actual_start_date}")
+        
+        # ✅ CALCULATE DURATION (from actual start to end)
+        from datetime import datetime
+        start_dt = datetime.strptime(actual_start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        duration_days = (end_dt - start_dt).days
+        
         return {
             "#Model Organisation": [
-                f":StartDate             {start_date} 00:00:00",
+                f":StartDate             {actual_start_date} 00:00:00",  # ✅ Use warm-up date
                 f":EndDate               {end_date} 00:00:00",
                 ":TimeStep              1.0",
-                f":RunName               {self.gauge_id}_HBV"
+                f":RunName               {self.gauge_id}_HBV",
+                f"# Duration: {duration_days} days (includes warm-up)" if self.warm_up_date else f"# Duration: {duration_days} days"
             ],
             "#Model Options": [
                 ":Routing             	    ROUTE_NONE",
@@ -853,8 +877,8 @@ class HBVProcessor:
                 ":PrecipIceptFract    	    PRECIP_ICEPT_USER",
                 ":MonthlyInterpolationMethod MONTHINT_LINEAR_21",
                 ":SoilModel                  SOIL_MULTILAYER 3",
-                f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",
-                f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}"
+                f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",  # ✅ Still use simulation dates
+                f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}"      # ✅ Still use simulation dates
             ],
             "#Soil Alias Layer Definitions": [
                 ":Alias       FAST_RESERVOIR SOIL[1]",
@@ -896,8 +920,6 @@ class HBVProcessor:
                 ":EndHydrologicProcesses"
             ],
             "#Output Options": [
-                "  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE ",
-                "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP",
             ],
             "#Transport for Snowmelt and Glacier Melt Tracking": [
                 "",

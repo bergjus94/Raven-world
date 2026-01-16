@@ -39,6 +39,15 @@ class GloGEMProcessor:
         self.model_type = config['model_type']
         self.start_date = config['start_date']
         self.end_date = config['end_date']
+        
+        # ✅ NEW: Load warm-up date if specified
+        if 'warm_up_date' in config:
+            self.warm_up_date = config['warm_up_date']
+            print(f"Warm-up period configured: {self.warm_up_date} to {self.start_date}")
+        else:
+            self.warm_up_date = None
+            print("No warm-up period configured")
+        
         self.debug = config.get('debug', False)
         self.model_dir = self.main_dir / config.get('config_dir')
         
@@ -47,10 +56,25 @@ class GloGEMProcessor:
         if self.glogem_dir:
             self.glogem_dir = Path(self.main_dir, self.glogem_dir.format(gauge_id=self.gauge_id))
         
+        # ✅ NEW: Define SHARED catchment-level directory (primary storage)
+        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        
+        # ✅ NEW: Define MODEL-SPECIFIC directory (for backward compatibility)
+        self.model_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
+        
+        # Create directories
+        self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+        self.model_data_dir.mkdir(parents=True, exist_ok=True)
+        
         # Setup logger
         self.logger = self._setup_logger()
         
         self.logger.info(f"GloGEM Processor initialized for gauge {self.gauge_id}")
+        self.logger.info(f"📁 Shared irrigation files: {self.shared_data_dir}")
+        self.logger.info(f"📋 Files will be copied to: {self.model_data_dir}")
+        
+        if self.warm_up_date:
+            self.logger.info(f"🔄 Warm-up period: {self.warm_up_date} to {self.start_date}")
         
     def _setup_logger(self) -> logging.Logger:
         """Set up logger for this class"""
@@ -436,13 +460,13 @@ class GloGEMProcessor:
     def create_irrigation_netcdf(self, force_reprocess: bool = False) -> xr.Dataset:
         """
         Create irrigation NetCDF file with GloGEM melt on glacier HRUs, zeros elsewhere (VECTORIZED)
+        ✅ UPDATED: Saves to shared data_obs directory
+        ✅ UPDATED: Includes warm-up period by repeating first year of simulation
         """
         self.logger.info("Creating irrigation NetCDF file...")
         
-        # Check if output exists
-        out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
-        out_dir.mkdir(parents=True, exist_ok=True)
-        output_path = out_dir / 'irrigation.nc'
+        # ✅ Use shared directory
+        output_path = self.shared_data_dir / 'irrigation.nc'
         
         if output_path.exists() and not force_reprocess:
             self.logger.info(f"✅ Irrigation file already exists: {output_path}")
@@ -480,8 +504,19 @@ class GloGEMProcessor:
                             break
                 self.logger.info(f"Auto-detected RGI region code: {rgi_region_code}")
         
-        # Generate full date range
-        full_date_range = pd.date_range(self.start_date, self.end_date)
+        # ✅ NEW: Determine date range (with or without warm-up)
+        if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+            start_date_for_file = pd.to_datetime(self.warm_up_date)
+            simulation_start = pd.to_datetime(self.start_date)
+            self.logger.info(f"Including warm-up period: {self.warm_up_date} to {(simulation_start - pd.Timedelta(days=1)).date()}")
+        else:
+            start_date_for_file = pd.to_datetime(self.start_date)
+            simulation_start = None
+        
+        end_date_for_file = pd.to_datetime(self.end_date)
+        full_date_range = pd.date_range(start=start_date_for_file, end=end_date_for_file)
+        
+        self.logger.info(f"Total date range: {start_date_for_file.date()} to {end_date_for_file.date()} ({len(full_date_range)} days)")
         
         # ✅ VECTORIZED APPROACH: Use pivot and merge
         self.logger.info(f"Processing {glogem_df['id'].nunique()} glaciers (vectorized)...")
@@ -520,6 +555,55 @@ class GloGEMProcessor:
             aggfunc='first'  # Use 'sum' if multiple glaciers map to same HRU
         )
         
+        # ✅ NEW: Handle warm-up period by repeating first year
+        if simulation_start is not None:
+            # Extract first year of simulation data
+            first_year_end = simulation_start + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+            if first_year_end > end_date_for_file:
+                first_year_end = end_date_for_file
+            
+            first_year_data = pivot_df.loc[simulation_start:first_year_end]
+            
+            self.logger.info(f"First year of simulation: {simulation_start.date()} to {first_year_end.date()} ({len(first_year_data)} days)")
+            
+            # Calculate how many repetitions needed
+            years_diff = (simulation_start - start_date_for_file).days / 365.25
+            n_repetitions = max(1, int(np.ceil(years_diff)))
+            
+            self.logger.info(f"Repeating first year {n_repetitions} time(s) for warm-up")
+            
+            # Create warm-up data by repeating first year
+            warmup_dfs = []
+            current_date = start_date_for_file
+            
+            for i in range(n_repetitions):
+                # Create a copy of first year data
+                year_copy = first_year_data.copy()
+                
+                # Calculate new date index
+                time_deltas = first_year_data.index - first_year_data.index[0]
+                new_dates = current_date + time_deltas
+                year_copy.index = new_dates
+                
+                warmup_dfs.append(year_copy)
+                current_date = new_dates[-1] + pd.Timedelta(days=1)
+                
+                self.logger.debug(f"  Repetition {i+1}: {new_dates[0].date()} to {new_dates[-1].date()}")
+            
+            # Combine warm-up data
+            warmup_data = pd.concat(warmup_dfs)
+            
+            # Trim to exact warm-up period
+            warmup_end = simulation_start - pd.Timedelta(days=1)
+            warmup_data = warmup_data.loc[start_date_for_file:warmup_end]
+            
+            self.logger.info(f"Warm-up data: {warmup_data.index[0].date()} to {warmup_data.index[-1].date()} ({len(warmup_data)} days)")
+            
+            # Concatenate warm-up with simulation data
+            pivot_df = pd.concat([warmup_data, pivot_df])
+            
+            self.logger.info(f"Combined data: {pivot_df.index[0].date()} to {pivot_df.index[-1].date()} ({len(pivot_df)} days)")
+        
         # Reindex to full date range and fill missing with zeros
         pivot_df = pivot_df.reindex(full_date_range, fill_value=0)
         
@@ -551,6 +635,18 @@ class GloGEMProcessor:
             coords={'x': ds['x'], 'y': ds['y']}
         )
         
+        # ✅ NEW: Add metadata about warm-up
+        if simulation_start is not None:
+            ds.attrs.update({
+                'warmup_included': 'true',
+                'warmup_start': str(start_date_for_file.date()),
+                'warmup_end': str((simulation_start - pd.Timedelta(days=1)).date()),
+                'simulation_start': str(simulation_start.date()),
+                'simulation_end': str(end_date_for_file.date()),
+                'warmup_method': 'repeat_first_year',
+                'warmup_repetitions': n_repetitions
+            })
+        
         # Save
         ds.to_netcdf(output_path)
         self.logger.info(f"✅ Saved irrigation NetCDF: {output_path}")
@@ -559,6 +655,11 @@ class GloGEMProcessor:
         glacier_hrus = (result_array != 0).any(axis=0).sum()
         non_zero = (result_array != 0).sum()
         
+        self.logger.info(f"   Time range: {full_date_range[0].date()} to {full_date_range[-1].date()}")
+        self.logger.info(f"   Total days: {len(full_date_range)}")
+        if simulation_start is not None:
+            self.logger.info(f"   Warm-up days: {len(warmup_data)}")
+            self.logger.info(f"   Simulation days: {len(full_date_range) - len(warmup_data)}")
         self.logger.info(f"   Glacier HRUs: {glacier_hrus}/{num_hrus}")
         self.logger.info(f"   Non-zero values: {non_zero}/{result_array.size} ({non_zero/result_array.size*100:.2f}%)")
         if non_zero > 0:
@@ -571,6 +672,7 @@ class GloGEMProcessor:
         """
         Create GridWeights file specifically for irrigation forcing.
         Saves as GridWeights_Irrigation.txt to avoid overwriting existing file.
+        ✅ UPDATED: Saves to shared data_obs directory
         """
         self.logger.info("Creating irrigation grid weights file...")
         
@@ -585,10 +687,8 @@ class GloGEMProcessor:
         cell_ids = list(range(0, number_hrus))
         rel_areas = np.ones(number_hrus)
         
-        # Save to unique filename
-        out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
-        out_dir.mkdir(parents=True, exist_ok=True)
-        filename = out_dir / 'GridWeights_Irrigation.txt'
+        # ✅ Use shared directory
+        filename = self.shared_data_dir / 'GridWeights_Irrigation.txt'
         
         with open(filename, 'w') as f:
             f.write('# ---------------------------------------------- \n')
@@ -1080,10 +1180,9 @@ class GloGEMProcessor:
         self.logger.info(f"Starting GloGEM processing for gauge {self.gauge_id}")
         self.logger.info("="*60)
         
-        # ✅ CHECK: Skip if final output already exists
-        out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs')
-        irrigation_nc = out_dir / 'irrigation.nc'
-        irrigation_gridweights = out_dir / 'GridWeights_Irrigation.txt'
+        # ✅ CHECK: Skip if final output already exists in shared directory
+        irrigation_nc = self.shared_data_dir / 'irrigation.nc'
+        irrigation_gridweights = self.shared_data_dir / 'GridWeights_Irrigation.txt'
         
         if irrigation_nc.exists() and irrigation_gridweights.exists() and not force_reprocess:
             self.logger.info("✅ All GloGEM processing outputs already exist")
@@ -1095,6 +1194,9 @@ class GloGEMProcessor:
             self.logger.info(f"   rm {irrigation_nc}")
             self.logger.info(f"   rm {irrigation_gridweights}")
             self.logger.info("   OR call process_all(force_reprocess=True)")
+            
+            # Copy to model directory before returning
+            self._copy_to_model_directory()
             
             # Return empty results dict
             return {
@@ -1137,6 +1239,10 @@ class GloGEMProcessor:
         self.logger.info("\n6. Creating glacier runoff vs observed streamflow plots...")
         self.plot_glacier_runoff_vs_observed()
         
+        # ✅ NEW: Copy irrigation files to model-specific directory
+        self.logger.info("\n7. Copying files to model-specific directory...")
+        self._copy_to_model_directory()
+        
         self.logger.info("\n" + "="*60)
         self.logger.info("GloGEM PROCESSING COMPLETE")
         self.logger.info("="*60)
@@ -1152,3 +1258,37 @@ class GloGEMProcessor:
         results['skipped'] = False
         
         return results
+    
+    #---------------------------------------------------------------------------------
+    
+    def _copy_to_model_directory(self) -> None:
+        """
+        Copy irrigation files from shared data_obs to model-specific data_obs.
+        This maintains backward compatibility while using shared storage.
+        """
+        import shutil
+        
+        # Files to copy
+        irrigation_files = [
+            self.shared_data_dir / 'irrigation.nc',
+            self.shared_data_dir / 'GridWeights_Irrigation.txt'
+        ]
+        
+        self.logger.info(f"📋 Copying irrigation files from shared to model-specific directory...")
+        self.logger.debug(f"  Source: {self.shared_data_dir}")
+        self.logger.debug(f"  Destination: {self.model_data_dir}")
+        
+        copied_count = 0
+        for file_path in irrigation_files:
+            if file_path.exists():
+                dest = self.model_data_dir / file_path.name
+                try:
+                    shutil.copy2(file_path, dest)
+                    self.logger.debug(f"  ✅ Copied: {file_path.name}")
+                    copied_count += 1
+                except Exception as e:
+                    self.logger.warning(f"  ❌ Failed to copy {file_path.name}: {e}")
+            else:
+                self.logger.warning(f"  ⚠️ File not found: {file_path}")
+        
+        self.logger.info(f"✅ Successfully copied {copied_count}/{len(irrigation_files)} files to {self.model_data_dir.name}/")

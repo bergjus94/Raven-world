@@ -1692,6 +1692,20 @@ class HRUConnectivityCalculator:
             self.min_area_threshold = config.get('min_area_threshold', 0.01)
             self.debug = config.get('debug', False)
         
+        # ✅ NEW: Define SHARED catchment-level directory (primary storage)
+        self.shared_data_dir = self.model_dir / 'data_obs'
+        
+        # ✅ NEW: Define MODEL-SPECIFIC directory (for backward compatibility)
+        if hasattr(self, 'model_type'):
+            self.model_data_dir = self.model_dir / self.model_type / 'data_obs'
+        else:
+            self.model_data_dir = None
+        
+        # Create directories
+        self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+        if self.model_data_dir:
+            self.model_data_dir.mkdir(parents=True, exist_ok=True)
+        
         # Initialize data containers
         self.dem_path = None
         self.hru_shapefile = None
@@ -1735,12 +1749,21 @@ class HRUConnectivityCalculator:
         logging.getLogger('numba.core.byteflow').setLevel(logging.WARNING)
         logging.getLogger('numba.core.compiler_lock').setLevel(logging.WARNING)
         
-        return logging.getLogger(f'HRUConnectivityCalculator_Gauge_{self.gauge_id}')
+        logger = logging.getLogger(f'HRUConnectivityCalculator_Gauge_{self.gauge_id}')
+        
+        # ✅ NEW: Log directory structure
+        logger.info(f"HRU Connectivity Calculator for gauge {self.gauge_id}")
+        logger.info(f"📁 Shared connectivity files: {self.shared_data_dir}")
+        if self.model_data_dir:
+            logger.info(f"📋 Files will be copied to: {self.model_data_dir}")
+        
+        return logger
 
 
     def get_path(self, filename: str) -> Path:
         """
         Get path to a file in the appropriate directory including model type
+        ✅ UPDATED: Uses shared data_obs directory for connectivity files
         
         Parameters
         ----------
@@ -1752,11 +1775,9 @@ class HRUConnectivityCalculator:
         Path
             Full path to the file
         """
-        # Save connections.rvh in model_type/data_obs directory
-        if filename == 'connections.rvh':
-            data_obs_dir = self.model_dir / self.model_type / 'data_obs'
-            data_obs_dir.mkdir(parents=True, exist_ok=True)
-            return data_obs_dir / filename
+        # ✅ NEW: Save connectivity files in SHARED data_obs directory
+        if filename in ['connections.rvh', 'HRU_connectivity.csv']:
+            return self.shared_data_dir / filename
         else:
             # All other files go to topo_files
             return self.model_dir / 'topo_files' / filename
@@ -2296,6 +2317,43 @@ class HRUConnectivityCalculator:
             f.write(":EndLateralConnections\n")
         
         self.logger.info(f"Wrote {connection_count} connections to {output_file}")
+    #---------------------------------------------------------------------------------
+
+    def _copy_to_model_directory(self) -> None:
+        """
+        Copy connectivity files from shared data_obs to model-specific data_obs.
+        This maintains backward compatibility while using shared storage.
+        """
+        import shutil
+        
+        if not self.model_data_dir:
+            self.logger.debug("No model-specific directory defined - skipping copy")
+            return
+        
+        # Files to copy
+        connectivity_files = [
+            self.get_path('connections.rvh'),
+            self.get_path('HRU_connectivity.csv')
+        ]
+        
+        self.logger.info(f"📋 Copying connectivity files from shared to model-specific directory...")
+        self.logger.debug(f"  Source: {self.shared_data_dir}")
+        self.logger.debug(f"  Destination: {self.model_data_dir}")
+        
+        copied_count = 0
+        for file_path in connectivity_files:
+            if file_path.exists():
+                dest = self.model_data_dir / file_path.name
+                try:
+                    shutil.copy2(file_path, dest)
+                    self.logger.debug(f"  ✅ Copied: {file_path.name}")
+                    copied_count += 1
+                except Exception as e:
+                    self.logger.warning(f"  ❌ Failed to copy {file_path.name}: {e}")
+            else:
+                self.logger.warning(f"  ⚠️ File not found: {file_path}")
+        
+        self.logger.info(f"✅ Successfully copied {copied_count}/{len(connectivity_files)} files to {self.model_data_dir.name}/")
 
     #---------------------------------------------------------------------------------
 
@@ -2321,9 +2379,12 @@ class HRUConnectivityCalculator:
             self.logger.info(f"   rm {connections_file}")
             self.logger.info(f"   rm {connectivity_csv}")
             
-            # Load and return existing connectivity DataFrame
+            # Load existing connectivity DataFrame
             self.logger.info(f"Loading existing connectivity data from {connectivity_csv}")
             existing_connectivity = pd.read_csv(connectivity_csv)
+            
+            # ✅ FIX: Copy files to model-specific directory even when loading existing data
+            self._copy_to_model_directory()
             
             self.logger.info(f"✅ Loaded connectivity for {len(existing_connectivity)} HRUs")
             return existing_connectivity
@@ -2371,6 +2432,9 @@ class HRUConnectivityCalculator:
         # Step 11: Save connectivity DataFrame
         self.connectivity_df.to_csv(connectivity_csv, index=False)
         self.logger.debug(f"Saved connectivity DataFrame to {connectivity_csv}")
+        
+        # ✅ NEW: Copy connectivity files to model-specific directory
+        self._copy_to_model_directory()
         
         self.logger.info("Connectivity calculation complete")
         return self.connectivity_df

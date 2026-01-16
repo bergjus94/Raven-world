@@ -23,7 +23,7 @@ class RavenSCEUA(object):
     
     def __init__(self, gauge_id, model_type, cali_end_date, vali_end_date,
                 obj_function='KGE', main_dir=None, config_dir=None, coupled=False,
-                params_dir=None):
+                params_dir=None, raven_exe=None):  # ✅ ADD raven_exe parameter
         """Initialize the setup"""
         # Basic setup
         self.gauge_id = gauge_id
@@ -48,14 +48,24 @@ class RavenSCEUA(object):
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.template_dir = self.model_dir / 'templates'
 
-        # Raven executable
-        self.raven_exe = self.main_dir.parent / 'RavenHydro' / 'build' / 'Raven'
-
         # Parameters directory - use params_dir if provided, otherwise default
         if params_dir:
             self.params_dir = Path(params_dir)
         else:
             self.params_dir = self.main_dir / 'config' / 'default_params.yaml'
+
+        # ✅ NEW: Set Raven executable
+        if raven_exe:
+            self.raven_exe = Path(raven_exe)
+        else:
+            # Fallback to default location
+            self.raven_exe = self.main_dir.parent / 'RavenHydroFramework' / 'build' / 'Raven'
+        
+        # Verify executable exists
+        if not self.raven_exe.exists():
+            raise FileNotFoundError(f"Raven executable not found at {self.raven_exe}")
+        
+        print(f"Using Raven executable: {self.raven_exe}")
 
         # Load parameters configuration
         self.params_config = self._load_parameters_config(self.params_dir)
@@ -1276,41 +1286,55 @@ class RavenSCEUA(object):
                 "  :CustomOutput DAILY AVERAGE SNOWFALL BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU_GROUP\n",
+                "  :WriteMassLoadings\n",
             ]
             
-            # Find the #Output Options section and replace it
+            # ✅ NEW: Define transport tracers for snowmelt and glacier melt tracking
+            transport_tracers = [
+                "\n#Transport for Snowmelt and Glacier Melt Tracking\n",
+                "\n",
+                ":Transport SNOWMELT TRACER\n",
+                ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0\n",
+                ":FixedConcentration SNOWMELT SLOW_RESERVOIR 0.0\n",
+                "\n",
+                ":Transport GLACIERMELT_ALL TRACER\n",
+                ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
+                "\n",
+                ":Transport GLACIERMELT_SMALL TRACER\n",
+                ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER\n",
+                "\n",
+                ":Transport GLACIERMELT_LARGE TRACER\n",
+                ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
+            ]
+            
+            # Find the #Output Options line and insert everything after it
             new_lines = []
-            in_output_section = False
-            output_section_found = False
+            output_found = False
             
             for line in lines:
-                if '#Output Options' in line or ':Output Options' in line:
-                    in_output_section = True
-                    output_section_found = True
-                    new_lines.append(line)  # Keep the header
-                    # Add all extended output options
+                new_lines.append(line)
+                
+                # Check if this is the #Output Options line
+                if '#Output Options' in line and not output_found:
+                    output_found = True
+                    # Add all extended output options right after the header
                     new_lines.extend(extended_output_options)
-                elif in_output_section and (line.strip().startswith('#') or line.strip().startswith(':')):
-                    # Check if this is the start of a new section
-                    if not line.strip().startswith(':CustomOutput') and not line.strip().startswith(':EvaluationMetrics') and not line.strip().startswith(':WriteForcingFunctions'):
-                        # This is a new section, stop adding output options
-                        in_output_section = False
-                        new_lines.append(line)
-                    # Skip the old output option lines (they're replaced by extended_output_options)
-                elif not in_output_section:
-                    new_lines.append(line)
+                    # Add transport tracers
+                    new_lines.extend(transport_tracers)
             
-            # If no output section was found, add it at the end
-            if not output_section_found:
+            # If #Output Options was not found, add it at the end
+            if not output_found:
                 new_lines.append("\n#Output Options\n")
                 new_lines.extend(extended_output_options)
+                new_lines.extend(transport_tracers)
             
             # Write the modified RVI file
             with open(rvi_file, 'w') as f:
                 f.writelines(new_lines)
             
             print(f"Successfully added extended output options to {rvi_file}")
-            print(f"Added {len(extended_output_options)} output directives for comprehensive model output")
+            print(f"Added {len(extended_output_options)} output directives")
+            print(f"Added {len([t for t in transport_tracers if ':Transport' in t])} transport tracers")
             
         except Exception as e:
             print(f"Error modifying RVI file: {e}")
@@ -1337,6 +1361,7 @@ def parse_arguments():
     parser.add_argument('--coupled', action='store_true', help='Use coupled model')
     parser.add_argument('--namelist', type=str, help='Path to namelist file')
     parser.add_argument('--params-dir', type=str, help='Path to parameters YAML file')
+    parser.add_argument('--raven-exe', type=str, help='Path to Raven executable')
     
     # Parse arguments
     args = parser.parse_args()
@@ -1346,6 +1371,7 @@ def parse_arguments():
     main_dir = args.main_dir
     config_dir = args.config_dir
     params_dir = getattr(args, 'params_dir', None)
+    raven_exe = getattr(args, 'raven_exe', None)
     
     # Load from namelist if provided
     if args.namelist:
@@ -1384,6 +1410,11 @@ def parse_arguments():
                 params_dir = namelist['params_dir']
                 print(f"Using params_dir from namelist: {params_dir}")
             
+            # ✅ NEW: Load raven_executable from namelist if not provided
+            if not raven_exe and 'raven_executable' in namelist:
+                raven_exe = namelist['raven_executable']
+                print(f"Using Raven executable from namelist: {raven_exe}")
+            
             # Set iterations from namelist if available
             if 'calibration' in namelist and 'iterations' in namelist['calibration']:
                 args.iterations = namelist['calibration']['iterations']
@@ -1415,14 +1446,28 @@ def parse_arguments():
     if not config_dir:
         parser.error("config_dir is required (must be in namelist or command line)")
     
+    # ✅ NEW: Set default Raven executable if not provided
+    if not raven_exe:
+        # Default fallback
+        if main_dir:
+            raven_exe = str(Path(main_dir).parent / 'RavenHydro' / 'build' / 'Raven')
+        else:
+            raven_exe = str(Path(__file__).parent.parent / 'RavenHydro' / 'build' / 'Raven')
+        print(f"Using default Raven executable: {raven_exe}")
+    
+    # ✅ NEW: Verify the executable exists
+    raven_exe_path = Path(raven_exe)
+    if not raven_exe_path.exists():
+        parser.error(f"Raven executable not found at {raven_exe_path}")
+    
     # Store additional values in args
     args.main_dir = main_dir
     args.config_dir = config_dir
     args.params_dir = params_dir
+    args.raven_exe = str(raven_exe_path)  # Convert to string for subprocess
     args.namelist = namelist
     
     return args
-
 
 if __name__ == "__main__":
     # Parse arguments
@@ -1438,7 +1483,8 @@ if __name__ == "__main__":
         main_dir=args.main_dir,
         config_dir=args.config_dir,
         coupled=args.coupled,
-        params_dir=args.params_dir
+        params_dir=args.params_dir,
+        raven_exe=args.raven_exe  
     )
     
     # Run SCEUA algorithm

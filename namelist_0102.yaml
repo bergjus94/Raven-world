@@ -26,11 +26,11 @@ landuse_dir: '01_data/topo/catchment_landuse/landuse_{gauge_id}.tif'
 #glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_15.rgi60.SouthAsiaEast/15_rgi60_SouthAsiaEast.shp'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
 #glogem_dir: '01_data/GloGEM/Ganges/GloGEM_output_{gauge_id}.dat'
-glogem_dir: '01_data/GloGEM/Indus/snowline_Hunza/GloGEM_output_{gauge_id}.dat'
+glogem_dir: '01_data/GloGEM/Indus/geodetic_mass_balance_Hunza/GloGEM_output_{gauge_id}.dat'
 swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
 params_dir: 'src/config/default_params.yaml'
 
-config_dir: '03_model_setups_coupled'
+config_dir: '03_model_setups_coupled_snowline'
 
 
 # Forcing files (can be empty or filled as needed)
@@ -44,7 +44,7 @@ calibration:
    metrics:
      primary: 'KGE'           # Primary metric for optimization
      secondary: ['NSE', 'PBIAS', 'RMSE']  # Secondary metrics to report
-   iterations: 5          # Number of iterations for calibration
+   iterations: 4          # Number of iterations for calibration
    ngs: 2 
    cali_end_date: '1995-12-31' 
    vali_end_date: '2010-12-31'    

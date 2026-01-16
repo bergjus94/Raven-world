@@ -234,7 +234,7 @@ def run_postprocessing(namelist_path, validation_start=None, validation_end=None
             'cali_start_date': nml.get('cali_start_date', nml.get('start_date', '2000-01-01')),
             'cali_end_date': nml.get('cali_end_date', '2009-12-31'),
             'coupled': nml.get('coupled', False),
-            'raven_executable': nml.get('raven_executable', '/home/jberg/OneDrive/RavenHydro/build/Raven'),
+            'raven_executable': nml.get('raven_executable'),
             'glogem_dir': nml.get('glogem_dir', None)
         }
         

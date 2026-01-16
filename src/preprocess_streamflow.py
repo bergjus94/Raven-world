@@ -43,6 +43,15 @@ class StreamflowProcessor:
         self.gauge_id = config.get('gauge_id')
         self.start_date = config.get('start_date')
         self.end_date = config.get('end_date')
+        
+        # ✅ NEW: Load warm-up date if specified
+        if 'warm_up_date' in config:
+            self.warm_up_date = config.get('warm_up_date')
+            print(f"Warm-up period configured: {self.warm_up_date} to {self.start_date}")
+        else:
+            self.warm_up_date = None
+            print("No warm-up period configured")
+        
         self.model_type = config.get('model_type')
         self.debug = config.get('debug', False)
         self.coupled = config.get('coupled', False)
@@ -68,18 +77,34 @@ class StreamflowProcessor:
         self.plot_file = self.plots_dir / f'streamflow_timeseries_gauge_{self.gauge_id}.png'
 
     def subset_dataframe_time(self, dataframe):
-        """Subsetting a dataframe using a time interval."""
-        start_date = datetime.strptime(self.start_date, "%Y-%m-%d")
+        """
+        Subsetting a dataframe using a time interval.
+        ✅ UPDATED: Includes warm-up period if specified
+        """
+        # ✅ Use warm-up date as start if available
+        if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+            start_date = datetime.strptime(self.warm_up_date, "%Y-%m-%d")
+        else:
+            start_date = datetime.strptime(self.start_date, "%Y-%m-%d")
+    
         end_date = datetime.strptime(self.end_date, "%Y-%m-%d")
         mask = dataframe['date'].between(start_date, end_date, inclusive="both")
         return dataframe[mask]
-
+    
     def export_to_rvt_file(self, df, out_path):
         """Writes RVT file from DataFrame"""
         start_time = "0:00:00"
         
+        # ✅ UPDATED: Use warm-up date as start if available
+        if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+            rvt_start_date = self.warm_up_date
+            print(f"   📅 RVT file will start at warm-up date: {rvt_start_date}")
+        else:
+            rvt_start_date = self.start_date
+            print(f"   📅 RVT file will start at simulation date: {rvt_start_date}")
+        
         with open(out_path, 'w') as f:
-            f.write(f":ObservationData\tHYDROGRAPH\t1\tm3/s\n{self.start_date}\t{start_time}\t1\t{len(df)}\n")
+            f.write(f":ObservationData\tHYDROGRAPH\t1\tm3/s\n{rvt_start_date}\t{start_time}\t1\t{len(df)}\n")
             df_as_string = df.to_string(justify="right", header=False, index=False,
                                         columns=['Q_obs'], na_rep="-1.2345")
             f.write(df_as_string)
@@ -88,6 +113,7 @@ class StreamflowProcessor:
     def check_and_fill_missing_data(self, df):
         """
         Check for NaN values and missing dates, fill with -1.2345 to create complete time series
+        ✅ UPDATED: Includes warm-up period if specified
         
         Parameters
         ----------
@@ -110,8 +136,14 @@ class StreamflowProcessor:
         if nan_count > 0 and self.debug:
             print(f"   📊 Found {nan_count} NaN values in original data")
         
-        # Create complete date range
-        start_date = pd.to_datetime(self.start_date)
+        # ✅ UPDATED: Use warm-up date as start if available
+        if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+            start_date = pd.to_datetime(self.warm_up_date)
+            if self.debug:
+                print(f"   🔄 Including warm-up period from {self.warm_up_date}")
+        else:
+            start_date = pd.to_datetime(self.start_date)
+        
         end_date = pd.to_datetime(self.end_date)
         complete_dates = pd.date_range(start=start_date, end=end_date, freq='D')
         
@@ -126,26 +158,42 @@ class StreamflowProcessor:
         # Merge with original data
         complete_df = complete_df.merge(df[['date', 'Q_obs']], on='date', how='left')
         
-        # Count missing dates
+        # ✅ NEW: Mark warm-up period data as missing (fill with -1.2345)
+        if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+            simulation_start = pd.to_datetime(self.start_date)
+            warmup_mask = complete_df['date'] < simulation_start
+            warmup_count = warmup_mask.sum()
+            
+            if warmup_count > 0:
+                # Fill warm-up period with -1.2345 (no observations during warm-up)
+                complete_df.loc[warmup_mask, 'Q_obs'] = -1.2345
+                
+                if self.debug:
+                    print(f"   🔄 Warm-up period: {warmup_count} days filled with -1.2345")
+                    print(f"      ({start_date.date()} to {(simulation_start - pd.Timedelta(days=1)).date()})")
+        
+        # Count missing dates in simulation period
         missing_dates = complete_df['Q_obs'].isna().sum()
         
         if self.debug:
-            print(f"   🔍 Missing dates found: {missing_dates}")
+            print(f"   🔍 Missing dates in simulation period: {missing_dates}")
             if missing_dates > 0:
                 missing_periods = complete_df[complete_df['Q_obs'].isna()]['date']
                 print(f"   📋 First few missing dates: {missing_periods.head().dt.strftime('%Y-%m-%d').tolist()}")
                 if len(missing_periods) > 5:
                     print(f"   📋 Last few missing dates: {missing_periods.tail().dt.strftime('%Y-%m-%d').tolist()}")
         
-        # Fill all NaN values with -1.2345
+        # Fill all remaining NaN values with -1.2345
         complete_df['Q_obs'] = complete_df['Q_obs'].fillna(-1.2345)
         
         # Final summary
-        total_filled = nan_count + missing_dates
+        total_filled = (complete_df['Q_obs'] == -1.2345).sum()
         if self.debug and total_filled > 0:
-            print(f"   ✅ Filled {total_filled} total missing values with -1.2345")
-            print(f"      • Original NaN values: {nan_count}")
-            print(f"      • Missing dates: {missing_dates}")
+            print(f"   ✅ Total values filled with -1.2345: {total_filled}")
+            if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+                print(f"      • Warm-up period: {warmup_count}")
+                print(f"      • Original NaN values: {nan_count}")
+                print(f"      • Missing dates: {missing_dates}")
         elif self.debug:
             print("   ✅ No missing data found - time series is complete!")
         
@@ -155,6 +203,7 @@ class StreamflowProcessor:
     def plot_streamflow_timeseries(self, df):
         """
         Create a time series plot of streamflow data with gaps for missing data
+        ✅ UPDATED: Highlights warm-up period if present
         
         Parameters
         ----------
@@ -169,14 +218,24 @@ class StreamflowProcessor:
             plot_df = df.copy()
             plot_df.loc[plot_df['Q_obs'] == -1.2345, 'Q_obs'] = np.nan
             
-            # Calculate statistics for valid data only
-            valid_data = plot_df.dropna()
+            # ✅ NEW: Separate warm-up and simulation periods
+            if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+                simulation_start = pd.to_datetime(self.start_date)
+                warmup_df = plot_df[plot_df['date'] < simulation_start]
+                sim_df = plot_df[plot_df['date'] >= simulation_start]
+                
+                # Calculate statistics for simulation period only
+                valid_data = sim_df.dropna()
+            else:
+                sim_df = plot_df
+                valid_data = plot_df.dropna()
+            
             if len(valid_data) > 0:
                 mean_flow = valid_data['Q_obs'].mean()
                 max_flow = valid_data['Q_obs'].max()
                 min_flow = valid_data['Q_obs'].min()
                 std_flow = valid_data['Q_obs'].std()
-                missing_pct = (len(df) - len(valid_data)) / len(df) * 100
+                missing_pct = (len(sim_df) - len(valid_data)) / len(sim_df) * 100 if hasattr(self, 'warm_up_date') else (len(plot_df) - len(valid_data)) / len(plot_df) * 100
             else:
                 mean_flow = max_flow = min_flow = std_flow = 0
                 missing_pct = 100
@@ -184,21 +243,33 @@ class StreamflowProcessor:
             # Create the plot
             fig, ax = plt.subplots(figsize=(15, 8))
             
+            # ✅ NEW: Add shaded region for warm-up period
+            if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+                warmup_start = pd.to_datetime(self.warm_up_date)
+                warmup_end = pd.to_datetime(self.start_date) - pd.Timedelta(days=1)
+                ax.axvspan(warmup_start, warmup_end, alpha=0.2, color='orange', 
+                        label=f'Warm-up Period ({self.warm_up_date} to {warmup_end.date()})')
+            
             # Plot streamflow with gaps for missing data
             ax.plot(plot_df['date'], plot_df['Q_obs'], 
-                   color='steelblue', linewidth=0.8, alpha=0.8, label='Observed Streamflow')
+                color='steelblue', linewidth=0.8, alpha=0.8, label='Observed Streamflow')
             
             # Add mean line
             if len(valid_data) > 0:
                 ax.axhline(y=mean_flow, color='red', linestyle='--', alpha=0.7, 
-                          linewidth=1.5, label=f'Mean: {mean_flow:.2f} m³/s')
+                        linewidth=1.5, label=f'Mean: {mean_flow:.2f} m³/s')
             
             # Formatting
             ax.set_xlabel('Date', fontsize=12, fontweight='bold')
             ax.set_ylabel('Streamflow (m³/s)', fontsize=12, fontweight='bold')
-            ax.set_title(f'Streamflow Time Series - Gauge {self.gauge_id}\n'
-                        f'Period: {self.start_date} to {self.end_date}', 
-                        fontsize=14, fontweight='bold', pad=20)
+            
+            # ✅ UPDATED: Title includes warm-up info
+            title = f'Streamflow Time Series - Gauge {self.gauge_id}\n'
+            if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+                title += f'Warm-up: {self.warm_up_date} to {(pd.to_datetime(self.start_date) - pd.Timedelta(days=1)).date()} | '
+            title += f'Simulation: {self.start_date} to {self.end_date}'
+            
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
             
             # Grid
             ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
@@ -209,28 +280,29 @@ class StreamflowProcessor:
             # Format x-axis
             ax.tick_params(axis='x', rotation=45)
             
-            # Add statistics text box
-            stats_text = (
-                f'Statistics (Valid Data Only):\n'
-                f'• Records: {len(valid_data):,} / {len(df):,}\n'
-                f'• Data Coverage: {100-missing_pct:.1f}%\n'
-                f'• Mean: {mean_flow:.2f} m³/s\n'
-                f'• Min: {min_flow:.2f} m³/s\n'
-                f'• Max: {max_flow:.2f} m³/s\n'
-                f'• Std Dev: {std_flow:.2f} m³/s'
-            )
+            # ✅ UPDATED: Statistics text box
+            stats_text = f'Statistics (Simulation Period Only):\n'
+            stats_text += f'• Records: {len(valid_data):,} / {len(sim_df):,}\n'
+            stats_text += f'• Data Coverage: {100-missing_pct:.1f}%\n'
+            stats_text += f'• Mean: {mean_flow:.2f} m³/s\n'
+            stats_text += f'• Min: {min_flow:.2f} m³/s\n'
+            stats_text += f'• Max: {max_flow:.2f} m³/s\n'
+            stats_text += f'• Std Dev: {std_flow:.2f} m³/s'
+            
+            if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
+                stats_text += f'\n\nWarm-up: {len(warmup_df)} days (no obs)'
             
             # Position text box
             props = dict(boxstyle='round', facecolor='lightgray', alpha=0.8)
             ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
-                   verticalalignment='top', bbox=props, family='monospace')
+                verticalalignment='top', bbox=props, family='monospace')
             
             # Adjust layout
             plt.tight_layout()
             
             # Save the plot
             plt.savefig(self.plot_file, dpi=300, bbox_inches='tight', 
-                       facecolor='white', edgecolor='none')
+                    facecolor='white', edgecolor='none')
             
             if self.debug:
                 print(f"   ✅ Plot saved to: {self.plot_file}")
@@ -326,18 +398,3 @@ def process_streamflow(config_file=None, **kwargs):
     
     return processor.process()
 
-#--------------------------------------------------------------------------------
-############################### Main execution ################################
-#--------------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    config_file = "/home/jberg/OneDrive/Raven-world/namelist.yaml"
-    
-    try:
-        success = process_streamflow(config_file)
-        if success:
-            print("🎉 Streamflow preprocessing completed successfully!")
-        else:
-            print("❌ Streamflow preprocessing failed!")
-    except Exception as e:
-        print(f"❌ Error: {str(e)}")

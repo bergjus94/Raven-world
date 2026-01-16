@@ -3,7 +3,7 @@ basin_id: '0695'
 start_date: '2002-01-01'
 end_date: '2019-12-31'
 cali_end_date: '2011-12-31'
-warm_up_date: '2000-12-31'
+warm_up_date: '2000-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'

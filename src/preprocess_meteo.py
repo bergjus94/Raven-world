@@ -31,7 +31,6 @@ class ERA5LandAnalyzer:
     """
     A class for analyzing and plotting ERA5-Land meteorological data
     """
-    
     def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
         """
         Initialize the ERA5-Land data analyzer
@@ -58,7 +57,7 @@ class ERA5LandAnalyzer:
         # Store configuration parameters
         self.main_dir = Path(self.config.get('main_dir'))
         self.gauge_id = self.config.get('gauge_id')
-        self.basin_id = self.config.get('basin_id', self.gauge_id)  # ✅ NEW: Use basin_id if provided, otherwise use gauge_id
+        self.basin_id = self.config.get('basin_id', self.gauge_id)
         self.start_date = pd.to_datetime(self.config.get('start_date'))
         self.end_date = pd.to_datetime(self.config.get('end_date'))
         self.model_type = self.config.get('model_type')
@@ -74,20 +73,26 @@ class ERA5LandAnalyzer:
         if not self.era5_data_dir.is_absolute():
             self.era5_data_dir = self.main_dir / self.era5_data_dir
         
-        # Updated plots directory structure
-        self.plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'plots'
+        # ✅ NEW: Define SHARED catchment-level directories (primary storage)
+        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        self.shared_plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'plots'
+        
+        # ✅ NEW: Define MODEL-SPECIFIC directories (for backward compatibility)
+        self.model_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
+        
+        # ✅ Use shared directories as primary output locations
+        self.output_path = self.shared_data_dir
+        self.plots_dir = self.shared_plots_dir
         
         # Create plots directories
         self.spatial_plots_dir = self.plots_dir / 'spatial_overview'
         self.timeseries_plots_dir = self.plots_dir / 'time_series'
         
-        # Updated output path for processed data
-        self.output_path = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
-        
         # Create all directories
         self.spatial_plots_dir.mkdir(parents=True, exist_ok=True)
         self.timeseries_plots_dir.mkdir(parents=True, exist_ok=True)
         self.output_path.mkdir(parents=True, exist_ok=True)
+        self.model_data_dir.mkdir(parents=True, exist_ok=True)  # ✅ Create model-specific dir too
         
         # Keep the old attribute name for backward compatibility
         self.processed_data_dir = self.output_path
@@ -114,8 +119,16 @@ class ERA5LandAnalyzer:
             }
         }
         
-        # Setup logger
+        # ✅ MOVED UP: Setup logger FIRST
         self.logger = self._setup_logger()
+        
+        # ✅ NOW: Load warm-up date AFTER logger is created
+        if 'warm_up_date' in self.config:
+            self.warmup_date = pd.to_datetime(self.config.get('warm_up_date'))
+            self.logger.info(f"Warm-up period configured: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
+        else:
+            self.warmup_date = None
+            self.logger.debug("No warm-up period configured")
         
         # ✅ NEW: Load catchment shapefile for clipping
         self.catchment_extent = self._load_catchment_shapefile()
@@ -151,6 +164,10 @@ class ERA5LandAnalyzer:
             for file_type, exists in existing_files.items():
                 if exists:
                     self.processed_files.append(self.output_path / expected_files[file_type])
+            
+            # ✅ NEW: Copy existing files to model-specific directory
+            self.logger.info("📋 Copying existing files to model-specific directory...")
+            self._copy_to_model_directory(self.processed_files)
                     
         elif existing_count > 0 and not force_reprocess:
             self.logger.info(f"📂 Found {existing_count}/{total_expected} existing files")
@@ -624,24 +641,22 @@ class ERA5LandAnalyzer:
         xr.Dataset
             Filtered dataset
         """
-        # The time coordinate should already be renamed to 'time' by _combine_monthly_files
         if 'time' not in dataset.dims:
             self.logger.warning("No 'time' coordinate found in dataset")
             return dataset
         
         try:
-            # Convert start and end dates to the same format as the dataset time coordinate
+            # Warm-up will be added later
             start_date_str = self.start_date.strftime('%Y-%m-%d')
             end_date_str = self.end_date.strftime('%Y-%m-%d')
             
-            self.logger.debug(f"Filtering from {start_date_str} to {end_date_str}")
+            self.logger.debug(f"Filtering to simulation period: {start_date_str} to {end_date_str}")
             
-            # Filter to exact date range using string dates
+            # Filter to date range
             filtered_ds = dataset.sel(time=slice(start_date_str, end_date_str))
             
-            self.logger.info(f"Filtered to exact range: {self.start_date.date()} to {self.end_date.date()}")
             self.logger.info(f"Filtered time range: {filtered_ds.time.min().values} to {filtered_ds.time.max().values}")
-            self.logger.info(f"Filtered dataset shape: {dict(filtered_ds.dims)}")
+            self.logger.info(f"Total days: {len(filtered_ds.time)}")
             
             return filtered_ds
             
@@ -1295,12 +1310,24 @@ class ERA5LandAnalyzer:
 
                 # 🔧 FIX: Convert boolean to string for NetCDF compatibility
                 elevation_status = "true" if elevation_added else "false"
+                
+                # ✅ UPDATED: Metadata to reflect warm-up inclusion
+                if hasattr(self, 'warmup_date') and self.warmup_date is not None:
+                    warmup_status = "true"
+                    time_range_str = f"{self.warmup_date.date()} to {self.end_date.date()} (includes warm-up)"
+                else:
+                    warmup_status = "false"
+                    time_range_str = f"{self.start_date.date()} to {self.end_date.date()}"
 
                 # Add metadata with proper data types
                 dataset_corrected.attrs.update({
                     'title': f'ERA5-Land {var_name} daily data',
                     'gauge_id': str(self.gauge_id),
-                    'time_range': f"{self.start_date.date()} to {self.end_date.date()}",
+                    'time_range': time_range_str,
+                    'warmup_included': warmup_status,
+                    'warmup_start': str(self.warmup_date.date()) if hasattr(self, 'warmup_date') and self.warmup_date else 'none',
+                    'simulation_start': str(self.start_date.date()),
+                    'simulation_end': str(self.end_date.date()),
                     'processed_by': 'ERA5LandAnalyzer',
                     'creation_date': pd.Timestamp.now().isoformat(),
                     'model_type': str(self.model_type),
@@ -1346,6 +1373,7 @@ class ERA5LandAnalyzer:
         Main method to find monthly files, combine them, filter time range, and aggregate to daily
         INCLUDING geopotential processing for elevation data
         MODIFIED: Skip processing for files that already exist (unless force_reprocess=True)
+        ✅ MODIFIED: Adds warm-up period after processing main files
         
         Returns
         -------
@@ -1504,8 +1532,16 @@ class ERA5LandAnalyzer:
         for file_path in all_daily_files:
             self.logger.info(f"  - {file_path.name}")
         
+        # ✅ NEW: Add warm-up period to each file if configured
+        if hasattr(self, 'warmup_date') and self.warmup_date is not None:
+            self.logger.info("\n🔄 Adding warm-up period to meteorological files...")
+            all_daily_files = self._add_warmup_to_files(all_daily_files)
+        
+        # ✅ NEW: Copy files to model-specific directory for backward compatibility
+        self._copy_to_model_directory(all_daily_files)
+        
         return all_daily_files
-
+    
     #---------------------------------------------------------------------------------
     
     def _convert_units(self, dataset: xr.Dataset, var_name: str) -> xr.Dataset:
@@ -1529,158 +1565,267 @@ class ERA5LandAnalyzer:
     
     #---------------------------------------------------------------------------------
 
-    def create_warmup_data(self, n_repetitions: int = None) -> Dict[str, xr.Dataset]:
+    def _copy_to_model_directory(self, files: List[Path]) -> None:
         """
-        Create warm-up data by repeating the first year of simulation data
-        
-        This is the most common approach in hydrological modeling. The first year
-        of the simulation period is repeated to allow the model to reach equilibrium
-        before the actual calibration/validation period begins.
+        Copy processed files from shared data_obs to model-specific data_obs.
+        This maintains backward compatibility while using shared storage.
+        ✅ UPDATED: Also copies monthly average CSV files
         
         Parameters
         ----------
-        n_repetitions : int, optional
-            Number of times to repeat the first year (default: auto-calculate from warm_up_date)
-            If None, calculates based on the difference between warm_up_date and start_date
+        files : List[Path]
+            List of file paths to copy
+        """
+        import shutil
+        
+        if not files:
+            self.logger.debug("No files to copy to model directory")
+            return
+        
+        self.logger.info(f"📋 Copying {len(files)} files from shared to model-specific directory...")
+        self.logger.debug(f"  Source: {self.shared_data_dir}")
+        self.logger.debug(f"  Destination: {self.model_data_dir}")
+        
+        copied_count = 0
+        for file_path in files:
+            if file_path.exists():
+                dest = self.model_data_dir / file_path.name
+                try:
+                    shutil.copy2(file_path, dest)
+                    self.logger.debug(f"  ✅ Copied: {file_path.name}")
+                    copied_count += 1
+                except Exception as e:
+                    self.logger.warning(f"  ❌ Failed to copy {file_path.name}: {e}")
+            else:
+                self.logger.warning(f"  ⚠️ File not found: {file_path}")
+        
+        # ✅ NEW: Also copy monthly average CSV files if they exist
+        monthly_files = [
+            'monthly_temperature_averages.csv',
+            'monthly_pet_averages.csv'
+        ]
+        
+        for monthly_file in monthly_files:
+            src = self.shared_data_dir / monthly_file
+            if src.exists():
+                dest = self.model_data_dir / monthly_file
+                try:
+                    shutil.copy2(src, dest)
+                    self.logger.debug(f"  ✅ Copied: {monthly_file}")
+                    copied_count += 1
+                except Exception as e:
+                    self.logger.warning(f"  ❌ Failed to copy {monthly_file}: {e}")
+            else:
+                self.logger.debug(f"  ⏭️ Monthly file not found (will be created later): {monthly_file}")
+        
+        self.logger.info(f"✅ Successfully copied {copied_count} files to {self.model_data_dir.name}/")
+        
+    #---------------------------------------------------------------------------------
+
+    def _add_warmup_to_files(self, file_list: List[Path]) -> List[Path]:
+        """
+        Add warm-up period to processed meteorological files by repeating the first year
+        ✅ FIXED: Properly handles elevation (keeps it 2D, time-invariant)
+        ✅ FIXED: Uses temporary file to avoid permission errors
+        
+        Parameters
+        ----------
+        file_list : List[Path]
+            List of processed daily NetCDF files
             
         Returns
         -------
-        Dict[str, xr.Dataset]
-            Dictionary with warm-up datasets for each variable
-            
-        Notes
-        -----
-        Warm-up data is saved with '_warmup' suffix in filenames.
-        The warm-up period starts from self.warmup_date and ends one day before self.start_date.
-        
-        Examples
-        --------
-        With warm_up_date: '2001-01-01' and start_date: '2002-01-01':
-        - Warm-up period: 2001-01-01 to 2001-12-31 (1 year)
-        - First year repeated: 1 time
-        
-        With warm_up_date: '2000-01-01' and start_date: '2002-01-01':
-        - Warm-up period: 2000-01-01 to 2001-12-31 (2 years)
-        - First year repeated: 2 times
+        List[Path]
+            List of files with warm-up period included
         """
-        if not hasattr(self, 'warmup_date') or self.warmup_date is None:
-            self.logger.warning("⚠️ No warm_up_date specified in namelist - skipping warm-up data creation")
-            self.logger.info("💡 Add 'warm_up_date: YYYY-MM-DD' to your namelist to enable warm-up period")
-            return {}
+        self.logger.info("Adding warm-up period to meteorological files...")
         
-        # Calculate number of repetitions from dates if not specified
-        if n_repetitions is None:
-            # Calculate years between warm_up_date and start_date
-            years_diff = (self.start_date - self.warmup_date).days / 365.25
-            n_repetitions = max(1, int(np.ceil(years_diff)))
-            self.logger.info(f"📅 Auto-calculated warm-up repetitions: {n_repetitions} year(s)")
-            self.logger.info(f"   Based on: {self.warmup_date.date()} to {self.start_date.date()} = {years_diff:.2f} years")
+        # Calculate how many years of warm-up we need
+        years_diff = (self.start_date - self.warmup_date).days / 365.25
+        n_repetitions = max(1, int(np.ceil(years_diff)))
         
-        self.logger.info(f"🔄 Creating warm-up data using 'repeat_first_year' method")
-        self.logger.info(f"   Warm-up period: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
-        self.logger.info(f"   Number of repetitions: {n_repetitions}")
+        self.logger.info(f"📅 Warm-up configuration:")
+        self.logger.info(f"   Period: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
+        self.logger.info(f"   Repetitions: {n_repetitions} year(s)")
         
-        warmup_datasets = {}
+        updated_files = []
         
-        try:
-            # Find all processed daily files
-            processed_files = {
-                'temp_mean': self.output_path / 'era5_land_temp_mean.nc',
-                'temp_min': self.output_path / 'era5_land_temp_min.nc',
-                'temp_max': self.output_path / 'era5_land_temp_max.nc',
-                'precip': self.output_path / 'era5_land_precip.nc',
-                'pet': self.output_path / 'era5_land_pet.nc'
-            }
+        for file_path in file_list:
+            # ✅ SKIP ELEVATION FILE - it has no time dimension
+            if 'elevation' in file_path.name:
+                self.logger.info(f"⏭️  Skipping {file_path.name} (elevation is time-invariant)")
+                updated_files.append(file_path)
+                continue
             
-            for var_name, file_path in processed_files.items():
-                if not file_path.exists():
-                    self.logger.warning(f"⚠️ File not found: {file_path.name} - skipping for warm-up")
-                    continue
+            try:
+                self.logger.info(f"Processing {file_path.name}...")
                 
-                self.logger.debug(f"Processing {var_name} for warm-up...")
-                
-                # Load the processed data
+                # Load the file
                 ds = xr.open_dataset(file_path)
                 
-                # Extract first year of simulation data
+                # ✅ CRITICAL: Extract and REMOVE elevation BEFORE any processing
+                has_elevation = 'elevation' in ds.data_vars
+                elevation_data = None
+                
+                if has_elevation:
+                    self.logger.debug("  Found elevation in dataset - extracting it")
+                    elevation_data = ds['elevation'].copy()
+                    
+                    # Verify it has no time dimension
+                    if 'time' in elevation_data.dims:
+                        self.logger.error("❌ ELEVATION HAS TIME DIMENSION IN SAVED FILE!")
+                        self.logger.error(f"   Elevation dims: {elevation_data.dims}")
+                        self.logger.error("   Selecting first timestep to fix...")
+                        elevation_data = elevation_data.isel(time=0)
+                    
+                    self.logger.debug(f"  Elevation shape: {elevation_data.shape}, dims: {elevation_data.dims}")
+                    
+                    # ✅ CRITICAL: Drop elevation from dataset BEFORE concatenation
+                    ds = ds.drop_vars('elevation')
+                    self.logger.debug("  ✅ Removed elevation from dataset before warm-up processing")
+                
+                # Get the main meteorological variable
+                data_vars = [v for v in ds.data_vars]
+                if not data_vars:
+                    self.logger.warning(f"No data variables in {file_path.name}, skipping")
+                    ds.close()
+                    updated_files.append(file_path)
+                    continue
+                
+                main_var = data_vars[0]
+                
+                # ✅ CHECK: Make sure the variable has a time dimension
+                if 'time' not in ds[main_var].dims:
+                    self.logger.warning(f"{main_var} has no time dimension, skipping warm-up")
+                    ds.close()
+                    updated_files.append(file_path)
+                    continue
+                
+                # Extract first year of simulation data (NOW without elevation)
                 first_year_end = self.start_date + pd.DateOffset(years=1) - pd.Timedelta(days=1)
                 
                 # Make sure we don't go beyond the end date
                 if first_year_end > self.end_date:
                     first_year_end = self.end_date
-                    self.logger.warning(f"⚠️ First year extends beyond end_date - using full available period")
+                    self.logger.warning(f"First year extends beyond end_date for {file_path.name}")
                 
-                first_year_data = ds.sel(time=slice(self.start_date, first_year_end))
+                # Get first year of data (WITHOUT elevation)
+                first_year = ds.sel(time=slice(self.start_date, first_year_end))
                 
-                self.logger.debug(f"  First year: {first_year_data.time.min().values} to {first_year_data.time.max().values}")
-                self.logger.debug(f"  First year length: {len(first_year_data.time)} days")
+                self.logger.debug(f"  First year: {first_year.time.min().values} to {first_year.time.max().values}")
+                self.logger.debug(f"  Days: {len(first_year.time)}")
                 
-                # Repeat the first year n_repetitions times
+                # Repeat the first year n times
                 repeated_datasets = []
                 current_time = pd.to_datetime(self.warmup_date)
                 
                 for i in range(n_repetitions):
                     # Create a copy with adjusted time coordinates
-                    year_copy = first_year_data.copy(deep=True)
+                    year_copy = first_year.copy(deep=True)
                     
                     # Calculate new time coordinates
-                    time_deltas = first_year_data.time - first_year_data.time[0]
+                    time_deltas = first_year.time - first_year.time.values[0]
                     new_times = current_time + time_deltas
                     
+                    # Update time coordinate
                     year_copy['time'] = new_times
                     repeated_datasets.append(year_copy)
                     
                     # Move to next year
-                    current_time = new_times[-1].values + pd.Timedelta(days=1)
+                    current_time = new_times.values[-1] + pd.Timedelta(days=1)
                     
-                    self.logger.debug(f"  Repetition {i+1}: {new_times[0].values} to {new_times[-1].values}")
+                    self.logger.debug(f"  Repetition {i+1}: {new_times.values[0]} to {new_times.values[-1]}")
                 
-                # Concatenate all repetitions
+                # ✅ CONCATENATE ONLY METEOROLOGICAL DATA (no elevation in either dataset)
                 warmup_data = xr.concat(repeated_datasets, dim='time')
                 
-                # Trim to exact warm-up period (warm_up_date to start_date - 1 day)
+                # Trim warm-up to exact period (warmup_date to start_date - 1 day)
                 warmup_end = self.start_date - pd.Timedelta(days=1)
                 warmup_data = warmup_data.sel(time=slice(self.warmup_date, warmup_end))
                 
-                # Add metadata
-                warmup_data.attrs.update({
-                    'title': f'ERA5-Land {var_name} warm-up data',
+                self.logger.info(f"  Warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values} ({len(warmup_data.time)} days)")
+                
+                # ✅ CONCATENATE (both datasets have NO elevation now)
+                combined = xr.concat([warmup_data, ds], dim='time')
+                
+                self.logger.info(f"  Combined: {combined.time.min().values} to {combined.time.max().values} ({len(combined.time)} days)")
+                
+                # ✅ NOW: Add elevation AFTER concatenation (as time-invariant 2D array)
+                if has_elevation and elevation_data is not None:
+                    self.logger.debug("  Re-adding elevation (time-invariant)")
+                    
+                    # Verify elevation is 2D
+                    if len(elevation_data.dims) != 2:
+                        self.logger.error(f"❌ Elevation is not 2D: {elevation_data.dims}")
+                        raise ValueError(f"Elevation must be 2D, got {elevation_data.dims}")
+                    
+                    # Add elevation as a simple 2D variable (no time dimension)
+                    combined['elevation'] = elevation_data
+                    
+                    # ✅ VERIFICATION: Check elevation dimensions in combined dataset
+                    if 'time' in combined['elevation'].dims:
+                        self.logger.error("❌ ELEVATION GAINED TIME DIMENSION AFTER ADDING TO COMBINED!")
+                        self.logger.error(f"   Combined dims: {combined['elevation'].dims}")
+                        raise ValueError("Elevation must not have time dimension!")
+                    else:
+                        self.logger.debug(f"  ✅ Elevation correctly added: shape={combined['elevation'].shape}, dims={combined['elevation'].dims}")
+                
+                # Update metadata
+                combined.attrs.update({
+                    'warmup_included': 'true',
+                    'warmup_start': str(self.warmup_date.date()),
+                    'warmup_end': str(warmup_end.date()),
+                    'warmup_days': len(warmup_data.time),
+                    'simulation_start': str(self.start_date.date()),
+                    'simulation_end': str(self.end_date.date()),
+                    'simulation_days': len(ds.time),
                     'warmup_method': 'repeat_first_year',
                     'warmup_repetitions': n_repetitions,
-                    'warmup_period': f"{self.warmup_date.date()} to {warmup_end.date()}",
-                    'original_period': f"{self.start_date.date()} to {self.end_date.date()}",
-                    'gauge_id': str(self.gauge_id),
-                    'model_type': str(self.model_type),
-                    'created': pd.Timestamp.now().isoformat(),
-                    'description': f'Warm-up data created by repeating first year {n_repetitions} time(s)'
+                    'total_days': len(combined.time),
+                    'elevation_included': 'true' if has_elevation else 'false'
                 })
                 
-                # Save warm-up data
-                warmup_filename = f"era5_land_{var_name}_warmup.nc"
-                warmup_filepath = self.output_path / warmup_filename
-                
-                warmup_data.to_netcdf(warmup_filepath)
-                self.logger.info(f"✅ Saved warm-up data: {warmup_filename}")
-                self.logger.info(f"   Time range: {warmup_data.time.min().values} to {warmup_data.time.max().values}")
-                self.logger.info(f"   Number of days: {len(warmup_data.time)}")
-                
-                warmup_datasets[var_name] = warmup_data
-                
-                # Close datasets
+                # ✅ CRITICAL FIX: Close datasets BEFORE saving to release file handles
+                self.logger.debug("Closing original datasets to release file handles...")
                 ds.close()
                 warmup_data.close()
-            
-            self.logger.info(f"✅ Warm-up data creation completed for {len(warmup_datasets)} variables")
-            self.logger.info(f"📁 Warm-up files saved in: {self.output_path}")
-            
-            return warmup_datasets
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error creating warm-up data: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            return {}
-
+                
+                # ✅ FIX: Load combined data into memory to avoid file lock issues
+                combined = combined.load()
+                
+                # ✅ NEW: Save to temporary file first, then replace original
+                import tempfile
+                import shutil
+                
+                temp_file = file_path.parent / f".tmp_{file_path.name}"
+                
+                self.logger.debug(f"Saving to temporary file: {temp_file}...")
+                combined.to_netcdf(temp_file)
+                
+                # Close combined dataset
+                combined.close()
+                
+                # Replace original file with temporary file
+                self.logger.debug(f"Replacing original file...")
+                shutil.move(str(temp_file), str(file_path))
+                
+                self.logger.info(f"✅ Updated {file_path.name} with warm-up period")
+                
+                updated_files.append(file_path)
+                
+            except Exception as e:
+                self.logger.error(f"Error adding warm-up to {file_path.name}: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                updated_files.append(file_path)
+        
+        self.logger.info(f"✅ Warm-up period added to {len(updated_files)} files")
+        
+        # ✅ NEW: Copy updated files to model-specific directory
+        self._copy_to_model_directory(updated_files)
+        
+        return updated_files
+    
     #---------------------------------------------------------------------------------
     
     def plot_spatial_overview(self, netcdf_file: Path) -> None:
@@ -1893,6 +2038,7 @@ class ERA5LandAnalyzer:
     def calculate_spatial_average_timeseries(self, netcdf_file: Path) -> pd.DataFrame:
         """
         Calculate spatial average time series for each variable in the NetCDF file
+        ✅ FIXED: Don't filter time range - use ALL data (including warm-up)
         
         Parameters
         ----------
@@ -1910,8 +2056,8 @@ class ERA5LandAnalyzer:
             # Open the dataset
             ds = xr.open_dataset(netcdf_file, chunks={'time': 100})
             
-            # Filter time range
-            ds = self._filter_time_range_exact(ds)
+            # ❌ DON'T FILTER TIME RANGE - WE WANT THE WARM-UP DATA TOO!
+            # ds = self._filter_time_range_exact(ds)  # <-- REMOVE THIS LINE
             
             # Get data variables
             data_vars = [var for var in ds.data_vars if len(ds[var].dims) >= 2]
@@ -1941,17 +2087,20 @@ class ERA5LandAnalyzer:
             df = pd.DataFrame(results)
             df.index.name = 'time'
             
+            self.logger.info(f"Time series created: {df.index.min()} to {df.index.max()} ({len(df)} days)")
+            
             return df
             
         except Exception as e:
             self.logger.error(f"Error calculating spatial averages for {netcdf_file.name}: {str(e)}")
             return pd.DataFrame()
-    
+        
     #---------------------------------------------------------------------------------
     
     def plot_timeseries(self, netcdf_file: Path, df_timeseries: pd.DataFrame) -> None:
         """
         Plot time series of spatially averaged variables
+        ✅ MODIFIED: Highlights warm-up period with different color
         
         Parameters
         ----------
@@ -1974,7 +2123,14 @@ class ERA5LandAnalyzer:
             if n_vars == 1:
                 axes = [axes]
             
-            fig.suptitle(f'Time Series - Gauge {self.gauge_id}\n{netcdf_file.stem} - Spatial Averages\nPeriod: {self.start_date.strftime("%Y-%m-%d")} to {self.end_date.strftime("%Y-%m-%d")}', 
+            # ✅ Updated title to show warm-up info
+            title_warmup = ""
+            if hasattr(self, 'warmup_date') and self.warmup_date is not None:
+                title_warmup = f"\n🔄 Warm-up: {self.warmup_date.strftime('%Y-%m-%d')} to {(self.start_date - pd.Timedelta(days=1)).strftime('%Y-%m-%d')}"
+            
+            fig.suptitle(f'Time Series - Gauge {self.gauge_id}\n{netcdf_file.stem} - Spatial Averages\n'
+                        f'Period: {df_timeseries.index.min().strftime("%Y-%m-%d")} to {df_timeseries.index.max().strftime("%Y-%m-%d")}'
+                        f'{title_warmup}', 
                         fontsize=14, fontweight='bold')
             
             for i, var_name in enumerate(df_timeseries.columns):
@@ -1987,8 +2143,36 @@ class ERA5LandAnalyzer:
                     'cmap': 'viridis'
                 })
                 
-                # Plot the time series
-                df_timeseries[var_name].plot(ax=ax, linewidth=1, color='blue')
+                # ✅ NEW: Split data into warm-up and simulation periods
+                if hasattr(self, 'warmup_date') and self.warmup_date is not None:
+                    # Separate warm-up and simulation data
+                    warmup_mask = df_timeseries.index < self.start_date
+                    simulation_mask = df_timeseries.index >= self.start_date
+                    
+                    warmup_data = df_timeseries.loc[warmup_mask, var_name]
+                    simulation_data = df_timeseries.loc[simulation_mask, var_name]
+                    
+                    # Plot warm-up period in orange/gray
+                    if len(warmup_data) > 0:
+                        ax.plot(warmup_data.index, warmup_data.values, 
+                            linewidth=1.5, color='orange', alpha=0.7, 
+                            label='Warm-up period')
+                    
+                    # Plot simulation period in blue
+                    if len(simulation_data) > 0:
+                        ax.plot(simulation_data.index, simulation_data.values, 
+                            linewidth=1, color='blue', 
+                            label='Simulation period')
+                    
+                    # Add vertical line at start of simulation
+                    ax.axvline(self.start_date, color='red', linestyle='--', 
+                            linewidth=2, alpha=0.7, label='Simulation start')
+                    
+                    ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
+                    
+                else:
+                    # No warm-up - plot normally
+                    df_timeseries[var_name].plot(ax=ax, linewidth=1, color='blue')
                 
                 # Customize plot
                 ax.set_title(f"{var_info['name']}")
@@ -2010,15 +2194,26 @@ class ERA5LandAnalyzer:
                 
                 plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
                 
-                # Add statistics text box
-                mean_val = df_timeseries[var_name].mean()
-                std_val = df_timeseries[var_name].std()
-                min_val = df_timeseries[var_name].min()
-                max_val = df_timeseries[var_name].max()
+                # ✅ UPDATED: Statistics text box now shows warm-up vs simulation stats
+                if hasattr(self, 'warmup_date') and self.warmup_date is not None and len(warmup_data) > 0:
+                    warmup_mean = warmup_data.mean()
+                    sim_mean = simulation_data.mean()
+                    
+                    stats_text = (f'Warm-up Mean: {warmup_mean:.2f}\n'
+                                f'Simulation Mean: {sim_mean:.2f}\n'
+                                f'Overall Min: {df_timeseries[var_name].min():.2f}\n'
+                                f'Overall Max: {df_timeseries[var_name].max():.2f}')
+                else:
+                    mean_val = df_timeseries[var_name].mean()
+                    std_val = df_timeseries[var_name].std()
+                    min_val = df_timeseries[var_name].min()
+                    max_val = df_timeseries[var_name].max()
+                    
+                    stats_text = f'Mean: {mean_val:.2f}\nStd: {std_val:.2f}\nMin: {min_val:.2f}\nMax: {max_val:.2f}'
                 
-                stats_text = f'Mean: {mean_val:.2f}\nStd: {std_val:.2f}\nMin: {min_val:.2f}\nMax: {max_val:.2f}'
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                    fontsize=9)
             
             # Set x-label only on bottom plot
             axes[-1].set_xlabel('Date')
@@ -2560,69 +2755,95 @@ class GridWeightsGenerator:
     for each HRU (Hydrological Response Unit).
     """
     
-    def __init__(self, config: Union[Dict[str, Any], str, Path]) -> None:
+    def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
         """
-        Initialize the GridWeightsGenerator
+        Initialize the GridWeights Generator
         
         Parameters
         ----------
-        config : Dict[str, Any] or str or Path
-            Configuration dictionary OR path to namelist YAML file with the following keys:
-            - model_dir: Directory for model outputs (constructed automatically if using namelist)
-            - gauge_id: ID of the catchment gauge
-            - model_type: Type of hydrological model
-            - cell_size: (optional) Size of the grid cell (square) in meters
-            - x_size: (optional) Width of the grid cell in meters
-            - y_size: (optional) Height of the grid cell in meters
-            - debug: (optional) Whether to enable detailed logging and plotting
+        namelist_path : str or Path
+            Path to the namelist YAML configuration file
+        force_reprocess : bool, optional
+            If True, reprocess files even if they already exist (default: False)
         """
-        # Load configuration from namelist if path provided
-        if isinstance(config, (str, Path)):
-            with open(config, 'r') as f:
-                namelist_config = yaml.safe_load(f)
-            
-            # Extract parameters from namelist
-            self.gauge_id = namelist_config['gauge_id']
-            main_dir = Path(namelist_config['main_dir'])
-            coupled = namelist_config.get('coupled', False)
-            self.model_dir = main_dir / namelist_config['config_dir'] / f'catchment_{self.gauge_id}'
-            self.model_type = namelist_config['model_type']
-            
-            # Optional parameters from namelist or defaults
-            self.cell_size = namelist_config.get('cell_size')
-            self.x_size = namelist_config.get('x_size')
-            self.y_size = namelist_config.get('y_size')
-            self.debug = namelist_config.get('debug', False)
-            
-        else:
-            # Use config dictionary (backward compatibility)
-            self.model_dir = Path(config['model_dir'])
-            self.gauge_id = config['gauge_id']
-            self.model_type = config['model_type']
-            self.cell_size = config.get('cell_size')
-            self.x_size = config.get('x_size')
-            self.y_size = config.get('y_size')
-            self.debug = config.get('debug', False)
+        # Store the force_reprocess flag
+        self.force_reprocess = force_reprocess
         
-        # Define output directory paths
-        self.out_dir = self.model_dir / self.model_type / 'data_obs'
-        self.out_HRU_shape_dir = self.model_dir / 'topo_files' / 'HRU.shp'
-        self.plots_dir = self.model_dir / self.model_type / 'plots'
+        # Load configuration from namelist directly
+        namelist_path = Path(namelist_path)
         
-        # Create directories if they don't exist
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        self.plots_dir.mkdir(parents=True, exist_ok=True)
+        if not namelist_path.exists():
+            raise FileNotFoundError(f"Namelist file not found: {namelist_path}")
         
-        # Setup logger
+        with open(namelist_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        # Store configuration parameters
+        self.main_dir = Path(self.config.get('main_dir'))
+        self.gauge_id = self.config.get('gauge_id')
+        self.basin_id = self.config.get('basin_id', self.gauge_id)
+        self.start_date = pd.to_datetime(self.config.get('start_date'))
+        self.end_date = pd.to_datetime(self.config.get('end_date'))
+        
+        self.model_type = self.config.get('model_type')
+        self.debug = self.config.get('debug', False)
+        self.coupled = self.config.get('coupled', False)
+        self.model_dir = self.main_dir / self.config.get('config_dir')
+        
+        # ✅ Setup directories using basin_id for meteo data
+        meteo_dir_template = self.config.get('meteo_dir', '01_data/meteo/gauge_{gauge_id}')
+        self.era5_data_dir = Path(meteo_dir_template.format(basin_id=self.basin_id, gauge_id=self.basin_id))
+        
+        # Make absolute path if needed
+        if not self.era5_data_dir.is_absolute():
+            self.era5_data_dir = self.main_dir / self.era5_data_dir
+        
+        # ✅ Define SHARED catchment-level directories (primary storage)
+        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        self.shared_plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'plots'
+        
+        # ✅ Define MODEL-SPECIFIC directories (for backward compatibility)
+        self.model_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
+        
+        # ✅ Use shared directories as primary output locations
+        self.output_path = self.shared_data_dir
+        self.plots_dir = self.shared_plots_dir
+        
+        # ✅ Set paths for GridWeights generator
+        self.out_dir = self.shared_data_dir  # Where GridWeights.txt will be saved
+        self.out_HRU_shape_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'topo_files' / 'HRU.shp'
+        
+        # Create plots directories
+        self.spatial_plots_dir = self.plots_dir / 'spatial_overview'
+        self.timeseries_plots_dir = self.plots_dir / 'time_series'
+        
+        # Create all directories
+        self.spatial_plots_dir.mkdir(parents=True, exist_ok=True)
+        self.timeseries_plots_dir.mkdir(parents=True, exist_ok=True)
+        self.output_path.mkdir(parents=True, exist_ok=True)
+        self.model_data_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Keep the old attribute name for backward compatibility
+        self.processed_data_dir = self.output_path
+        
+        # Setup logger FIRST
         self.logger = self._setup_logger()
         
-        # Log configuration
-        self.logger.debug(f"Initialized GridWeightsGenerator with:")
-        self.logger.debug(f"  Model dir: {self.model_dir}")
-        self.logger.debug(f"  Gauge ID: {self.gauge_id}")
-        self.logger.debug(f"  Model type: {self.model_type}")
-        self.logger.debug(f"  Output dir: {self.out_dir}")
-        self.logger.debug(f"  HRU shapefile: {self.out_HRU_shape_dir}")
+        # ✅ Load warm-up date if specified (AFTER logger is initialized)
+        if 'warm_up_date' in self.config:
+            self.warmup_date = pd.to_datetime(self.config.get('warm_up_date'))
+            self.logger.info(f"Warm-up period configured: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
+        else:
+            self.warmup_date = None
+            self.logger.debug("No warm-up period configured")
+        
+        # Log the output directory
+        self.logger.info(f"Processing for gauge {self.gauge_id} using basin {self.basin_id} meteo data")
+        self.logger.info(f"Model type: {self.model_type}")
+        self.logger.info(f"Model directory: {self.model_dir}")
+        self.logger.info(f"ERA5 data directory: {self.era5_data_dir}")
+        self.logger.info(f"GridWeights will be saved to: {self.out_dir}")
+        self.logger.info(f"GridWeights will be copied to: {self.model_data_dir}")
 
     #---------------------------------------------------------------------------------
 
@@ -3027,6 +3248,9 @@ class GridWeightsGenerator:
             self.logger.info("⏭️  Skipping grid weights generation")
             self.logger.info("💡 Delete the file to regenerate: rm " + str(gridweights_file))
             
+            # ✅ NEW: Copy to model directory even if skipping generation
+            self._copy_gridweights_to_model_directory()
+            
             # Return empty GeoDataFrame since we're skipping
             return gpd.GeoDataFrame()
         
@@ -3048,6 +3272,9 @@ class GridWeightsGenerator:
                 
                 # Jump straight to writing file
                 self.write_gridWeights(HRU, era5_grid_polygons, relative_area)
+                
+                # ✅ NEW: Copy GridWeights.txt to model-specific directory
+                self._copy_gridweights_to_model_directory()
                 
                 return relative_area
                 
@@ -3223,5 +3450,33 @@ class GridWeightsGenerator:
         
         self.logger.info("ERA5-Land grid weights generation completed successfully")
         
+        # ✅ NEW: Copy GridWeights.txt to model-specific directory
+        self._copy_gridweights_to_model_directory()
+        
         return relative_area
+    
+    #---------------------------------------------------------------------------------
+    
+    def _copy_gridweights_to_model_directory(self) -> None:
+        """
+        Copy GridWeights.txt from shared data_obs to model-specific data_obs.
+        This maintains backward compatibility while using shared storage.
+        """
+        import shutil
+        
+        gridweights_file = self.shared_data_dir / 'GridWeights.txt'
+        
+        if not gridweights_file.exists():
+            self.logger.warning(f"⚠️ GridWeights.txt not found in shared directory: {gridweights_file}")
+            return
+        
+        dest = self.model_data_dir / 'GridWeights.txt'
+        
+        try:
+            shutil.copy2(gridweights_file, dest)
+            self.logger.info(f"📋 Copied GridWeights.txt to: {self.model_data_dir}")
+            self.logger.debug(f"  Source: {gridweights_file}")
+            self.logger.debug(f"  Destination: {dest}")
+        except Exception as e:
+            self.logger.warning(f"❌ Failed to copy GridWeights.txt: {e}")
 
