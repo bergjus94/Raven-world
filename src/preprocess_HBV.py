@@ -72,6 +72,12 @@ class HBVProcessor:
         self.coupled = namelist.get('coupled', False)
         self.author = namelist.get('author', 'Justine Berg')
 
+        # ✅ NEW: Meteorological data source (ERA5 or HAR)
+        self.meteo_source = namelist.get('meteo_source', 'ERA5').upper()
+        if self.meteo_source not in ['ERA5', 'HAR']:
+            raise ValueError(f"Invalid meteo_source: {self.meteo_source}. Must be 'ERA5' or 'HAR'")
+        print(f"Meteorological data source: {self.meteo_source}")
+
         # ✅ ADD ONLY THIS - warm_up_date
         if 'warm_up_date' in namelist:
             self.warm_up_date = namelist['warm_up_date']
@@ -372,6 +378,28 @@ class HBVProcessor:
 
     def _create_hru_groups(self, hru_df: pd.DataFrame) -> List[str]:
         """Create HRU groups including filtered AllHRUs, elevation bands, and glacier groups."""
+        
+        def format_hru_list(hru_ids: List[int], max_per_line: int = 50) -> List[str]:
+            """
+            Format HRU IDs into multiple lines if needed.
+            
+            Args:
+                hru_ids: List of HRU IDs
+                max_per_line: Maximum number of HRU IDs per line
+                
+            Returns:
+                List of formatted lines
+            """
+            if not hru_ids:
+                return ["  # No HRUs available"]
+            
+            lines = []
+            for i in range(0, len(hru_ids), max_per_line):
+                chunk = hru_ids[i:i + max_per_line]
+                lines.append("  " + " ".join(map(str, chunk)))
+            
+            return lines
+        
         hru_groups = []
         
         # Different exclusion rules for different groups
@@ -386,100 +414,44 @@ class HBVProcessor:
         print(f"Excluded HRUs from AllHRUs group (land use {allhrus_excluded_landuse}): {len(hru_df) - len(filtered_hrus)}")
         print(f"AllHRUs group will contain: {len(filtered_hru_ids)} HRUs")
         
-        # Add AllHRUs group with filtered HRUs
-        if filtered_hru_ids:
-            hru_groups.extend([
-                ":HRUGroup AllHRUs",
-                f"  {' '.join(map(str, filtered_hru_ids))}",
-                ":EndHRUGroup",
-                ""
-            ])
-        else:
-            print("WARNING: No HRUs remain after filtering for AllHRUs group!")
-            hru_groups.extend([
-                ":HRUGroup AllHRUs",
-                "  # No HRUs available after filtering",
-                ":EndHRUGroup",
-                ""
-            ])
+        # Add AllHRUs group with filtered HRUs (split across multiple lines)
+        hru_groups.append(":HRUGroup AllHRUs")
+        hru_groups.extend(format_hru_list(filtered_hru_ids))
+        hru_groups.extend([":EndHRUGroup", ""])
 
-        # ✅ ADD GLACIER-RELATED HRU GROUPS
-        
-        # ALL_GLACIER group - all glacier HRUs (GLACIER and MASKED_GLACIER)
+        # ✅ ALL_GLACIER group
         all_glacier_hrus = hru_df[hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
-        if all_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup ALL_GLACIER",
-                f"  {' '.join(map(str, all_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"ALL_GLACIER group: {len(all_glacier_hrus)} HRUs")
-        else:
-            print("WARNING: No glacier HRUs found for ALL_GLACIER group")
-            hru_groups.extend([
-                ":HRUGroup ALL_GLACIER",
-                "  # No glacier HRUs available",
-                ":EndHRUGroup",
-                ""
-            ])
+        hru_groups.append(":HRUGroup ALL_GLACIER")
+        hru_groups.extend(format_hru_list(all_glacier_hrus))
+        hru_groups.extend([":EndHRUGroup", ""])
+        print(f"ALL_GLACIER group: {len(all_glacier_hrus)} HRUs")
         
-        # SMALL_GLACIER group - glacier HRUs with area < 2 km²
+        # ✅ SMALL_GLACIER group
         small_glacier_hrus = hru_df[
             (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
             (hru_df['AREA'] < 2)
         ][':ATTRIBUTES'].tolist()
-        if small_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup SMALL_GLACIER",
-                f"  {' '.join(map(str, small_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"SMALL_GLACIER group: {len(small_glacier_hrus)} HRUs (area < 2 km²)")
-        else:
-            print("WARNING: No small glacier HRUs found")
-            hru_groups.extend([
-                ":HRUGroup SMALL_GLACIER",
-                "  # No small glacier HRUs available",
-                ":EndHRUGroup",
-                ""
-            ])
+        hru_groups.append(":HRUGroup SMALL_GLACIER")
+        hru_groups.extend(format_hru_list(small_glacier_hrus))
+        hru_groups.extend([":EndHRUGroup", ""])
+        print(f"SMALL_GLACIER group: {len(small_glacier_hrus)} HRUs (area < 2 km²)")
         
-        # LARGE_GLACIER group - glacier HRUs with area >= 2 km²
+        # ✅ LARGE_GLACIER group
         large_glacier_hrus = hru_df[
             (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
             (hru_df['AREA'] >= 2)
         ][':ATTRIBUTES'].tolist()
-        if large_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup LARGE_GLACIER",
-                f"  {' '.join(map(str, large_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"LARGE_GLACIER group: {len(large_glacier_hrus)} HRUs (area >= 2 km²)")
-        else:
-            print("WARNING: No large glacier HRUs found")
-            hru_groups.extend([
-                ":HRUGroup LARGE_GLACIER",
-                "  # No large glacier HRUs available",
-                ":EndHRUGroup",
-                ""
-            ])
+        hru_groups.append(":HRUGroup LARGE_GLACIER")
+        hru_groups.extend(format_hru_list(large_glacier_hrus))
+        hru_groups.extend([":EndHRUGroup", ""])
+        print(f"LARGE_GLACIER group: {len(large_glacier_hrus)} HRUs (area >= 2 km²)")
         
-        # NO_GLACIER group - all non-glacier HRUs
+        # ✅ NO_GLACIER group
         no_glacier_hrus = hru_df[~hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
-        if no_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup NO_GLACIER",
-                f"  {' '.join(map(str, no_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"NO_GLACIER group: {len(no_glacier_hrus)} HRUs")
-        else:
-            print("WARNING: No non-glacier HRUs found")
+        hru_groups.append(":HRUGroup NO_GLACIER")
+        hru_groups.extend(format_hru_list(no_glacier_hrus))
+        hru_groups.extend([":EndHRUGroup", ""])
+        print(f"NO_GLACIER group: {len(no_glacier_hrus)} HRUs")
 
         # Add elevation band groups with DIFFERENT filtering (only exclude glaciers)
         hrus_by_band = self.get_hrus_by_elevation_band()
@@ -493,13 +465,10 @@ class HBVProcessor:
                     
                     print(f"Elevation band {band}: {len(hru_ids)} total HRUs, {len(filtered_band_hru_ids)} after excluding {elevation_excluded_landuse}")
                     
-                    if filtered_band_hru_ids:
-                        hru_groups.extend([
-                            f":HRUGroup {band}",
-                            f"  {' '.join(map(str, filtered_band_hru_ids))}",
-                            ":EndHRUGroup",
-                            ""
-                        ])
+                    # ✅ Split elevation bands across multiple lines too
+                    hru_groups.append(f":HRUGroup {band}")
+                    hru_groups.extend(format_hru_list(filtered_band_hru_ids))
+                    hru_groups.extend([":EndHRUGroup", ""])
         else:
             print(f"No elevation bands available for catchment {self.gauge_id}")
 
@@ -508,6 +477,7 @@ class HBVProcessor:
     def create_rvt_file(self, template: bool = False):
         """
         Write Raven .rvt file for HBV model.
+        ✅ UPDATED: Includes meteo source information in header
         
         Args:
             template: Whether to create template file
@@ -531,12 +501,24 @@ class HBVProcessor:
         # Write the file
         with open(file_path, 'w') as ff:
             ff.writelines(f"{line}\n" for line in self._create_header("rvt"))
+            
+            # ✅ NEW: Add meteo source information
+            ff.write(f"# Meteorological data source: {self.meteo_source}\n")
+            if self.meteo_source == 'HAR':
+                ff.write("# Using HAR v2 (High Asia Refined Analysis) 10km data\n")
+            else:
+                ff.write("# Using ERA5-Land reanalysis data\n")
+            ff.write("#\n")
+            
             ff.write("# meteorological forcings\n")
             for f in forcing_data.values():
                 for t in f:
                     ff.write(f"{t}\n")
             ff.writelines(gauge_info)
             ff.write(f":RedirectToFile data_obs/Q_daily.rvt\n")
+        
+        print(f"✅ Successfully wrote HBV RVT file to {file_path}")
+        print(f"   Meteo source: {self.meteo_source}")
 
     def _create_gauge_info(self, gauge_lat: float, gauge_lon: float, 
                             station_elevation: float, param_or_name: str) -> List[str]:
@@ -561,16 +543,65 @@ class HBVProcessor:
             return gauge_info
 
     def _get_monthly_data(self) -> List[str]:
-        """Read and format monthly temperature and PET data if available."""
-        monthly_temp_file = self.data_obs_dir / 'monthly_temperature_averages.csv'
-        monthly_pet_file = self.data_obs_dir / 'monthly_pet_averages.csv'
+        """
+        Read and format monthly temperature and PET data if available.
+        ✅ UPDATED: Chooses correct files based on meteo_source (ERA5 or HAR)
+        ✅ UPDATED: Also checks shared data_obs directory
+        """
+        # ✅ Choose file names based on meteo_source
+        if self.meteo_source == 'HAR':
+            temp_filename = 'har_monthly_temperature_averages.csv'
+            pet_filename = 'har_monthly_pet_averages.csv'
+        else:  # ERA5 (default)
+            temp_filename = 'monthly_temperature_averages.csv'
+            pet_filename = 'monthly_pet_averages.csv'
         
-        if not (monthly_temp_file.exists() and monthly_pet_file.exists()):
+        # ✅ Check model-specific directory first
+        monthly_temp_file = self.data_obs_dir / temp_filename
+        monthly_pet_file = self.data_obs_dir / pet_filename
+        
+        # ✅ If not found, check shared directory
+        if not monthly_temp_file.exists() or not monthly_pet_file.exists():
+            shared_data_dir = self.catchment_dir / 'data_obs'
+            
+            if not monthly_temp_file.exists():
+                shared_temp = shared_data_dir / temp_filename
+                if shared_temp.exists():
+                    monthly_temp_file = shared_temp
+                    print(f"📂 Found temperature file in shared directory: {shared_temp}")
+            
+            if not monthly_pet_file.exists():
+                shared_pet = shared_data_dir / pet_filename
+                if shared_pet.exists():
+                    monthly_pet_file = shared_pet
+                    print(f"📂 Found PET file in shared directory: {shared_pet}")
+        
+        # ✅ Final check
+        if not monthly_temp_file.exists() or not monthly_pet_file.exists():
+            print(f"⚠️ Monthly data files not found for {self.meteo_source}:")
+            print(f"   Temperature: {temp_filename}")
+            print(f"   - Checked: {self.data_obs_dir / temp_filename} (exists: {(self.data_obs_dir / temp_filename).exists()})")
+            print(f"   - Checked: {self.catchment_dir / 'data_obs' / temp_filename} (exists: {(self.catchment_dir / 'data_obs' / temp_filename).exists()})")
+            print(f"   PET: {pet_filename}")
+            print(f"   - Checked: {self.data_obs_dir / pet_filename} (exists: {(self.data_obs_dir / pet_filename).exists()})")
+            print(f"   - Checked: {self.catchment_dir / 'data_obs' / pet_filename} (exists: {(self.catchment_dir / 'data_obs' / pet_filename).exists()})")
+            print(f"   💡 Run HARAnalyzer first to generate these files!")
             return []
         
         try:
             temp_df = pd.read_csv(monthly_temp_file)
             pet_df = pd.read_csv(monthly_pet_file)
+            
+            # ✅ Validate data
+            if 'Temperature' not in temp_df.columns:
+                print(f"⚠️ 'Temperature' column not found in {monthly_temp_file}")
+                print(f"   Available columns: {list(temp_df.columns)}")
+                return []
+            
+            if 'PET_avg_mm_per_day' not in pet_df.columns:
+                print(f"⚠️ 'PET_avg_mm_per_day' column not found in {monthly_pet_file}")
+                print(f"   Available columns: {list(pet_df.columns)}")
+                return []
             
             temp_values = temp_df['Temperature'].values
             temp_str = ", ".join([f"{val:.1f}" for val in temp_values])
@@ -578,86 +609,139 @@ class HBVProcessor:
             pet_values = pet_df['PET_avg_mm_per_day'].values
             pet_str = ", ".join([f"{val:.3f}" for val in pet_values])
             
+            print(f"✅ Loaded monthly data from {self.meteo_source} files:")
+            print(f"   Temperature file: {monthly_temp_file.name}")
+            print(f"   PET file: {monthly_pet_file.name}")
+            
             return [
                 "#                       Jan    Feb    Mar    Apr    May    Jun    Jul    Aug    Sep    Oct    Nov    Dec \n",
                 f"  :MonthlyAveEvaporation, {pet_str} \n",
                 f"  :MonthlyAveTemperature, {temp_str} \n"
             ]
         except Exception as e:
-            print(f"Error reading monthly data: {e}")
+            print(f"❌ Error reading monthly data: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _create_forcing_block(self, param_or_name: str, coupled: bool) -> Dict[str, List[str]]:
-        """Create forcing data configuration for RVT file - ERA5-Land version."""
-        grid_weights_file_path = "data_obs/GridWeights.txt"
+        """
+        Create forcing data configuration for RVT file.
+        ✅ UPDATED: Supports both ERA5-Land and HAR meteorological data sources
         
-        # ✅ USE ERA5-LAND VARIABLE NAMES
-        var_names = {
-            'rainfall': 'tp',
-            'temp_ave': 't2m',
-            'temp_max': 't2m', 
-            'temp_min': 't2m'
-        }
-        dim_names = "longitude latitude time"
+        Parameters
+        ----------
+        param_or_name : str
+            Parameter naming convention ('names' for template, 'init' for initialized)
+        coupled : bool
+            Whether the model is coupled
+            
+        Returns
+        -------
+        Dict[str, List[str]]
+            Dictionary of forcing data blocks
+        """
+        
+        # ✅ Choose file names and GridWeights based on meteo_source
+        if self.meteo_source == 'HAR':
+            # HAR file names and configuration
+            precip_file = 'har_precip.nc'
+            temp_mean_file = 'har_temp_mean.nc'
+            temp_max_file = 'har_temp_max.nc'
+            temp_min_file = 'har_temp_min.nc'
+            grid_weights_file = 'data_obs/GridWeights_HAR.txt'
+            
+            # HAR variable names
+            precip_var = 'prcp'
+            temp_var = 't2_mean'
+            temp_max_var = 't2_max'
+            temp_min_var = 't2_min'
+            
+            # HAR dimension names (curvilinear grid)
+            dim_names = "west_east south_north time"
+            
+            print(f"📊 Using HAR meteorological data")
+            
+        else:  # ERA5 (default)
+            # ERA5-Land file names and configuration
+            precip_file = 'era5_land_precip.nc'
+            temp_mean_file = 'era5_land_temp_mean.nc'
+            temp_max_file = 'era5_land_temp_max.nc'
+            temp_min_file = 'era5_land_temp_min.nc'
+            grid_weights_file = 'data_obs/GridWeights.txt'
+            
+            # ERA5-Land variable names
+            precip_var = 'tp'
+            temp_var = 't2m'
+            temp_max_var = 't2m'
+            temp_min_var = 't2m'
+            
+            # ERA5-Land dimension names
+            dim_names = "longitude latitude time"
+            
+            print(f"📊 Using ERA5-Land meteorological data")
 
         # Get optional parameters with default values
         rain_corr = self.params['HBV'][param_or_name].get('X20', 1.0)
         snow_corr = self.params['HBV'][param_or_name].get('X21', 1.0)
 
-        # ✅ USE ERA5-LAND FILE NAMES
-        forcing_types = [
-            ('Rainfall', 'RAINFALL', 'era5_land_precip.nc', var_names['rainfall']),
-            ('Average Temperature', 'TEMP_AVE', 'era5_land_temp_mean.nc', var_names['temp_ave']),
-            ('Maximum Temperature', 'TEMP_MAX', 'era5_land_temp_max.nc', var_names['temp_max']),
-            ('Minimum Temperature', 'TEMP_MIN', 'era5_land_temp_min.nc', var_names['temp_min'])
-        ]
-
         forcing_data = {}
         
-        # Rainfall with correction factors
+        # Rainfall forcing block
         forcing_data['Rainfall'] = [
             f":GriddedForcing           Rainfall",
             f"    :ForcingType          RAINFALL",
-            f"    :FileNameNC           data_obs/era5_land_precip.nc",
-            f"    :VarNameNC            {var_names['rainfall']}",
+            f"    :FileNameNC           data_obs/{precip_file}",
+            f"    :VarNameNC            {precip_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
             f"#    :RainCorrection       {rain_corr}",
             f"#    :SnowCorrection       {snow_corr}",
-            f"    :RedirectToFile       {grid_weights_file_path}",
+            f"    :RedirectToFile       {grid_weights_file}",
             ":EndGriddedForcing",
             ''
         ]
         
-        # Add Irrigation forcing block
-        forcing_data['Irrigation'] = [
-            ":GriddedForcing           Irrigation",
-            "    :ForcingType          IRRIGATION",
-            "    :FileNameNC           data_obs/irrigation.nc",
-            "    :VarNameNC            data",
-            "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
+        # Average Temperature forcing block
+        forcing_data['Average Temperature'] = [
+            f":GriddedForcing           Average Temperature",
+            f"    :ForcingType          TEMP_AVE",
+            f"    :FileNameNC           data_obs/{temp_mean_file}",
+            f"    :VarNameNC            {temp_var}",
+            f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
-            "    :RedirectToFile       data_obs/GridWeights_Irrigation.txt",
+            f"    :RedirectToFile       {grid_weights_file}",
             ":EndGriddedForcing",
             ''
         ]
         
-        # Temperature forcing blocks
-        temp_types = forcing_types[1:]  # Skip rainfall (already done)
-        for name, forcing_type, filename, var_name in temp_types:
-            forcing_data[name] = [
-                f":GriddedForcing           {name}",
-                f"    :ForcingType          {forcing_type}",
-                f"    :FileNameNC           data_obs/{filename}",
-                f"    :VarNameNC            {var_name}",
-                f"    :DimNamesNC           {dim_names}",
-                "    :ElevationVarNameNC   elevation",
-                f"    :RedirectToFile       {grid_weights_file_path}",
-                ":EndGriddedForcing",
-                ''
-            ]
+        # Maximum Temperature forcing block
+        forcing_data['Maximum Temperature'] = [
+            f":GriddedForcing           Maximum Temperature",
+            f"    :ForcingType          TEMP_MAX",
+            f"    :FileNameNC           data_obs/{temp_max_file}",
+            f"    :VarNameNC            {temp_max_var}",
+            f"    :DimNamesNC           {dim_names}",
+            "    :ElevationVarNameNC   elevation",
+            f"    :RedirectToFile       {grid_weights_file}",
+            ":EndGriddedForcing",
+            ''
+        ]
         
-        # ✅ ADD IRRIGATION FORCING BLOCK
+        # Minimum Temperature forcing block
+        forcing_data['Minimum Temperature'] = [
+            f":GriddedForcing           Minimum Temperature",
+            f"    :ForcingType          TEMP_MIN",
+            f"    :FileNameNC           data_obs/{temp_min_file}",
+            f"    :VarNameNC            {temp_min_var}",
+            f"    :DimNamesNC           {dim_names}",
+            "    :ElevationVarNameNC   elevation",
+            f"    :RedirectToFile       {grid_weights_file}",
+            ":EndGriddedForcing",
+            ''
+        ]
+        
+        # Irrigation forcing block (always uses same format)
         forcing_data['Irrigation'] = [
             ":GriddedForcing           Irrigation",
             "    :ForcingType          IRRIGATION",
@@ -921,20 +1005,6 @@ class HBVProcessor:
             ],
             "#Output Options": [
             ],
-            "#Transport for Snowmelt and Glacier Melt Tracking": [
-                "",
-                ":Transport SNOWMELT TRACER",
-                ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0",
-                "",
-                ":Transport GLACIERMELT_ALL TRACER",
-                ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER",
-                "",
-                ":Transport GLACIERMELT_SMALL TRACER",
-                ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER",
-                "",
-                ":Transport GLACIERMELT_LARGE TRACER",
-                ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER"
-            ]
         }
 
     def create_rvc_file(self, template: bool = False):

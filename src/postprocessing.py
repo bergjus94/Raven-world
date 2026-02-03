@@ -71,19 +71,19 @@ def get_available_catchments(base_dir, configs):
 ################################## hydrograph ###################################
 #--------------------------------------------------------------------------------
 
-def load_hydrograph_data(gauge_id, config, base_dir):
-    """Load hydrograph data from a specific configuration"""
-    # Path for hydrograph file
-    model_dir = Path(base_dir) / f"catchment_{gauge_id}_{config}" / "HBV"
-    hydro_file = model_dir / "output" / f"{gauge_id}_HBV_Hydrographs.csv"
-    
-    print(f"Loading hydrograph data for {config}:")
+def load_hydrograph_data(config):
+    """Load hydrograph data from model directory"""
+    config_dir = Path(config['main_dir']) / config['config_dir']
+    gauge_id = config['gauge_id']
+    hydro_file = config_dir/ f"catchment_{gauge_id}" / config['model_type'] / "output" / f"{gauge_id}_{config['model_type']}_Hydrographs.csv"
+
+    print(f"Loading hydrograph data:")
     print(f"  - File: {hydro_file}")
     
     try:
         # Read the CSV file
-        df = pd.read_csv(hydro_file)
-        
+        df = pd.read_csv(hydro_file, skiprows=[1])
+
         # Convert date column to datetime
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
@@ -91,13 +91,16 @@ def load_hydrograph_data(gauge_id, config, base_dir):
         # Identify the simulated and observed columns
         sim_col = None
         obs_col = None
+        precip_col = None
         
-        # Look for columns matching the pattern for simulated and observed flow
+        # Look for columns matching the pattern for simulated, observed flow, and precipitation
         for col in df.columns:
             if '[m3/s]' in col and 'observed' not in col.lower():
                 sim_col = col
             elif '[m3/s]' in col and 'observed' in col.lower():
                 obs_col = col
+            elif 'precip' in col.lower() and '[mm/day]' in col:  # ✅ Look for precip with units
+                precip_col = col
         
         if not sim_col:
             # Try alternative column naming patterns
@@ -113,8 +116,10 @@ def load_hydrograph_data(gauge_id, config, base_dir):
             renamed_df['sim_Q'] = df[sim_col]
         if obs_col:
             renamed_df['obs_Q'] = df[obs_col]
+        if precip_col:
+            renamed_df['precip'] = df[precip_col]  # ✅ ADD THIS: Rename precip column
             
-        print(f"  - Found columns: sim={sim_col}, obs={obs_col}")
+        print(f"  - Found columns: sim={sim_col}, obs={obs_col}, precip={precip_col}")
         print(f"  - Data range: {renamed_df['date'].min()} to {renamed_df['date'].max()}")
         
         return renamed_df

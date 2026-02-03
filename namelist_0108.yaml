@@ -1,8 +1,8 @@
-gauge_id: '0102'
+gauge_id: '0108'
 start_date: '1980-01-01'
-end_date: '2010-12-31'
-cali_end_date: '1995-12-31'
-warm_up_date: '1978-01-01'
+end_date: '2023-12-31'
+cali_end_date: '1982-12-31'
+warm_up_date: '1979-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'
@@ -15,26 +15,23 @@ criteria:
   - landuse
 future: false
 debug: true
-# Choose forcing dataset: 'ERA5', 'HAR'
-meteo_source: 'ERA5'
 
 # Paths (relative to main_dir or absolute)
 #meteo_dir: '/run/user/1001/gvfs/smb-share:server=fileserv02.giub.unibe.ch,share=userdata/jberg/Meteo_data/Era5_worldwide/gauge_{gauge_id}'
 meteo_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/gauge_{basin_id}'
-meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
 shape_dir: '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp'
 raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
-landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
+landuse_dir: '01_data/topo/catchment_landuse/landuse_{gauge_id}.tif'
 #glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_15.rgi60.SouthAsiaEast/15_rgi60_SouthAsiaEast.shp'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
 #glogem_dir: '01_data/GloGEM/Ganges/GloGEM_output_{gauge_id}.dat'
-glogem_dir: '01_data/GloGEM/Indus/GMB'
+glogem_dir: '01_data/GloGEM/Indus/geodetic_mass_balance_Hunza/GloGEM_output_{gauge_id}.dat'
 swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
 params_dir: 'src/config/default_params.yaml'
+meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
 
-
-config_dir: '03_model_setups_gmb'
+config_dir: '03_model_setups_coupled_geodetic_mass_balance'
 
 
 # Forcing files (can be empty or filled as needed)

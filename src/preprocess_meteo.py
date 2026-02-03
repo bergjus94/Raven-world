@@ -429,21 +429,11 @@ class ERA5LandAnalyzer:
 
     #---------------------------------------------------------------------------------
 
-    def _combine_monthly_files(self, file_list: List[Path], variable_type: str) -> Optional[xr.Dataset]:
+    def _combine_monthly_files_with_clipping(self, file_list: List[Path], variable_type: str, 
+                                    clip_bounds: Optional[Dict[str, float]]) -> Optional[xr.Dataset]:
         """
-        Combine monthly files into a single dataset, with better error handling
-        
-        Parameters
-        ----------
-        file_list : List[Path]
-            List of monthly NetCDF files
-        variable_type : str
-            'temperature', 'precipitation', or 'potential_evaporation'
-            
-        Returns
-        -------
-        Optional[xr.Dataset]
-            Combined dataset or None if failed
+        Combine monthly files - CLIP each file but DON'T aggregate yet
+        ✅ FIXED: Only clip, don't aggregate - aggregation happens later
         """
         if not file_list:
             self.logger.warning(f"No files to combine for {variable_type}")
@@ -452,18 +442,15 @@ class ERA5LandAnalyzer:
         self.logger.info(f"Combining {len(file_list)} {variable_type} files...")
         
         try:
-            # Sort files to ensure chronological order
             sorted_files = sorted(file_list)
             
-            # ✅ IMPROVED: First check which files are valid
+            # Validate files first (EXACT OLD METHOD)
             valid_files = []
             invalid_files = []
             
             for file_path in sorted_files:
                 try:
-                    # Quick test to see if file can be opened
                     with xr.open_dataset(file_path, engine='netcdf4') as test_ds:
-                        # Check if it has the expected dimensions
                         if 'time' in test_ds.dims or 'valid_time' in test_ds.dims:
                             valid_files.append(file_path)
                         else:
@@ -482,12 +469,11 @@ class ERA5LandAnalyzer:
                 
             self.logger.info(f"Using {len(valid_files)} valid files out of {len(sorted_files)}")
             
-            # ✅ COMPLETELY REWRITTEN: Use xarray's built-in concatenation with proper time handling
-            if len(valid_files) > 50:  # For large numbers of files
-                self.logger.info(f"Large file count ({len(valid_files)}) - using batch processing with proper time concatenation")
+            # Process in batches
+            if len(valid_files) > 50:
+                self.logger.info(f"Large file count ({len(valid_files)}) - using batch processing")
                 
-                # Process in smaller batches but with proper time coordinate handling
-                batch_size = 12  # Monthly files, so 12 = 1 year batches
+                batch_size = 12  # 1 year batches
                 datasets = []
                 
                 for i in range(0, len(valid_files), batch_size):
@@ -497,51 +483,44 @@ class ERA5LandAnalyzer:
                     
                     self.logger.debug(f"Processing batch {batch_num}/{total_batches}: {len(batch_files)} files")
                     
-                    try:
-                        # Open and immediately combine this batch
-                        batch_datasets = []
-                        for file_path in batch_files:
-                            ds = xr.open_dataset(file_path, engine='netcdf4')
-                            
-                            # Standardize time coordinate name immediately
-                            time_coord = None
-                            for coord in ['time', 'valid_time', 'datetime']:
-                                if coord in ds.dims:
-                                    time_coord = coord
-                                    break
-                            
-                            if time_coord and time_coord != 'time':
-                                ds = ds.rename({time_coord: 'time'})
-                            
-                            # Ensure time is properly decoded
-                            if 'time' in ds.coords:
-                                if not pd.api.types.is_datetime64_any_dtype(ds.time):
-                                    # Try to decode time coordinate
-                                    try:
-                                        ds = xr.decode_cf(ds)
-                                    except:
-                                        self.logger.warning(f"Could not decode time for {file_path.name}")
-                            
-                            batch_datasets.append(ds)
+                    batch_datasets = []
+                    for file_path in batch_files:
+                        ds = xr.open_dataset(file_path, engine='netcdf4')
                         
-                        # Concatenate this batch along time dimension
-                        if batch_datasets:
-                            batch_combined = xr.concat(batch_datasets, dim='time', combine_attrs='drop_conflicts')
-                            
-                            # Sort by time to ensure chronological order
-                            batch_combined = batch_combined.sortby('time')
-                            
-                            # Load into memory to free file handles
-                            batch_combined = batch_combined.load()
-                            datasets.append(batch_combined)
-                            
-                            # Close individual datasets
-                            for ds in batch_datasets:
-                                ds.close()
+                        # Standardize time coordinate name
+                        time_coord = None
+                        for coord in ['time', 'valid_time', 'datetime']:
+                            if coord in ds.dims:
+                                time_coord = coord
+                                break
                         
-                    except Exception as e:
-                        self.logger.error(f"Error processing batch {batch_num}: {str(e)}")
-                        continue
+                        if time_coord and time_coord != 'time':
+                            ds = ds.rename({time_coord: 'time'})
+                        
+                        # ✅ ONLY CLIP - DON'T AGGREGATE YET
+                        if clip_bounds is not None and 'latitude' in ds.coords:
+                            lat_coords = ds.latitude.values
+                            lat_increasing = lat_coords[0] < lat_coords[-1]
+                            
+                            if lat_increasing:
+                                lat_slice = slice(clip_bounds['lat_min'], clip_bounds['lat_max'])
+                            else:
+                                lat_slice = slice(clip_bounds['lat_max'], clip_bounds['lat_min'])
+                            
+                            lon_slice = slice(clip_bounds['lon_min'], clip_bounds['lon_max'])
+                            ds = ds.sel(latitude=lat_slice, longitude=lon_slice)
+                        
+                        batch_datasets.append(ds)
+                    
+                    # Concatenate batch
+                    if batch_datasets:
+                        batch_combined = xr.concat(batch_datasets, dim='time', combine_attrs='drop_conflicts')
+                        batch_combined = batch_combined.sortby('time')
+                        batch_combined = batch_combined.load()
+                        datasets.append(batch_combined)
+                        
+                        for ds in batch_datasets:
+                            ds.close()
                 
                 if not datasets:
                     self.logger.error(f"No datasets could be processed for {variable_type}")
@@ -550,21 +529,20 @@ class ERA5LandAnalyzer:
                 # Combine all batches
                 self.logger.info(f"Combining {len(datasets)} batches...")
                 ds = xr.concat(datasets, dim='time', combine_attrs='drop_conflicts')
+                ds = ds.sortby('time')
                 
-                # Close batch datasets to free memory
                 for batch_ds in datasets:
                     batch_ds.close()
                     
             else:
-                # ✅ SIMPLIFIED: Direct approach for smaller file counts with proper time handling
+                # Smaller file counts
                 self.logger.info(f"Processing {len(valid_files)} files directly")
                 
-                # Open all files and standardize time coordinates
                 datasets = []
                 for file_path in valid_files:
                     ds = xr.open_dataset(file_path, engine='netcdf4')
                     
-                    # Standardize time coordinate name
+                    # Standardize time
                     time_coord = None
                     for coord in ['time', 'valid_time', 'datetime']:
                         if coord in ds.dims:
@@ -574,47 +552,33 @@ class ERA5LandAnalyzer:
                     if time_coord and time_coord != 'time':
                         ds = ds.rename({time_coord: 'time'})
                     
-                    # Ensure time is properly decoded
-                    if 'time' in ds.coords:
-                        if not pd.api.types.is_datetime64_any_dtype(ds.time):
-                            try:
-                                ds = xr.decode_cf(ds)
-                            except:
-                                self.logger.warning(f"Could not decode time for {file_path.name}")
+                    # ✅ ONLY CLIP - DON'T AGGREGATE YET
+                    if clip_bounds is not None and 'latitude' in ds.coords:
+                        lat_coords = ds.latitude.values
+                        lat_increasing = lat_coords[0] < lat_coords[-1]
+                        
+                        if lat_increasing:
+                            lat_slice = slice(clip_bounds['lat_min'], clip_bounds['lat_max'])
+                        else:
+                            lat_slice = slice(clip_bounds['lat_max'], clip_bounds['lat_min'])
+                        
+                        lon_slice = slice(clip_bounds['lon_min'], clip_bounds['lon_max'])
+                        ds = ds.sel(latitude=lat_slice, longitude=lon_slice)
                     
                     datasets.append(ds)
                 
-                # Concatenate all datasets
+                # Concatenate
                 ds = xr.concat(datasets, dim='time', combine_attrs='drop_conflicts')
                 
-                # Close individual datasets
                 for dataset in datasets:
                     dataset.close()
             
-            # ✅ FINAL TIME COORDINATE VERIFICATION AND CLEANUP
-            if 'time' not in ds.dims:
-                self.logger.error(f"No time coordinate found in combined {variable_type} dataset")
-                self.logger.debug(f"Available dimensions: {list(ds.dims)}")
-                self.logger.debug(f"Available coordinates: {list(ds.coords)}")
-                return None
-            
-            # Ensure time is properly sorted
+            # Final sort
             ds = ds.sortby('time')
-            
-            # Verify we have a proper datetime index
-            if not pd.api.types.is_datetime64_any_dtype(ds.time):
-                self.logger.error(f"Time coordinate is not datetime type: {ds.time.dtype}")
-                # Try one more time to decode
-                try:
-                    ds = xr.decode_cf(ds)
-                    self.logger.debug("Successfully decoded time coordinate")
-                except Exception as e:
-                    self.logger.error(f"Failed to decode time coordinate: {e}")
-                    return None
             
             self.logger.info(f"Combined {variable_type} dataset shape: {dict(ds.dims)}")
             self.logger.info(f"Time range: {ds.time.min().values} to {ds.time.max().values}")
-            self.logger.info(f"Time coordinate type: {ds.time.dtype}")
+            self.logger.info(f"✅ Combined dataset is still HOURLY - will aggregate to daily next")
             
             return ds
             
@@ -623,7 +587,7 @@ class ERA5LandAnalyzer:
             import traceback
             self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             return None
-            
+
     
     #---------------------------------------------------------------------------------
 
@@ -1370,15 +1334,8 @@ class ERA5LandAnalyzer:
 
     def _find_and_process_monthly_files(self) -> List[Path]:
         """
-        Main method to find monthly files, combine them, filter time range, and aggregate to daily
-        INCLUDING geopotential processing for elevation data
-        MODIFIED: Skip processing for files that already exist (unless force_reprocess=True)
-        ✅ MODIFIED: Adds warm-up period after processing main files
-        
-        Returns
-        -------
-        List[Path]
-            List of processed daily files
+        Main processing pipeline - RESTORED old method with clipping added
+        ✅ Clips during combination, aggregates AFTER combination
         """
         self.logger.info("Starting monthly file processing pipeline...")
         
@@ -1402,21 +1359,18 @@ class ERA5LandAnalyzer:
             else:
                 missing_files.append(var_type)
         
-        # ✅ FIX: If all files exist and not force_reprocess, return immediately
         if len(missing_files) == 0 and not self.force_reprocess:
             self.logger.info("✅ All required files already exist - skipping monthly file processing")
             return list(existing_files.values())
         
-        # ✅ NEW: Only find monthly files for the variables we actually need
+        # Find monthly files
         if missing_files or self.force_reprocess:
             self.logger.info(f"📂 Need to process: {missing_files if missing_files else 'all files (force_reprocess=True)'}")
             
-            # Determine which file types to search for
             need_temperature = any('temperature' in mf for mf in missing_files) or self.force_reprocess
             need_precipitation = 'precipitation' in missing_files or self.force_reprocess
             need_pet = 'potential_evaporation' in missing_files or self.force_reprocess
             
-            # Step 1: Find monthly files (ONLY for what we need!)
             monthly_files = self._find_monthly_files(
                 need_temperature=need_temperature,
                 need_precipitation=need_precipitation, 
@@ -1425,12 +1379,30 @@ class ERA5LandAnalyzer:
             
             if not any(monthly_files.values()):
                 self.logger.error("No monthly files found!")
-                return list(existing_files.values())  # Return existing files if any
+                return list(existing_files.values())
         else:
-            # No need to find monthly files
             monthly_files = {'temperature': [], 'precipitation': [], 'potential_evaporation': [], 'geopotential': []}
 
-        # 🏔️ Step 2: Process geopotential to elevation FIRST (if it doesn't exist)
+        # Calculate clip bounds
+        clip_bounds = None
+        
+        if self.catchment_extent is not None:
+            bounds = self.catchment_extent.total_bounds
+            buffer_deg = 0.1
+            
+            clip_bounds = {
+                'lon_min': bounds[0] - buffer_deg,
+                'lon_max': bounds[2] + buffer_deg,
+                'lat_min': bounds[1] - buffer_deg,
+                'lat_max': bounds[3] + buffer_deg
+            }
+            
+            self.logger.info(f"✂️ Will clip to bounds: lon [{clip_bounds['lon_min']:.2f}, {clip_bounds['lon_max']:.2f}], "
+                            f"lat [{clip_bounds['lat_min']:.2f}, {clip_bounds['lat_max']:.2f}]")
+        else:
+            self.logger.info("⚠️ No catchment extent - processing full dataset")
+
+        # Process geopotential to elevation
         elevation_file = self.output_path / 'era5_land_elevation.nc'
         
         if not elevation_file.exists() or self.force_reprocess:
@@ -1446,7 +1418,7 @@ class ERA5LandAnalyzer:
         
         all_daily_files = list(existing_files.values())
         
-        # Step 3: Process temperature files (skip if all temp files exist)
+        # ===== TEMPERATURE =====
         temp_files_exist = all(
             var_type in existing_files 
             for var_type in ['temperature_mean', 'temperature_min', 'temperature_max']
@@ -1455,72 +1427,81 @@ class ERA5LandAnalyzer:
         if monthly_files['temperature'] and not temp_files_exist:
             self.logger.info("Processing temperature files...")
             
-            # Combine monthly files
-            temp_combined = self._combine_monthly_files(monthly_files['temperature'], 'temperature')
+            # 1. Combine (with clipping)
+            temp_combined = self._combine_monthly_files_with_clipping(
+                monthly_files['temperature'], 
+                'temperature',
+                clip_bounds
+            )
             
             if temp_combined is not None:
-                # Filter to exact time range
+                # 2. Filter time range
                 temp_filtered = self._filter_time_range_exact(temp_combined)
                 
-                # Aggregate to daily
+                # 3. Aggregate to daily (OLD METHOD)
                 temp_daily = self._aggregate_to_daily(temp_filtered, 'temperature')
                 
-                # Save daily files (elevation will be added automatically if available)
+                # 4. Save
                 if temp_daily:
                     temp_files = self._save_daily_files(temp_daily)
                     all_daily_files.extend(temp_files)
                 
-                # Close datasets
                 temp_combined.close()
                 temp_filtered.close()
         elif temp_files_exist:
             self.logger.info("⏭️ Skipping temperature processing - files already exist")
         
-        # Step 4: Process precipitation files (skip if exists)
+        # ===== PRECIPITATION =====
         if monthly_files['precipitation'] and 'precipitation' not in existing_files:
             self.logger.info("Processing precipitation files...")
             
-            # Combine monthly files
-            precip_combined = self._combine_monthly_files(monthly_files['precipitation'], 'precipitation')
+            # 1. Combine (with clipping)
+            precip_combined = self._combine_monthly_files_with_clipping(
+                monthly_files['precipitation'], 
+                'precipitation',
+                clip_bounds
+            )
             
             if precip_combined is not None:
-                # Filter to exact time range
+                # 2. Filter time range
                 precip_filtered = self._filter_time_range_exact(precip_combined)
                 
-                # Aggregate to daily
+                # 3. Aggregate to daily (OLD METHOD)
                 precip_daily = self._aggregate_to_daily(precip_filtered, 'precipitation')
                 
-                # Save daily files (elevation will be added automatically if available)
+                # 4. Save
                 if precip_daily:
                     precip_files = self._save_daily_files(precip_daily)
                     all_daily_files.extend(precip_files)
                 
-                # Close datasets
                 precip_combined.close()
                 precip_filtered.close()
         elif 'precipitation' in existing_files:
             self.logger.info("⏭️ Skipping precipitation processing - file already exists")
         
-        # Step 5: Process PET files (skip if exists)
+        # ===== PET =====
         if monthly_files['potential_evaporation'] and 'potential_evaporation' not in existing_files:
             self.logger.info("Processing potential evaporation files...")
             
-            # Combine monthly files
-            pet_combined = self._combine_monthly_files(monthly_files['potential_evaporation'], 'potential_evaporation')
+            # 1. Combine (with clipping)
+            pet_combined = self._combine_monthly_files_with_clipping(
+                monthly_files['potential_evaporation'], 
+                'potential_evaporation',
+                clip_bounds
+            )
             
             if pet_combined is not None:
-                # Filter to exact time range
+                # 2. Filter time range
                 pet_filtered = self._filter_time_range_exact(pet_combined)
                 
-                # Aggregate to daily
+                # 3. Aggregate to daily (OLD METHOD)
                 pet_daily = self._aggregate_to_daily(pet_filtered, 'potential_evaporation')
                 
-                # Save daily files (elevation will be added automatically if available)
+                # 4. Save
                 if pet_daily:
                     pet_files = self._save_daily_files(pet_daily)
                     all_daily_files.extend(pet_files)
                 
-                # Close datasets
                 pet_combined.close()
                 pet_filtered.close()
         elif 'potential_evaporation' in existing_files:
@@ -1528,16 +1509,15 @@ class ERA5LandAnalyzer:
         
         self.logger.info(f"Processing pipeline complete! Total files available: {len(all_daily_files)}")
         
-        # Show which files we have
         for file_path in all_daily_files:
             self.logger.info(f"  - {file_path.name}")
         
-        # ✅ NEW: Add warm-up period to each file if configured
+        # Add warm-up period
         if hasattr(self, 'warmup_date') and self.warmup_date is not None:
             self.logger.info("\n🔄 Adding warm-up period to meteorological files...")
             all_daily_files = self._add_warmup_to_files(all_daily_files)
         
-        # ✅ NEW: Copy files to model-specific directory for backward compatibility
+        # Copy to model directory
         self._copy_to_model_directory(all_daily_files)
         
         return all_daily_files
@@ -2745,6 +2725,2282 @@ class ERA5LandAnalyzer:
 
 
 #--------------------------------------------------------------------------------
+############################### HARAnalyzer Class ###############################
+#--------------------------------------------------------------------------------
+
+class HARAnalyzer:
+    """
+    A class for analyzing and processing HAR (High Asia Refined) meteorological data
+    
+    HAR v2 characteristics:
+    - 10km resolution (d10km domain)
+    - Lambert Conformal Conic projection
+    - Daily data in yearly files
+    - Variables: t2 (temperature), prcp (precipitation), potevap (potential evaporation)
+    """
+    
+    def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
+        """
+        Initialize the HAR data analyzer
+        
+        Parameters
+        ----------
+        namelist_path : str or Path
+            Path to the namelist YAML configuration file
+        force_reprocess : bool, optional
+            If True, reprocess files even if they already exist (default: False)
+        """
+        # Store the force_reprocess flag
+        self.force_reprocess = force_reprocess
+        
+        # Load configuration from namelist directly
+        namelist_path = Path(namelist_path)
+        
+        if not namelist_path.exists():
+            raise FileNotFoundError(f"Namelist file not found: {namelist_path}")
+        
+        with open(namelist_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        # Store configuration parameters
+        self.main_dir = Path(self.config.get('main_dir'))
+        self.gauge_id = self.config.get('gauge_id')
+        self.basin_id = self.config.get('basin_id', self.gauge_id)
+        self.start_date = pd.to_datetime(self.config.get('start_date'))
+        self.end_date = pd.to_datetime(self.config.get('end_date'))
+        self.model_type = self.config.get('model_type')
+        self.debug = self.config.get('debug', False)
+        self.coupled = self.config.get('coupled', False)
+        self.model_dir = self.main_dir / self.config.get('config_dir')
+        
+        # ✅ HAR-specific: Get HAR data directory
+        har_dir_template = self.config.get('meteo_har_dir', '01_data/meteo/HAR')
+        self.har_data_dir = Path(har_dir_template)
+        
+        # Make absolute path if needed
+        if not self.har_data_dir.is_absolute():
+            self.har_data_dir = self.main_dir / self.har_data_dir
+        
+        # ✅ Define SHARED catchment-level directories (primary storage)
+        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        self.shared_plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'plots'
+        
+        # ✅ Define MODEL-SPECIFIC directories (for backward compatibility)
+        self.model_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
+        
+        # ✅ Use shared directories as primary output locations
+        self.output_path = self.shared_data_dir
+        self.plots_dir = self.shared_plots_dir
+        
+        # Create plots directories
+        self.spatial_plots_dir = self.plots_dir / 'spatial_overview'
+        self.timeseries_plots_dir = self.plots_dir / 'time_series'
+        
+        # Create all directories
+        self.spatial_plots_dir.mkdir(parents=True, exist_ok=True)
+        self.timeseries_plots_dir.mkdir(parents=True, exist_ok=True)
+        self.output_path.mkdir(parents=True, exist_ok=True)
+        self.model_data_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Keep the old attribute name for backward compatibility
+        self.processed_data_dir = self.output_path
+        
+        # HAR variable information
+        self.har_variables = {
+            't2_mean': {
+                'name': '2m Temperature (Mean)',
+                'units': '°C',
+                'cmap': 'RdYlBu_r',
+                'source_units': 'K',
+                'file_pattern': 'HARv2_d10km_d_2d_t2_mean_{year}.nc'
+            },
+            't2_min': {
+                'name': '2m Temperature (Min)',
+                'units': '°C',
+                'cmap': 'RdYlBu_r',
+                'source_units': 'K',
+                'file_pattern': 'HARv2_d10km_d_2d_t2_min_{year}.nc'
+            },
+            't2_max': {
+                'name': '2m Temperature (Max)',
+                'units': '°C',
+                'cmap': 'RdYlBu_r',
+                'source_units': 'K',
+                'file_pattern': 'HARv2_d10km_d_2d_t2_max_{year}.nc'
+            },
+            'prcp': {
+                'name': 'Total Precipitation',
+                'units': 'mm/day',
+                'cmap': 'Blues',
+                'source_units': 'mm h-1',
+                'file_pattern': 'HARv2_d10km_d_2d_prcp_{year}.nc'
+            },
+            'potevap': {
+                'name': 'Potential Evapotranspiration',
+                'units': 'mm/day',
+                'cmap': 'Oranges',
+                'source_units': 'mm h-1',
+                'file_pattern': 'HARv2_d10km_d_2d_potevap_{year}.nc'
+            },
+            'hgt': {
+                'name': 'Terrain Height',
+                'units': 'm',
+                'cmap': 'terrain',
+                'source_units': 'm',
+                'file_pattern': 'HARv2_d10km_static_hgt.nc'
+            }
+        }
+        
+        # ✅ Setup logger FIRST
+        self.logger = self._setup_logger()
+        
+        # ✅ Load warm-up date AFTER logger is created
+        if 'warm_up_date' in self.config:
+            self.warmup_date = pd.to_datetime(self.config.get('warm_up_date'))
+            self.logger.info(f"Warm-up period configured: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
+        else:
+            self.warmup_date = None
+            self.logger.debug("No warm-up period configured")
+        
+        # ✅ Load catchment shapefile for clipping
+        self.catchment_extent = self._load_catchment_shapefile()
+        
+        # Log the output directory
+        self.logger.info(f"Processing HAR data for gauge {self.gauge_id}")
+        self.logger.info(f"Model type: {self.model_type}")
+        self.logger.info(f"HAR data directory: {self.har_data_dir}")
+        self.logger.info(f"Plots will be saved to: {self.plots_dir}")
+        self.logger.info(f"Processed meteo files will be saved to: {self.output_path}")
+        
+        # Check for existing files before processing
+        existing_files = self._check_existing_files()
+        existing_count = sum(existing_files.values())
+        total_expected = len(existing_files)
+        
+        if existing_count == total_expected and not force_reprocess:
+            self.logger.info(f"🎉 All {total_expected} processed HAR files already exist!")
+            self.logger.info("⏭️ Skipping processing. Set force_reprocess=True to reprocess anyway.")
+            
+            # Build list of existing files
+            expected_files = {
+                'temperature_mean': 'har_temp_mean.nc',
+                'temperature_min': 'har_temp_min.nc',
+                'temperature_max': 'har_temp_max.nc',
+                'precipitation': 'har_precip.nc',
+                'potential_evaporation': 'har_pet.nc'
+            }
+            
+            self.processed_files = []
+            for file_type, exists in existing_files.items():
+                if exists:
+                    self.processed_files.append(self.output_path / expected_files[file_type])
+            
+            # Copy existing files to model-specific directory
+            self.logger.info("📋 Copying existing files to model-specific directory...")
+            self._copy_to_model_directory(self.processed_files)
+                    
+        elif existing_count > 0 and not force_reprocess:
+            self.logger.info(f"📂 Found {existing_count}/{total_expected} existing files")
+            self.logger.info("🔄 Will only process missing files. Set force_reprocess=True to reprocess all.")
+            self.processed_files = self._find_and_process_yearly_files()
+        else:
+            if force_reprocess and existing_count > 0:
+                self.logger.info(f"🔄 Reprocessing all files (force_reprocess=True)")
+            
+            # Find and process yearly files
+            self.processed_files = self._find_and_process_yearly_files()
+        
+        self.logger.info(f"Available files: {len(self.processed_files)} daily files for gauge {self.gauge_id}")
+
+        # Automatically run analysis and create plots
+        if self.processed_files:
+            self.logger.info("Starting automatic analysis and plotting...")
+            self.analyze_all_files()
+            # ✅ NEW: Create comprehensive missing values report
+            missing_report = self.create_missing_values_report()
+        else:
+            self.logger.warning("No files processed - skipping analysis")
+
+    #---------------------------------------------------------------------------------
+
+    def _load_catchment_shapefile(self) -> Optional[gpd.GeoDataFrame]:
+        """
+        Load the catchment shapefile for the gauge_id for clipping HAR data
+        
+        Returns
+        -------
+        Optional[gpd.GeoDataFrame]
+            Catchment shapefile in WGS84 (EPSG:4326) or None if not found
+        """
+        self.logger.debug(f"Loading catchment shapefile for gauge ID: {self.gauge_id}")
+        
+        try:
+            # Get shapefile path from config
+            shape_dir_template = self.config.get('shape_dir', '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp')
+            shape_path = Path(shape_dir_template.format(gauge_id=self.gauge_id))
+            
+            # Make absolute path if needed
+            if not shape_path.is_absolute():
+                shape_path = self.main_dir / shape_path
+            
+            self.logger.debug(f"Looking for catchment shapefile at: {shape_path}")
+            
+            if not shape_path.exists():
+                self.logger.warning(f"Catchment shapefile not found: {shape_path}")
+                self.logger.warning("⚠️ Processing will continue without catchment clipping")
+                return None
+            
+            # Read the catchment shapefile
+            extent = gpd.read_file(shape_path)
+            
+            self.logger.info(f"✅ Loaded catchment shapefile with {len(extent)} features")
+            self.logger.info(f"   Original CRS: {extent.crs}")
+            
+            # Reproject to WGS84 (EPSG:4326) to match HAR lat/lon
+            if extent.crs != 'EPSG:4326':
+                extent = extent.to_crs('EPSG:4326')
+                self.logger.info("   Reprojected to WGS84 (EPSG:4326)")
+            
+            # Get catchment bounds for logging
+            bounds = extent.total_bounds
+            self.logger.info(f"   Catchment bounds: lon [{bounds[0]:.4f}, {bounds[2]:.4f}], lat [{bounds[1]:.4f}, {bounds[3]:.4f}]")
+            
+            return extent
+            
+        except Exception as e:
+            self.logger.error(f"Error loading catchment shapefile: {e}")
+            self.logger.warning("⚠️ Processing will continue without catchment clipping")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return None
+
+    #---------------------------------------------------------------------------------
+
+    def _setup_logger(self) -> logging.Logger:
+        """Set up and configure logger based on debug flag"""
+        level = logging.DEBUG if self.debug else logging.INFO
+        
+        logging.basicConfig(
+            level=level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            force=True
+        )
+        
+        # Suppress matplotlib logging
+        matplotlib_logger = logging.getLogger('matplotlib')
+        matplotlib_logger.setLevel(logging.WARNING)
+        
+        # Also suppress other common noisy loggers
+        logging.getLogger('PIL').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib.colorbar').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib.pyplot').setLevel(logging.WARNING)
+        
+        return logging.getLogger(f'HARAnalyzer_Gauge_{self.gauge_id}')
+
+    #---------------------------------------------------------------------------------
+
+    def _check_existing_files(self) -> Dict[str, bool]:
+        """
+        Check if HAR processed files already exist in the output directory
+        
+        Returns
+        -------
+        Dict[str, bool]
+            Dictionary indicating which file types already exist
+        """
+        existing_files = {
+            'temperature_mean': False,
+            'temperature_min': False,
+            'temperature_max': False,
+            'precipitation': False,
+            'potential_evaporation': False
+        }
+        
+        # Check for each expected output file
+        expected_files = {
+            'temperature_mean': 'har_temp_mean.nc',
+            'temperature_min': 'har_temp_min.nc',
+            'temperature_max': 'har_temp_max.nc',
+            'precipitation': 'har_precip.nc',
+            'potential_evaporation': 'har_pet.nc'
+        }
+        
+        for file_type, filename in expected_files.items():
+            file_path = self.output_path / filename
+            if file_path.exists():
+                existing_files[file_type] = True
+                self.logger.info(f"✅ Found existing file: {filename}")
+            else:
+                self.logger.debug(f"❌ Missing file: {filename}")
+        
+        return existing_files
+
+    #---------------------------------------------------------------------------------
+
+    def _find_yearly_files(self, variable: str) -> List[Path]:
+        """
+        Find all yearly HAR files for a specific variable within the date range
+        
+        Parameters
+        ----------
+        variable : str
+            Variable name ('t2_mean', 't2_min', 't2_max', 'prcp', 'potevap')
+            
+        Returns
+        -------
+        List[Path]
+            List of file paths found
+        """
+        if variable not in self.har_variables:
+            self.logger.error(f"Unknown variable: {variable}")
+            return []
+        
+        file_pattern = self.har_variables[variable]['file_pattern']
+        
+        # Determine years needed (including warm-up if configured)
+        if self.warmup_date is not None:
+            start_year = self.warmup_date.year
+        else:
+            start_year = self.start_date.year
+        end_year = self.end_date.year
+        
+        files = []
+        missing_years = []
+        
+        for year in range(start_year, end_year + 1):
+            filename = file_pattern.format(year=year)
+            filepath = self.har_data_dir / filename
+            
+            if filepath.exists() and filepath.stat().st_size > 0:
+                files.append(filepath)
+                self.logger.debug(f"Found {variable} file for {year}: {filename}")
+            else:
+                missing_years.append(year)
+                self.logger.warning(f"Missing {variable} file for {year}: {filename}")
+        
+        if missing_years:
+            self.logger.warning(f"Missing years for {variable}: {missing_years}")
+        
+        return sorted(files)
+
+    #---------------------------------------------------------------------------------
+
+    def _combine_yearly_files(self, file_list: List[Path], variable: str) -> Optional[xr.Dataset]:
+        """
+        Combine yearly HAR files into a single dataset
+        FIXED: Preserve 2D lat/lon coordinates (don't let them become 3D)
+        
+        Parameters
+        ----------
+        file_list : List[Path]
+            List of yearly NetCDF files
+        variable : str
+            Variable name
+            
+        Returns
+        -------
+        Optional[xr.Dataset]
+            Combined dataset or None if failed
+        """
+        if not file_list:
+            self.logger.warning(f"No files to combine for {variable}")
+            return None
+        
+        self.logger.info(f"Combining {len(file_list)} {variable} files...")
+        
+        # Get clipping bounds
+        sn_slice = None
+        we_slice = None
+        
+        if self.catchment_extent is not None:
+            bounds = self.catchment_extent.total_bounds
+            buffer_deg = 0.2
+            
+            clip_bounds = {
+                'lon_min': bounds[0] - buffer_deg,
+                'lon_max': bounds[2] + buffer_deg,
+                'lat_min': bounds[1] - buffer_deg,
+                'lat_max': bounds[3] + buffer_deg
+            }
+            
+            self.logger.info(f"✂️ Will clip to bounds: lon [{clip_bounds['lon_min']:.2f}, {clip_bounds['lon_max']:.2f}], "
+                        f"lat [{clip_bounds['lat_min']:.2f}, {clip_bounds['lat_max']:.2f}]")
+            
+            # Determine clipping indices
+            if self._clip_indices is not None:
+                sn_slice = self._clip_indices['sn_slice']
+                we_slice = self._clip_indices['we_slice']
+                self.logger.info(f"📦 Reusing stored clip indices: south_north={sn_slice}, west_east={we_slice}")
+            else:
+                self.logger.debug("Determining clip indices from first file...")
+                with xr.open_dataset(file_list[0]) as ds_first:
+                    if 'lat' in ds_first.coords and 'lon' in ds_first.coords:
+                        lat_2d = ds_first.coords['lat']
+                        lon_2d = ds_first.coords['lon']
+                        
+                        mask = (
+                            (lat_2d >= clip_bounds['lat_min']) & (lat_2d <= clip_bounds['lat_max']) &
+                            (lon_2d >= clip_bounds['lon_min']) & (lon_2d <= clip_bounds['lon_max'])
+                        )
+                        
+                        valid_south_north = mask.any(dim='west_east')
+                        valid_west_east = mask.any(dim='south_north')
+                        
+                        sn_indices = np.where(valid_south_north.values)[0]
+                        we_indices = np.where(valid_west_east.values)[0]
+                        
+                        if len(sn_indices) > 0 and len(we_indices) > 0:
+                            sn_slice = slice(sn_indices.min(), sn_indices.max() + 1)
+                            we_slice = slice(we_indices.min(), we_indices.max() + 1)
+                            
+                            self._clip_indices = {
+                                'sn_slice': sn_slice,
+                                'we_slice': we_slice,
+                                'sn_min': sn_indices.min(),
+                                'sn_max': sn_indices.max(),
+                                'we_min': we_indices.min(),
+                                'we_max': we_indices.max()
+                            }
+                            
+                            original_size = ds_first.south_north.size * ds_first.west_east.size
+                            clipped_size = (sn_indices.max() - sn_indices.min() + 1) * (we_indices.max() - we_indices.min() + 1)
+                            reduction = (1 - clipped_size / original_size) * 100
+                            
+                            self.logger.info(f"📉 Memory optimization: {original_size:,} → {clipped_size:,} cells/timestep ({reduction:.1f}% reduction)")
+                            self.logger.info(f"📦 Stored clip indices: south_north=[{sn_indices.min()}:{sn_indices.max()+1}], "
+                                        f"west_east=[{we_indices.min()}:{we_indices.max()+1}]")
+        
+        try:
+            datasets = []
+            
+            # ✅ KEY FIX: Extract 2D lat/lon from FIRST file BEFORE processing
+            reference_lat = None
+            reference_lon = None
+            
+            # Process files in batches
+            batch_size = 5
+            total_files = len(file_list)
+            
+            for batch_start in range(0, total_files, batch_size):
+                batch_end = min(batch_start + batch_size, total_files)
+                batch_files = file_list[batch_start:batch_end]
+                
+                self.logger.info(f"📦 Processing batch {batch_start//batch_size + 1}/{(total_files-1)//batch_size + 1}: "
+                            f"years {batch_start+1}-{batch_end} of {total_files}")
+                
+                batch_datasets = []
+                
+                for file_path in batch_files:
+                    self.logger.debug(f"Loading {file_path.name}...")
+                    
+                    ds = xr.open_dataset(file_path, chunks={'time': 30})
+                    
+                    # ✅ CRITICAL: Extract reference lat/lon from first file
+                    if reference_lat is None and reference_lon is None:
+                        if 'lat' in ds.coords and 'lon' in ds.coords:
+                            reference_lat = ds.coords['lat'].values
+                            reference_lon = ds.coords['lon'].values
+                            self.logger.debug(f"Extracted reference lat/lon: {reference_lat.shape}")
+                    
+                    # Clip IMMEDIATELY
+                    if sn_slice is not None and we_slice is not None:
+                        ds = ds.isel(south_north=sn_slice, west_east=we_slice)
+                    
+                    # ✅ CRITICAL: Drop lat/lon coordinates before concatenation
+                    # This prevents them from becoming time-dependent
+                    ds = ds.drop_vars(['lat', 'lon'], errors='ignore')
+                    
+                    batch_datasets.append(ds)
+                
+                # Combine this batch
+                if batch_datasets:
+                    batch_combined = xr.concat(batch_datasets, dim='time', combine_attrs='drop_conflicts')
+                    batch_combined = batch_combined.compute()
+                    
+                    for ds in batch_datasets:
+                        ds.close()
+                    
+                    datasets.append(batch_combined)
+                    self.logger.debug(f"  Batch combined: {len(batch_combined.time)} timesteps")
+            
+            if not datasets:
+                self.logger.error(f"No datasets loaded for {variable}")
+                return None
+            
+            # Final concatenation
+            self.logger.info("Combining all batches...")
+            combined = xr.concat(datasets, dim='time', combine_attrs='drop_conflicts')
+            combined = combined.sortby('time')
+            
+            for ds in datasets:
+                ds.close()
+            
+            # ✅ CRITICAL: Now add the 2D lat/lon coordinates AFTER concatenation
+            if reference_lat is not None and reference_lon is not None:
+                # Apply same clipping to reference coordinates
+                if sn_slice is not None and we_slice is not None:
+                    clipped_lat = reference_lat[sn_slice, we_slice]
+                    clipped_lon = reference_lon[sn_slice, we_slice]
+                else:
+                    clipped_lat = reference_lat
+                    clipped_lon = reference_lon
+                
+                # Add as 2D coordinates (NOT time-dependent!)
+                combined = combined.assign_coords({
+                    'lat': (['south_north', 'west_east'], clipped_lat),
+                    'lon': (['south_north', 'west_east'], clipped_lon)
+                })
+                
+                self.logger.debug(f"✅ Added 2D lat/lon coordinates: {clipped_lat.shape}")
+            
+            self.logger.info(f"✅ Combined {variable} dataset: {dict(combined.dims)}")
+            self.logger.info(f"   Time range: {combined.time.min().values} to {combined.time.max().values}")
+            self.logger.info(f"   Total timesteps: {len(combined.time)}")
+            
+            # Verify coordinate dimensions
+            if 'lat' in combined.coords:
+                self.logger.debug(f"   lat coordinate shape: {combined.coords['lat'].shape}, dims: {combined.coords['lat'].dims}")
+            if 'lon' in combined.coords:
+                self.logger.debug(f"   lon coordinate shape: {combined.coords['lon'].shape}, dims: {combined.coords['lon'].dims}")
+            
+            return combined
+            
+        except Exception as e:
+            self.logger.error(f"Error combining {variable} files: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return None
+
+    #---------------------------------------------------------------------------------
+
+    def _add_warmup_to_files(self, file_list: List[Path]) -> List[Path]:
+        """
+        Add warm-up period to processed HAR meteorological files by repeating the first year
+        ✅ FIXED: Properly handles elevation (keeps it 2D, time-invariant)
+        ✅ FIXED: Uses temporary file to avoid permission errors
+        ✅ FIXED: Ensures no duplicate timestamps at warm-up/simulation boundary
+        
+        Parameters
+        ----------
+        file_list : List[Path]
+            List of processed daily NetCDF files
+            
+        Returns
+        -------
+        List[Path]
+            List of files with warm-up period included
+        """
+        self.logger.info("Adding warm-up period to HAR meteorological files...")
+        
+        # Calculate how many years of warm-up we need
+        years_diff = (self.start_date - self.warmup_date).days / 365.25
+        n_repetitions = max(1, int(np.ceil(years_diff)))
+        
+        self.logger.info(f"📅 Warm-up configuration:")
+        self.logger.info(f"   Period: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
+        self.logger.info(f"   Repetitions: {n_repetitions} year(s)")
+        
+        updated_files = []
+        
+        for file_path in file_list:
+            # ✅ SKIP ELEVATION FILE - it has no time dimension
+            if 'elevation' in file_path.name.lower():
+                self.logger.info(f"⏭️  Skipping {file_path.name} (elevation is time-invariant)")
+                updated_files.append(file_path)
+                continue
+            
+            try:
+                self.logger.info(f"Processing {file_path.name}...")
+                
+                # Load the file
+                ds = xr.open_dataset(file_path)
+                
+                # ✅ CRITICAL: Extract and REMOVE elevation BEFORE any processing
+                has_elevation = 'elevation' in ds.data_vars
+                elevation_data = None
+                
+                if has_elevation:
+                    self.logger.debug("  Found elevation in dataset - extracting it")
+                    elevation_data = ds['elevation'].copy()
+                    
+                    # Verify it has no time dimension
+                    if 'time' in elevation_data.dims:
+                        self.logger.error("❌ ELEVATION HAS TIME DIMENSION IN SAVED FILE!")
+                        self.logger.error(f"   Elevation dims: {elevation_data.dims}")
+                        self.logger.error("   Selecting first timestep to fix...")
+                        elevation_data = elevation_data.isel(time=0)
+                    
+                    self.logger.debug(f"  Elevation shape: {elevation_data.shape}, dims: {elevation_data.dims}")
+                    
+                    # ✅ CRITICAL: Drop elevation from dataset BEFORE concatenation
+                    ds = ds.drop_vars('elevation')
+                    self.logger.debug("  ✅ Removed elevation from dataset before warm-up processing")
+                
+                # Get the main meteorological variable
+                data_vars = [v for v in ds.data_vars]
+                if not data_vars:
+                    self.logger.warning(f"No data variables in {file_path.name}, skipping")
+                    ds.close()
+                    updated_files.append(file_path)
+                    continue
+                
+                main_var = data_vars[0]
+                
+                # ✅ CHECK: Make sure the variable has a time dimension
+                if 'time' not in ds[main_var].dims:
+                    self.logger.warning(f"{main_var} has no time dimension, skipping warm-up")
+                    ds.close()
+                    updated_files.append(file_path)
+                    continue
+                
+                # ✅ FIX: Check for existing duplicates in the original data
+                original_times = pd.to_datetime(ds.time.values)
+                original_duplicates = original_times.duplicated()
+                if original_duplicates.any():
+                    self.logger.warning(f"⚠️ Original data has {original_duplicates.sum()} duplicate timestamps - removing them")
+                    ds = ds.isel(time=~original_duplicates)
+                
+                # Extract first year of simulation data (NOW without elevation)
+                first_year_end = self.start_date + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+                
+                # Make sure we don't go beyond the end date
+                if first_year_end > self.end_date:
+                    first_year_end = self.end_date
+                    self.logger.warning(f"First year extends beyond end_date for {file_path.name}")
+                
+                # Get first year of data (WITHOUT elevation)
+                first_year = ds.sel(time=slice(self.start_date, first_year_end))
+                
+                self.logger.debug(f"  First year: {first_year.time.min().values} to {first_year.time.max().values}")
+                self.logger.debug(f"  Days: {len(first_year.time)}")
+                
+                # Repeat the first year n times
+                repeated_datasets = []
+                current_time = pd.to_datetime(self.warmup_date)
+                
+                for i in range(n_repetitions):
+                    # Create a copy with adjusted time coordinates
+                    year_copy = first_year.copy(deep=True)
+                    
+                    # Calculate new time coordinates
+                    time_deltas = first_year.time - first_year.time.values[0]
+                    new_times = current_time + time_deltas
+                    
+                    # Update time coordinate
+                    year_copy['time'] = new_times
+                    repeated_datasets.append(year_copy)
+                    
+                    # Move to next year
+                    current_time = new_times.values[-1] + pd.Timedelta(days=1)
+                    
+                    self.logger.debug(f"  Repetition {i+1}: {new_times.values[0]} to {new_times.values[-1]}")
+                
+                # ✅ CONCATENATE ONLY METEOROLOGICAL DATA (no elevation in either dataset)
+                warmup_data = xr.concat(repeated_datasets, dim='time')
+                
+                # ✅ FIX: Trim warm-up to EXACTLY end one day before simulation start
+                # This ensures no overlap!
+                warmup_end = self.start_date - pd.Timedelta(days=1)
+                warmup_data = warmup_data.sel(time=slice(self.warmup_date, warmup_end))
+                
+                self.logger.info(f"  Warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values} ({len(warmup_data.time)} days)")
+                
+                # ✅ FIX: Verify no overlap before concatenation
+                warmup_last_time = pd.to_datetime(warmup_data.time.values[-1])
+                sim_first_time = pd.to_datetime(ds.time.values[0])
+                
+                self.logger.debug(f"  Last warm-up time: {warmup_last_time}")
+                self.logger.debug(f"  First simulation time: {sim_first_time}")
+                
+                if warmup_last_time >= sim_first_time:
+                    self.logger.warning(f"⚠️ Overlap detected! Trimming warm-up to avoid duplicate")
+                    # Remove the last timestamp from warm-up if it overlaps
+                    warmup_data = warmup_data.isel(time=slice(None, -1))
+                    self.logger.info(f"  Trimmed warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values}")
+                
+                # ✅ CONCATENATE (both datasets have NO elevation now)
+                combined = xr.concat([warmup_data, ds], dim='time')
+                
+                # ✅ FIX: Sort by time and remove any duplicates
+                combined = combined.sortby('time')
+                
+                # Check for duplicates after concatenation
+                combined_times = pd.to_datetime(combined.time.values)
+                duplicates = combined_times.duplicated()
+                if duplicates.any():
+                    self.logger.warning(f"⚠️ Found {duplicates.sum()} duplicate timestamps after concatenation - removing them")
+                    combined = combined.isel(time=~duplicates)
+                
+                self.logger.info(f"  Combined: {combined.time.min().values} to {combined.time.max().values} ({len(combined.time)} days)")
+                
+                # ✅ VERIFICATION: Check for consecutive time steps
+                time_diffs = np.diff(combined.time.values).astype('timedelta64[D]').astype(int)
+                non_consecutive = np.where(time_diffs != 1)[0]
+                if len(non_consecutive) > 0:
+                    self.logger.warning(f"⚠️ Found {len(non_consecutive)} non-consecutive time steps")
+                    for idx in non_consecutive[:5]:
+                        self.logger.warning(f"   Index {idx}: {combined.time.values[idx]} -> {combined.time.values[idx+1]} (gap: {time_diffs[idx]} days)")
+                else:
+                    self.logger.info(f"  ✅ All time steps are consecutive (1-day intervals)")
+                
+                # ✅ NOW: Add elevation AFTER concatenation (as time-invariant 2D array)
+                if has_elevation and elevation_data is not None:
+                    self.logger.debug("  Re-adding elevation (time-invariant)")
+                    
+                    # Verify elevation is 2D
+                    if len(elevation_data.dims) != 2:
+                        self.logger.error(f"❌ Elevation is not 2D: {elevation_data.dims}")
+                        raise ValueError(f"Elevation must be 2D, got {elevation_data.dims}")
+                    
+                    # Add elevation as a simple 2D variable (no time dimension)
+                    combined['elevation'] = elevation_data
+                    
+                    # ✅ VERIFICATION: Check elevation dimensions in combined dataset
+                    if 'time' in combined['elevation'].dims:
+                        self.logger.error("❌ ELEVATION GAINED TIME DIMENSION AFTER ADDING TO COMBINED!")
+                        self.logger.error(f"   Combined dims: {combined['elevation'].dims}")
+                        raise ValueError("Elevation must not have time dimension!")
+                    else:
+                        self.logger.debug(f"  ✅ Elevation correctly added: shape={combined['elevation'].shape}, dims={combined['elevation'].dims}")
+                
+                # Update metadata
+                combined.attrs.update({
+                    'warmup_included': 'true',
+                    'warmup_start': str(self.warmup_date.date()),
+                    'warmup_end': str(warmup_end.date()),
+                    'warmup_days': len(warmup_data.time),
+                    'simulation_start': str(self.start_date.date()),
+                    'simulation_end': str(self.end_date.date()),
+                    'simulation_days': len(ds.time),
+                    'warmup_method': 'repeat_first_year',
+                    'warmup_repetitions': n_repetitions,
+                    'total_days': len(combined.time),
+                    'elevation_included': 'true' if has_elevation else 'false'
+                })
+                
+                # ✅ CRITICAL FIX: Close datasets BEFORE saving to release file handles
+                self.logger.debug("Closing original datasets to release file handles...")
+                ds.close()
+                warmup_data.close()
+                
+                # ✅ FIX: Load combined data into memory to avoid file lock issues
+                combined = combined.load()
+                
+                # ✅ NEW: Save to temporary file first, then replace original
+                import shutil
+                
+                temp_file = file_path.parent / f".tmp_{file_path.name}"
+                
+                self.logger.debug(f"Saving to temporary file: {temp_file}...")
+                combined.to_netcdf(temp_file)
+                
+                # Close combined dataset
+                combined.close()
+                
+                # Replace original file with temporary file
+                self.logger.debug(f"Replacing original file...")
+                shutil.move(str(temp_file), str(file_path))
+                
+                self.logger.info(f"✅ Updated {file_path.name} with warm-up period")
+                
+                updated_files.append(file_path)
+                
+            except Exception as e:
+                self.logger.error(f"Error adding warm-up to {file_path.name}: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                updated_files.append(file_path)
+        
+        self.logger.info(f"✅ Warm-up period added to {len(updated_files)} files")
+        
+        # ✅ NEW: Copy updated files to model-specific directory
+        self._copy_to_model_directory(updated_files)
+        
+        return updated_files
+
+    #---------------------------------------------------------------------------------
+
+    def _filter_time_range(self, dataset: xr.Dataset) -> xr.Dataset:
+        """
+        Filter dataset to the exact time range specified in namelist
+        
+        Parameters
+        ----------
+        dataset : xr.Dataset
+            Input dataset
+            
+        Returns
+        -------
+        xr.Dataset
+            Filtered dataset
+        """
+        if 'time' not in dataset.dims:
+            self.logger.warning("No 'time' coordinate found in dataset")
+            return dataset
+        
+        try:
+            # Use warm-up date if available, otherwise start_date
+            if self.warmup_date is not None:
+                filter_start = self.warmup_date
+            else:
+                filter_start = self.start_date
+            
+            start_date_str = filter_start.strftime('%Y-%m-%d')
+            end_date_str = self.end_date.strftime('%Y-%m-%d')
+            
+            self.logger.debug(f"Filtering to period: {start_date_str} to {end_date_str}")
+            
+            # Filter to date range
+            filtered_ds = dataset.sel(time=slice(start_date_str, end_date_str))
+            
+            self.logger.info(f"Filtered time range: {filtered_ds.time.min().values} to {filtered_ds.time.max().values}")
+            self.logger.info(f"Total days: {len(filtered_ds.time)}")
+            
+            return filtered_ds
+            
+        except Exception as e:
+            self.logger.error(f"Error filtering time range: {e}")
+            self.logger.warning("Returning unfiltered dataset")
+            return dataset
+
+    #---------------------------------------------------------------------------------
+
+    def _convert_units(self, dataset: xr.Dataset, variable: str) -> xr.Dataset:
+        """
+        Convert HAR units to standard units
+        
+        Parameters
+        ----------
+        dataset : xr.Dataset
+            Input dataset
+        variable : str
+            Variable name
+            
+        Returns
+        -------
+        xr.Dataset
+            Dataset with converted units
+        """
+        ds = dataset.copy()
+        var_info = self.har_variables.get(variable)
+        
+        if var_info is None:
+            return ds
+        
+        # Find the data variable
+        data_var = None
+        for v in ds.data_vars:
+            if v.lower() == variable.lower() or variable in v.lower():
+                data_var = v
+                break
+        
+        if data_var is None:
+            self.logger.warning(f"Could not find variable {variable} in dataset")
+            return ds
+        
+        source_units = var_info.get('source_units', '')
+        target_units = var_info.get('units', '')
+        
+        # Temperature: Kelvin to Celsius
+        if 't2' in variable and source_units == 'K':
+            self.logger.debug(f"Converting {variable} from Kelvin to Celsius")
+            ds[data_var] = ds[data_var] - 273.15
+            ds[data_var].attrs['units'] = 'degC'
+        
+        # Precipitation/PET: mm/h to mm/day
+        # HAR daily files already contain daily totals, so we just need to ensure units are correct
+        elif source_units == 'mm h-1':
+            # Check if values look like hourly rates or daily totals
+            sample_mean = float(ds[data_var].mean())
+            
+            if 'prcp' in variable:
+                # Daily precipitation should be ~0-50 mm/day typically
+                # If values are small (< 1), they might be hourly rates
+                if sample_mean < 1:
+                    self.logger.debug(f"Converting {variable} from mm/h to mm/day (×24)")
+                    ds[data_var] = ds[data_var] * 24.0
+                else:
+                    self.logger.debug(f"{variable} appears to already be in mm/day")
+                ds[data_var].attrs['units'] = 'mm/day'
+                
+            elif 'potevap' in variable:
+                # Daily PET should be ~0-10 mm/day typically
+                if sample_mean < 0.5:
+                    self.logger.debug(f"Converting {variable} from mm/h to mm/day (×24)")
+                    ds[data_var] = ds[data_var] * 24.0
+                    
+                    # HAR PET can be negative (upward flux convention) - convert to positive
+                    if float(ds[data_var].mean()) < 0:
+                        self.logger.debug("Converting negative PET to positive values")
+                        ds[data_var] = -ds[data_var]
+                else:
+                    self.logger.debug(f"{variable} appears to already be in mm/day")
+                    
+                ds[data_var].attrs['units'] = 'mm/day'
+        
+        return ds
+
+    #---------------------------------------------------------------------------------
+
+    def _clip_to_catchment(self, dataset: xr.Dataset) -> xr.Dataset:
+        """
+        Clip HAR dataset to catchment extent using lat/lon coordinates
+        
+        HAR data has curvilinear grid (2D lat/lon arrays), so we clip by masking
+        
+        Parameters
+        ----------
+        dataset : xr.Dataset
+            HAR dataset to clip
+            
+        Returns
+        -------
+        xr.Dataset
+            Clipped dataset
+        """
+        if self.catchment_extent is None:
+            self.logger.debug("No catchment extent available - skipping clipping")
+            return dataset
+        
+        try:
+            self.logger.info("✂️ Clipping HAR dataset to catchment extent...")
+            
+            # Get catchment bounds with buffer
+            bounds = self.catchment_extent.total_bounds  # [minx, miny, maxx, maxy]
+            buffer_deg = 0.2  # ~20km buffer for HAR 10km grid
+            
+            lon_min = bounds[0] - buffer_deg
+            lon_max = bounds[2] + buffer_deg
+            lat_min = bounds[1] - buffer_deg
+            lat_max = bounds[3] + buffer_deg
+            
+            self.logger.debug(f"Clip bounds (with buffer): lon [{lon_min:.4f}, {lon_max:.4f}], lat [{lat_min:.4f}, {lat_max:.4f}]")
+            
+            # HAR has 2D lat/lon coordinates
+            if 'lat' in dataset.coords and 'lon' in dataset.coords:
+                lat_2d = dataset.coords['lat']
+                lon_2d = dataset.coords['lon']
+                
+                # Create mask based on lat/lon bounds
+                mask = (
+                    (lat_2d >= lat_min) & (lat_2d <= lat_max) &
+                    (lon_2d >= lon_min) & (lon_2d <= lon_max)
+                )
+                
+                # Find indices where mask is True
+                valid_south_north = mask.any(dim='west_east')
+                valid_west_east = mask.any(dim='south_north')
+                
+                # Get index ranges
+                sn_indices = np.where(valid_south_north.values)[0]
+                we_indices = np.where(valid_west_east.values)[0]
+                
+                if len(sn_indices) == 0 or len(we_indices) == 0:
+                    self.logger.error("❌ No valid indices after clipping - returning unclipped")
+                    return dataset
+                
+                sn_min, sn_max = sn_indices.min(), sn_indices.max() + 1
+                we_min, we_max = we_indices.min(), we_indices.max() + 1
+                
+                self.logger.debug(f"Clipping indices: south_north [{sn_min}:{sn_max}], west_east [{we_min}:{we_max}]")
+                
+                # Clip the dataset
+                clipped = dataset.isel(
+                    south_north=slice(sn_min, sn_max),
+                    west_east=slice(we_min, we_max)
+                )
+                
+                # Calculate reduction
+                original_size = dataset.south_north.size * dataset.west_east.size
+                clipped_size = clipped.south_north.size * clipped.west_east.size
+                reduction = (1 - clipped_size / original_size) * 100
+                
+                self.logger.info(f"✅ Dataset clipped: {original_size} → {clipped_size} grid cells ({reduction:.1f}% reduction)")
+                
+                return clipped
+            else:
+                self.logger.warning("Could not find lat/lon coordinates for clipping")
+                return dataset
+            
+        except Exception as e:
+            self.logger.error(f"Error clipping dataset: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return dataset
+
+    #---------------------------------------------------------------------------------
+
+
+    def _save_processed_file(self, dataset: xr.Dataset, variable: str, 
+                            output_name: str) -> Optional[Path]:
+        """
+        Save processed HAR dataset to NetCDF file (WITHOUT elevation - added later)
+        """
+        try:
+            output_file = self.output_path / output_name
+            
+            # Set encoding
+            encoding = {}
+            for var in dataset.data_vars:
+                encoding[var] = {'zlib': True, 'complevel': 4}
+            for coord in ['lat', 'lon']:
+                if coord in dataset.coords:
+                    encoding[coord] = {'dtype': 'float64'}
+            
+            # Add metadata
+            dataset.attrs.update({
+                'title': f'HAR v2 {variable} daily data',
+                'source': 'High Asia Refined Analysis v2 (HAR v2)',
+                'gauge_id': str(self.gauge_id),
+                'processed_by': 'HARAnalyzer',
+                'creation_date': pd.Timestamp.now().isoformat(),
+                'projection': 'Lambert Conformal Conic',
+                'resolution': '10km',
+                'elevation_included': 'false'  # Will be updated when elevation is added
+            })
+            
+            dataset.to_netcdf(output_file, encoding=encoding)
+            
+            self.logger.info(f"💾 Saved: {output_name}")
+            
+            return output_file
+            
+        except Exception as e:
+            self.logger.error(f"Error saving {output_name}: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return None
+        
+    #---------------------------------------------------------------------------------
+
+    def _add_elevation_to_all_files_simple(self, file_list: List[Path]) -> None:
+        """
+        Add elevation to all HAR files by clipping elevation to match EACH file's exact grid.
+        This works because we clip elevation individually for each file, ensuring perfect alignment.
+        """
+        self.logger.info("🏔️ Adding elevation to all processed files...")
+        
+        # Load full elevation data
+        hgt_file = self.har_data_dir / 'HARv2_d10km_static_hgt.nc'
+        
+        if not hgt_file.exists():
+            self.logger.warning(f"⚠️ HAR terrain height file not found: {hgt_file}")
+            self.logger.warning("   Files will be saved without elevation data")
+            return
+        
+        try:
+            ds_hgt = xr.open_dataset(hgt_file)
+            
+            # Find elevation variable
+            hgt_var = None
+            for var in ['hgt', 'HGT', 'terrain', 'elevation', 'z']:
+                if var in ds_hgt.data_vars:
+                    hgt_var = var
+                    break
+            
+            if hgt_var is None:
+                self.logger.warning(f"⚠️ Could not find elevation variable in {hgt_file}")
+                ds_hgt.close()
+                return
+            
+            # Get full elevation data (keep it open for now)
+            full_elevation = ds_hgt[hgt_var]
+            self.logger.info(f"   Full elevation shape: {full_elevation.shape}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error loading elevation file: {e}")
+            return
+        
+        # Process each file individually
+        for file_path in file_list:
+            if 'elevation' in file_path.name.lower():
+                self.logger.debug(f"   Skipping elevation file: {file_path.name}")
+                continue
+            
+            try:
+                self.logger.info(f"   Processing: {file_path.name}")
+                
+                # Open the meteorological file
+                ds_meteo = xr.open_dataset(file_path)
+                
+                # Check if elevation already exists
+                if 'elevation' in ds_meteo.data_vars:
+                    self.logger.debug(f"   ✅ Elevation already exists in {file_path.name}")
+                    ds_meteo.close()
+                    continue
+                
+                # Get the grid dimensions from this file
+                if 'south_north' in ds_meteo.dims and 'west_east' in ds_meteo.dims:
+                    sn_size = ds_meteo.dims['south_north']
+                    we_size = ds_meteo.dims['west_east']
+                else:
+                    # Try alternative dimension names
+                    sn_dim = None
+                    we_dim = None
+                    for dim in ds_meteo.dims:
+                        if 'south' in dim.lower() or 'y' in dim.lower() or 'lat' in dim.lower():
+                            sn_dim = dim
+                        elif 'west' in dim.lower() or 'x' in dim.lower() or 'lon' in dim.lower():
+                            we_dim = dim
+                    
+                    if sn_dim and we_dim:
+                        sn_size = ds_meteo.dims[sn_dim]
+                        we_size = ds_meteo.dims[we_dim]
+                    else:
+                        self.logger.warning(f"   ⚠️ Could not determine grid dimensions for {file_path.name}")
+                        ds_meteo.close()
+                        continue
+                
+                self.logger.debug(f"   Meteo grid: {sn_size} x {we_size}")
+                
+                # Get lat/lon from the meteorological file
+                if 'lat' in ds_meteo.coords and 'lon' in ds_meteo.coords:
+                    meteo_lat = ds_meteo.coords['lat'].values
+                    meteo_lon = ds_meteo.coords['lon'].values
+                else:
+                    self.logger.warning(f"   ⚠️ No lat/lon coordinates in {file_path.name}")
+                    ds_meteo.close()
+                    continue
+                
+                self.logger.debug(f"   Meteo lat shape: {meteo_lat.shape}, lon shape: {meteo_lon.shape}")
+                
+                # ✅ KEY FIX: Clip elevation to match THIS file's exact grid
+                # Find the bounding box of the meteorological data
+                lat_min, lat_max = meteo_lat.min(), meteo_lat.max()
+                lon_min, lon_max = meteo_lon.min(), meteo_lon.max()
+                
+                self.logger.debug(f"   Meteo extent: lat [{lat_min:.4f}, {lat_max:.4f}], lon [{lon_min:.4f}, {lon_max:.4f}]")
+                
+                # Get full elevation lat/lon
+                if 'lat' in ds_hgt.coords and 'lon' in ds_hgt.coords:
+                    full_lat = ds_hgt.coords['lat'].values
+                    full_lon = ds_hgt.coords['lon'].values
+                else:
+                    self.logger.warning(f"   ⚠️ No lat/lon in elevation file")
+                    ds_meteo.close()
+                    continue
+                
+                # Find indices that match the meteorological grid extent
+                # Add small buffer to ensure we capture all cells
+                buffer = 0.01  # degrees
+                
+                if len(full_lat.shape) == 2:
+                    # 2D lat/lon (curvilinear grid)
+                    # Find cells that fall within the bounding box
+                    lat_mask = (full_lat >= lat_min - buffer) & (full_lat <= lat_max + buffer)
+                    lon_mask = (full_lon >= lon_min - buffer) & (full_lon <= lon_max + buffer)
+                    combined_mask = lat_mask & lon_mask
+                    
+                    # Find the bounding indices
+                    rows_with_data = np.any(combined_mask, axis=1)
+                    cols_with_data = np.any(combined_mask, axis=0)
+                    
+                    if not np.any(rows_with_data) or not np.any(cols_with_data):
+                        self.logger.warning(f"   ⚠️ No overlap between elevation and meteo grids")
+                        ds_meteo.close()
+                        continue
+                    
+                    row_start = np.argmax(rows_with_data)
+                    row_end = len(rows_with_data) - np.argmax(rows_with_data[::-1])
+                    col_start = np.argmax(cols_with_data)
+                    col_end = len(cols_with_data) - np.argmax(cols_with_data[::-1])
+                    
+                    # Clip elevation using these indices
+                    clipped_elevation = full_elevation.isel(
+                        south_north=slice(row_start, row_end),
+                        west_east=slice(col_start, col_end)
+                    )
+                    
+                else:
+                    # 1D lat/lon (regular grid)
+                    sn_mask = (full_lat >= lat_min - buffer) & (full_lat <= lat_max + buffer)
+                    we_mask = (full_lon >= lon_min - buffer) & (full_lon <= lon_max + buffer)
+                    
+                    clipped_elevation = full_elevation.isel(
+                        south_north=sn_mask,
+                        west_east=we_mask
+                    )
+                
+                self.logger.debug(f"   Clipped elevation shape: {clipped_elevation.shape}")
+                
+                # ✅ CRITICAL: Ensure clipped elevation matches meteo grid EXACTLY
+                clipped_shape = clipped_elevation.shape
+                expected_shape = (sn_size, we_size)
+                
+                if clipped_shape != expected_shape:
+                    self.logger.warning(f"   ⚠️ Shape mismatch: elevation {clipped_shape} vs meteo {expected_shape}")
+                    self.logger.info(f"   🔧 Resampling elevation to match meteo grid...")
+                    
+                    # Create new elevation array with correct shape
+                    # Use the meteo file's lat/lon coordinates
+                    new_elevation = xr.DataArray(
+                        data=np.full(expected_shape, np.nan),
+                        dims=['south_north', 'west_east'],
+                        coords={
+                            'lat': (['south_north', 'west_east'], meteo_lat),
+                            'lon': (['south_north', 'west_east'], meteo_lon)
+                        },
+                        attrs={
+                            'units': 'm',
+                            'long_name': 'Terrain Height',
+                            'source': 'HAR v2 static terrain height (resampled)'
+                        }
+                    )
+                    
+                    # Interpolate from clipped elevation to new grid
+                    # Simple approach: use nearest neighbor based on lat/lon
+                    from scipy.interpolate import griddata
+                    
+                    # Get source points and values
+                    src_lat = ds_hgt.coords['lat'].values
+                    src_lon = ds_hgt.coords['lon'].values
+                    src_elev = full_elevation.values
+                    
+                    # Flatten source data
+                    src_points = np.column_stack([src_lat.flatten(), src_lon.flatten()])
+                    src_values = src_elev.flatten()
+                    
+                    # Remove NaN values
+                    valid_mask = ~np.isnan(src_values)
+                    src_points = src_points[valid_mask]
+                    src_values = src_values[valid_mask]
+                    
+                    # Target points
+                    tgt_points = np.column_stack([meteo_lat.flatten(), meteo_lon.flatten()])
+                    
+                    # Interpolate
+                    interpolated_values = griddata(
+                        src_points, src_values, tgt_points, 
+                        method='nearest'
+                    )
+                    
+                    # Reshape and assign
+                    new_elevation.values = interpolated_values.reshape(expected_shape)
+                    clipped_elevation = new_elevation
+                    
+                    self.logger.info(f"   ✅ Resampled elevation to shape: {clipped_elevation.shape}")
+                
+                # Add elevation to the meteorological dataset
+                ds_meteo['elevation'] = clipped_elevation
+                ds_meteo['elevation'].attrs.update({
+                    'units': 'm',
+                    'long_name': 'Terrain Height',
+                    'source': 'HAR v2 static terrain height'
+                })
+                
+                # Save to temporary file, then replace
+                temp_file = file_path.with_suffix('.tmp.nc')
+                ds_meteo.to_netcdf(temp_file)
+                ds_meteo.close()
+                
+                # Replace original with updated file
+                import shutil
+                shutil.move(str(temp_file), str(file_path))
+                
+                self.logger.info(f"   ✅ Added elevation to {file_path.name}")
+                
+            except Exception as e:
+                self.logger.error(f"   ❌ Error adding elevation to {file_path.name}: {e}")
+                import traceback
+                self.logger.debug(traceback.format_exc())
+        
+        # Close elevation dataset
+        ds_hgt.close()
+        
+        self.logger.info("🏔️ Elevation processing complete!")
+
+    #---------------------------------------------------------------------------------
+
+    def _load_elevation_data(self) -> Optional[xr.DataArray]:
+        """
+        Load elevation from HAR static file (UNCLIPPED - will be clipped later)
+        
+        Returns
+        -------
+        Optional[xr.DataArray]
+            Full elevation data array, or None if failed
+        """
+        hgt_file = self.har_data_dir / 'HARv2_d10km_static_hgt.nc'
+        
+        if not hgt_file.exists():
+            self.logger.warning(f"❌ HAR terrain height file not found: {hgt_file}")
+            return None
+        
+        try:
+            self.logger.info(f"🏔️ Loading elevation from: {hgt_file.name}")
+            
+            ds_hgt = xr.open_dataset(hgt_file)
+            
+            # Find hgt variable
+            hgt_var = None
+            for var in ds_hgt.data_vars:
+                if 'hgt' in var.lower():
+                    hgt_var = var
+                    break
+            
+            if hgt_var is None:
+                self.logger.error("Could not find hgt variable")
+                ds_hgt.close()
+                return None
+            
+            elevation = ds_hgt[hgt_var]
+            
+            # Remove time dimension if present
+            if 'time' in elevation.dims:
+                elevation = elevation.isel(time=0)
+                self.logger.debug(f"Removed time dim, shape: {elevation.shape}")
+            
+            # Keep a copy in memory (it's small - just 252x381 floats)
+            elevation = elevation.load()
+            
+            self.logger.info(f"✅ Loaded elevation: shape={elevation.shape}, "
+                           f"range=[{float(elevation.min()):.0f}, {float(elevation.max()):.0f}] m")
+            
+            ds_hgt.close()
+            
+            return elevation
+            
+        except Exception as e:
+            self.logger.error(f"Error loading elevation: {e}")
+            return None
+
+
+    #---------------------------------------------------------------------------------
+
+    def _find_and_process_yearly_files(self) -> List[Path]:
+        """
+        Main method to find yearly HAR files, combine them, and process
+        SIMPLIFIED: Don't add elevation during processing - add it after ALL files are saved
+        ✅ UPDATED: Adds warm-up period if configured
+        """
+        self.logger.info("Starting HAR file processing pipeline...")
+        
+        # Check which files already exist
+        expected_files = {
+            't2_mean': 'har_temp_mean.nc',
+            't2_min': 'har_temp_min.nc',
+            't2_max': 'har_temp_max.nc',
+            'prcp': 'har_precip.nc',
+            'potevap': 'har_pet.nc'
+        }
+        
+        existing_files = {}
+        missing_vars = []
+        
+        for var, filename in expected_files.items():
+            file_path = self.output_path / filename
+            if file_path.exists() and not self.force_reprocess:
+                existing_files[var] = file_path
+                self.logger.info(f"✅ Using existing file: {filename}")
+            else:
+                missing_vars.append(var)
+        
+        all_files = list(existing_files.values())
+        
+        # Initialize clip indices storage
+        self._clip_indices = None
+        
+        # Process missing variables (WITHOUT elevation)
+        for variable in missing_vars:
+            self.logger.info(f"Processing {variable}...")
+            
+            yearly_files = self._find_yearly_files(variable)
+            
+            if not yearly_files:
+                self.logger.warning(f"No files found for {variable}")
+                continue
+            
+            # Combine yearly files (clips during loading, stores clip indices)
+            combined = self._combine_yearly_files(yearly_files, variable)
+            
+            if combined is None:
+                continue
+            
+            # Filter time range
+            filtered = self._filter_time_range(combined)
+            
+            # Convert units
+            converted = self._convert_units(filtered, variable)
+            
+            # Save WITHOUT elevation
+            output_name = expected_files[variable]
+            output_file = self._save_processed_file(converted, variable, output_name)
+            
+            if output_file:
+                all_files.append(output_file)
+            
+            # Close datasets
+            combined.close()
+            filtered.close()
+            converted.close()
+        
+        self.logger.info(f"Processing pipeline complete! Total files: {len(all_files)}")
+        
+        # ✅ NOW: Add elevation to ALL files using a simple, robust method
+        self._add_elevation_to_all_files_simple(all_files)
+        
+        # ✅ NEW: Add warm-up period to each file if configured
+        if hasattr(self, 'warmup_date') and self.warmup_date is not None:
+            self.logger.info("\n🔄 Adding warm-up period to HAR meteorological files...")
+            all_files = self._add_warmup_to_files(all_files)
+        
+        # Copy to model-specific directory
+        self._copy_to_model_directory(all_files)
+        
+        return all_files
+
+    #---------------------------------------------------------------------------------
+    
+    def check_missing_values_in_netcdf(self, netcdf_file: Path) -> Dict[str, Any]:
+        """
+        Check for missing values (NaN, inf, fill values) in NetCDF file
+        
+        Parameters
+        ----------
+        netcdf_file : Path
+            Path to NetCDF file to check
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary with missing value statistics
+        """
+        self.logger.info(f"🔍 Checking for missing values in {netcdf_file.name}")
+        
+        try:
+            ds = xr.open_dataset(netcdf_file)
+            
+            results = {
+                'file': netcdf_file.name,
+                'variables': {},
+                'has_missing': False,
+                'total_missing_pct': 0.0
+            }
+            
+            # Get data variables (exclude elevation and coordinates)
+            data_vars = [v for v in ds.data_vars if 'time' in ds[v].dims]
+            
+            if not data_vars:
+                self.logger.warning(f"No time-varying variables found in {netcdf_file.name}")
+                ds.close()
+                return results
+            
+            for var_name in data_vars:
+                var_data = ds[var_name]
+                
+                # Get total number of values
+                total_values = var_data.size
+                
+                # Count NaN values
+                nan_count = np.isnan(var_data.values).sum()
+                
+                # Count infinite values
+                inf_count = np.isinf(var_data.values).sum()
+                
+                # Check for fill values
+                fill_value = var_data.attrs.get('_FillValue', None)
+                if fill_value is not None:
+                    fill_count = (var_data.values == fill_value).sum()
+                else:
+                    fill_count = 0
+                
+                # Total missing
+                total_missing = nan_count + inf_count + fill_count
+                missing_pct = (total_missing / total_values) * 100
+                
+                var_results = {
+                    'total_values': int(total_values),
+                    'nan_count': int(nan_count),
+                    'inf_count': int(inf_count),
+                    'fill_count': int(fill_count),
+                    'total_missing': int(total_missing),
+                    'missing_pct': float(missing_pct)
+                }
+                
+                results['variables'][var_name] = var_results
+                
+                # Log results
+                if total_missing > 0:
+                    results['has_missing'] = True
+                    self.logger.warning(f"⚠️ {var_name}: {total_missing:,} missing values ({missing_pct:.2f}%)")
+                    if nan_count > 0:
+                        self.logger.warning(f"   - NaN values: {nan_count:,}")
+                    if inf_count > 0:
+                        self.logger.warning(f"   - Inf values: {inf_count:,}")
+                    if fill_count > 0:
+                        self.logger.warning(f"   - Fill values: {fill_count:,}")
+                else:
+                    self.logger.info(f"✅ {var_name}: No missing values")
+            
+            # Calculate overall missing percentage
+            total_all_values = sum(r['total_values'] for r in results['variables'].values())
+            total_all_missing = sum(r['total_missing'] for r in results['variables'].values())
+            
+            if total_all_values > 0:
+                results['total_missing_pct'] = (total_all_missing / total_all_values) * 100
+            
+            if results['has_missing']:
+                self.logger.warning(f"📊 Overall: {total_all_missing:,} / {total_all_values:,} values missing ({results['total_missing_pct']:.2f}%)")
+            else:
+                self.logger.info(f"✅ File check complete: No missing values found")
+            
+            ds.close()
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error checking missing values: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return {'file': netcdf_file.name, 'error': str(e)}
+
+    #---------------------------------------------------------------------------------
+
+    def create_missing_values_report(self) -> pd.DataFrame:
+        """
+        Create a comprehensive missing values report for all processed files
+        
+        Returns
+        -------
+        pd.DataFrame
+            Summary report of missing values across all files
+        """
+        self.logger.info("📊 Creating missing values report...")
+        
+        if not self.processed_files:
+            self.logger.warning("No processed files found")
+            return pd.DataFrame()
+        
+        report_data = []
+        
+        for processed_file in self.processed_files:
+            results = self.check_missing_values_in_netcdf(processed_file)
+            
+            if 'error' in results:
+                continue
+            
+            for var_name, var_stats in results.get('variables', {}).items():
+                report_data.append({
+                    'File': results['file'],
+                    'Variable': var_name,
+                    'Total Values': var_stats['total_values'],
+                    'NaN Count': var_stats['nan_count'],
+                    'Inf Count': var_stats['inf_count'],
+                    'Fill Count': var_stats['fill_count'],
+                    'Total Missing': var_stats['total_missing'],
+                    'Missing %': var_stats['missing_pct']
+                })
+        
+        if not report_data:
+            self.logger.info("No data for missing values report")
+            return pd.DataFrame()
+        
+        report_df = pd.DataFrame(report_data)
+        
+        # Save to CSV
+        report_file = self.output_path / 'missing_values_report.csv'
+        report_df.to_csv(report_file, index=False)
+        
+        self.logger.info(f"Missing values report saved to: {report_file}")
+        
+        # Print summary
+        self.logger.info("\n📋 Missing Values Summary:")
+        self.logger.info(f"{'Variable':<20} {'File':<25} {'Missing %':>10}")
+        self.logger.info("-" * 60)
+        
+        for _, row in report_df.iterrows():
+            if row['Missing %'] > 0:
+                self.logger.warning(f"{row['Variable']:<20} {row['File']:<25} {row['Missing %']:>9.2f}%")
+        
+        return report_df
+
+    #---------------------------------------------------------------------------------
+
+    def _copy_to_model_directory(self, files: List[Path]) -> None:
+        """
+        Copy processed files from shared data_obs to model-specific data_obs
+        
+        Parameters
+        ----------
+        files : List[Path]
+            List of file paths to copy
+        """
+        import shutil
+        
+        if not files:
+            self.logger.debug("No files to copy to model directory")
+            return
+        
+        self.logger.info(f"📋 Copying {len(files)} files to model-specific directory...")
+        
+        copied_count = 0
+        for file_path in files:
+            if file_path.exists():
+                dest = self.model_data_dir / file_path.name
+                try:
+                    shutil.copy2(file_path, dest)
+                    self.logger.debug(f"  ✅ Copied: {file_path.name}")
+                    copied_count += 1
+                except Exception as e:
+                    self.logger.warning(f"  ❌ Failed to copy {file_path.name}: {e}")
+        
+        self.logger.info(f"✅ Successfully copied {copied_count} files to {self.model_data_dir.name}/")
+
+    #---------------------------------------------------------------------------------
+
+    def plot_spatial_overview(self, netcdf_file: Path) -> None:
+        """
+        Plot spatial overview - FIXED to use 2D lat/lon coordinates properly
+        """
+        self.logger.info(f"Creating spatial overview plots for {netcdf_file.name}")
+        
+        try:
+            ds = xr.open_dataset(netcdf_file)
+            
+            # Get variables to plot
+            meteo_vars = [v for v in ds.data_vars if v != 'elevation' and len(ds[v].dims) >= 2]
+            has_elevation = 'elevation' in ds.data_vars
+            
+            n_plots = len(meteo_vars) + (1 if has_elevation else 0)
+            
+            if n_plots == 0:
+                self.logger.warning("No variables to plot")
+                ds.close()
+                return
+            
+            # Create figure
+            cols = min(2, n_plots)
+            rows = (n_plots + cols - 1) // cols
+            fig, axes = plt.subplots(rows, cols, figsize=(7*cols, 6*rows))
+            if n_plots == 1:
+                axes = [axes]
+            else:
+                axes = axes.flatten()
+            
+            # ✅ Get 2D lat/lon for plotting
+            lat_2d = ds.coords['lat'].values if 'lat' in ds.coords else None
+            lon_2d = ds.coords['lon'].values if 'lon' in ds.coords else None
+            
+            plot_idx = 0
+            
+            # Plot meteorological variables
+            for var_name in meteo_vars:
+                ax = axes[plot_idx]
+                
+                # Get data (first timestep if time exists)
+                data = ds[var_name]
+                if 'time' in data.dims:
+                    data = data.isel(time=0)
+                
+                # Get variable info
+                var_info = self.har_variables.get(var_name, {'name': var_name, 'units': '', 'cmap': 'viridis'})
+                
+                # Plot
+                if lat_2d is not None and lon_2d is not None:
+                    im = ax.pcolormesh(lon_2d, lat_2d, data.values, cmap=var_info.get('cmap', 'viridis'), shading='auto')
+                    ax.set_xlabel('Longitude')
+                    ax.set_ylabel('Latitude')
+                    
+                    # Add catchment boundary
+                    if self.catchment_extent is not None:
+                        try:
+                            self.catchment_extent.boundary.plot(ax=ax, color='red', linewidth=2)
+                        except:
+                            pass
+                else:
+                    im = ax.imshow(data.values, cmap=var_info.get('cmap', 'viridis'), origin='lower')
+                
+                cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+                cbar.set_label(var_info.get('units', ''))
+                ax.set_title(var_info.get('name', var_name))
+                ax.grid(True, alpha=0.3)
+                
+                plot_idx += 1
+            
+            # Plot elevation
+            if has_elevation:
+                ax = axes[plot_idx]
+                elev = ds['elevation']
+                
+                if lat_2d is not None and lon_2d is not None:
+                    im = ax.pcolormesh(lon_2d, lat_2d, elev.values, cmap='terrain', shading='auto')
+                    ax.set_xlabel('Longitude')
+                    ax.set_ylabel('Latitude')
+                    
+                    if self.catchment_extent is not None:
+                        try:
+                            self.catchment_extent.boundary.plot(ax=ax, color='red', linewidth=2)
+                        except:
+                            pass
+                else:
+                    im = ax.imshow(elev.values, cmap='terrain', origin='lower')
+                
+                cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+                cbar.set_label('m')
+                ax.set_title('Elevation')
+                ax.grid(True, alpha=0.3)
+            
+            # Hide unused axes
+            for i in range(n_plots, len(axes)):
+                axes[i].set_visible(False)
+            
+            fig.suptitle(f"HAR Data - Gauge {self.gauge_id}\n{netcdf_file.stem}", fontsize=12, fontweight='bold')
+            plt.tight_layout()
+            
+            # Save
+            save_path = self.spatial_plots_dir / f"har_spatial_{self.gauge_id}_{netcdf_file.stem}.png"
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            self.logger.info(f"Saved: {save_path.name}")
+            
+            plt.show()
+            plt.close()
+            ds.close()
+            
+        except Exception as e:
+            self.logger.error(f"Error plotting: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+
+    #---------------------------------------------------------------------------------
+
+    def calculate_spatial_average_timeseries(self, netcdf_file: Path) -> pd.DataFrame:
+        """
+        Calculate spatial average time series with missing value checks
+        ✅ FIXED: Don't call check_missing_values here - it's called separately now
+        
+        Parameters
+        ----------
+        netcdf_file : Path
+            Path to the NetCDF file
+            
+        Returns
+        -------
+        pd.DataFrame
+            Time series of spatially averaged data
+        """
+        self.logger.debug(f"Calculating spatial averages for {netcdf_file.name}")
+        
+        try:
+            # Open the dataset
+            ds = xr.open_dataset(netcdf_file, chunks={'time': 100})
+            
+            # Get data variables (exclude elevation)
+            data_vars = [var for var in ds.data_vars if var != 'elevation' and len(ds[var].dims) >= 2]
+            
+            if not data_vars:
+                self.logger.warning(f"No suitable variables found in {netcdf_file.name}")
+                ds.close()
+                return pd.DataFrame()
+            
+            # Calculate spatial means for each variable
+            results = {}
+            
+            for var_name in data_vars:
+                self.logger.debug(f"  Processing variable: {var_name}")
+                
+                # Calculate spatial mean (average over spatial dims, ignoring NaN)
+                spatial_dims = [dim for dim in ds[var_name].dims if dim != 'time']
+                
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=RuntimeWarning)
+                    spatial_mean = ds[var_name].mean(dim=spatial_dims, skipna=True)
+                
+                # Convert to pandas series
+                ts = spatial_mean.to_pandas()
+                
+                # Check for missing timesteps
+                missing_ts = ts.isna().sum()
+                if missing_ts > 0:
+                    missing_ts_pct = (missing_ts / len(ts)) * 100
+                    self.logger.debug(f"  {var_name}: {missing_ts} timesteps ({missing_ts_pct:.1f}%) have no valid data")
+                
+                results[var_name] = ts
+            
+            # Combine into DataFrame
+            df = pd.DataFrame(results)
+            df.index.name = 'time'
+            
+            self.logger.debug(f"  Timeseries: {len(df)} days from {df.index.min()} to {df.index.max()}")
+            
+            # Close dataset
+            ds.close()
+            
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating spatial averages for {netcdf_file.name}: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return pd.DataFrame()
+
+    #---------------------------------------------------------------------------------
+
+    def plot_timeseries(self, netcdf_file: Path, df_timeseries: pd.DataFrame) -> None:
+        """
+        Plot time series of spatially averaged HAR variables
+        ✅ MODIFIED: Highlights warm-up period with different color
+        
+        Parameters
+        ----------
+        netcdf_file : Path
+            Path to the NetCDF file
+        df_timeseries : pd.DataFrame
+            Time series data to plot
+        """
+        if df_timeseries.empty:
+            self.logger.warning(f"No data to plot for {netcdf_file.name}")
+            return
+        
+        self.logger.info(f"Creating time series plots for {netcdf_file.name}")
+        
+        try:
+            n_vars = len(df_timeseries.columns)
+            
+            fig, axes = plt.subplots(n_vars, 1, figsize=(14, 3*n_vars))
+            if n_vars == 1:
+                axes = [axes]
+            
+            # ✅ Updated title to show warm-up info
+            title_warmup = ""
+            if hasattr(self, 'warmup_date') and self.warmup_date is not None:
+                title_warmup = f"\n🔄 Warm-up: {self.warmup_date.strftime('%Y-%m-%d')} to {(self.start_date - pd.Timedelta(days=1)).strftime('%Y-%m-%d')}"
+            
+            fig.suptitle(f'HAR Time Series - Gauge {self.gauge_id}\n{netcdf_file.stem} - Spatial Averages\n'
+                        f'Period: {df_timeseries.index.min().strftime("%Y-%m-%d")} to {df_timeseries.index.max().strftime("%Y-%m-%d")}'
+                        f'{title_warmup}', 
+                        fontsize=14, fontweight='bold')
+            
+            for i, var_name in enumerate(df_timeseries.columns):
+                ax = axes[i]
+                
+                # Get variable info
+                var_info = None
+                for key, info in self.har_variables.items():
+                    if key in var_name.lower() or var_name.lower() in key:
+                        var_info = info
+                        break
+                
+                if var_info is None:
+                    var_info = {'name': var_name, 'units': '', 'cmap': 'viridis'}
+                
+                # ✅ NEW: Split data into warm-up and simulation periods
+                if hasattr(self, 'warmup_date') and self.warmup_date is not None:
+                    # Separate warm-up and simulation data
+                    warmup_mask = df_timeseries.index < self.start_date
+                    simulation_mask = df_timeseries.index >= self.start_date
+                    
+                    warmup_data = df_timeseries.loc[warmup_mask, var_name]
+                    simulation_data = df_timeseries.loc[simulation_mask, var_name]
+                    
+                    # Plot warm-up period in orange/gray
+                    if len(warmup_data) > 0:
+                        ax.plot(warmup_data.index, warmup_data.values, 
+                            linewidth=1.5, color='orange', alpha=0.7, 
+                            label='Warm-up period')
+                    
+                    # Plot simulation period in blue
+                    if len(simulation_data) > 0:
+                        ax.plot(simulation_data.index, simulation_data.values, 
+                            linewidth=1, color='blue', 
+                            label='Simulation period')
+                    
+                    # Add vertical line at start of simulation
+                    ax.axvline(self.start_date, color='red', linestyle='--', 
+                            linewidth=2, alpha=0.7, label='Simulation start')
+                    
+                    ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
+                    
+                else:
+                    # No warm-up - plot normally
+                    df_timeseries[var_name].plot(ax=ax, linewidth=1, color='blue')
+                
+                # Customize
+                ax.set_title(f"{var_info['name']}")
+                ax.set_ylabel(f"{var_info['units']}")
+                ax.grid(True, alpha=0.3)
+                
+                # Format x-axis
+                date_range = (df_timeseries.index.max() - df_timeseries.index.min()).days
+                
+                if date_range > 365*2:
+                    ax.xaxis.set_major_locator(mdates.YearLocator())
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+                elif date_range > 365:
+                    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                else:
+                    ax.xaxis.set_major_locator(mdates.MonthLocator())
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+                
+                plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+                
+                # ✅ UPDATED: Statistics text box now shows warm-up vs simulation stats
+                if hasattr(self, 'warmup_date') and self.warmup_date is not None and len(warmup_data) > 0:
+                    warmup_mean = warmup_data.mean()
+                    sim_mean = simulation_data.mean()
+                    
+                    stats_text = (f'Warm-up Mean: {warmup_mean:.2f}\n'
+                                f'Simulation Mean: {sim_mean:.2f}\n'
+                                f'Overall Min: {df_timeseries[var_name].min():.2f}\n'
+                                f'Overall Max: {df_timeseries[var_name].max():.2f}')
+                else:
+                    mean_val = df_timeseries[var_name].mean()
+                    std_val = df_timeseries[var_name].std()
+                    min_val = df_timeseries[var_name].min()
+                    max_val = df_timeseries[var_name].max()
+                    
+                    stats_text = f'Mean: {mean_val:.2f}\nStd: {std_val:.2f}\nMin: {min_val:.2f}\nMax: {max_val:.2f}'
+                
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                    fontsize=9)
+            
+            axes[-1].set_xlabel('Date')
+            
+            plt.tight_layout()
+            
+            # Save
+            save_path = self.timeseries_plots_dir / f"har_timeseries_gauge_{self.gauge_id}_{netcdf_file.stem}.png"
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            self.logger.info(f"Time series plot saved to {save_path}")
+            
+            plt.show()
+            plt.close()
+            
+        except Exception as e:
+            self.logger.error(f"Error creating time series plot: {e}")
+
+    #---------------------------------------------------------------------------------
+
+    def calculate_monthly_temperature_averages(self) -> pd.DataFrame:
+        """
+        Calculate monthly mean temperature averages (climatology) and save to CSV
+        
+        Returns
+        -------
+        pd.DataFrame
+            Monthly temperature averages
+        """
+        self.logger.info("Calculating monthly temperature averages from HAR data...")
+        
+        try:
+            # Find temperature mean file
+            temp_file = None
+            for file_path in self.processed_files:
+                if 'temp_mean' in file_path.name:
+                    temp_file = file_path
+                    break
+            
+            if temp_file is None:
+                self.logger.error("Temperature mean file not found")
+                return pd.DataFrame()
+            
+            ds = xr.open_dataset(temp_file)
+            
+            # Get temperature variable
+            temp_var = [v for v in ds.data_vars if 'time' in ds[v].dims][0]
+            
+            # Calculate spatial average
+            spatial_dims = [dim for dim in ds[temp_var].dims if dim != 'time']
+            temp_spatial_avg = ds[temp_var].mean(dim=spatial_dims)
+            
+            # Group by month and calculate mean climatology
+            monthly_climatology = temp_spatial_avg.groupby('time.month').mean()
+            
+            # Convert to DataFrame
+            monthly_df = monthly_climatology.to_dataframe().reset_index()
+            monthly_df = monthly_df.rename(columns={'month': 'month', temp_var: 'Temperature'})
+            
+            # Ensure we have exactly 12 months
+            full_months = pd.DataFrame({'month': list(range(1, 13))})
+            monthly_df = full_months.merge(monthly_df, on='month', how='left')
+            
+            # Round
+            monthly_df['Temperature'] = monthly_df['Temperature'].round(2)
+            
+            # Save to CSV
+            output_file = self.output_path / 'har_monthly_temperature_averages.csv'
+            monthly_df.to_csv(output_file, index=False)
+            
+            self.logger.info(f"Monthly temperature averages saved to: {output_file}")
+            
+            # Log values
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            
+            for i, row in monthly_df.iterrows():
+                month_name = month_names[int(row['month']) - 1]
+                temp = row['Temperature']
+                self.logger.info(f"  {month_name}: {temp:.1f}°C")
+            
+            ds.close()
+            return monthly_df
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating monthly temperature averages: {e}")
+            return pd.DataFrame()
+
+    #---------------------------------------------------------------------------------
+
+    def calculate_monthly_pet_averages(self) -> pd.DataFrame:
+        """
+        Calculate monthly mean PET averages (climatology) and save to CSV
+        
+        Returns
+        -------
+        pd.DataFrame
+            Monthly PET averages
+        """
+        self.logger.info("Calculating monthly PET averages from HAR data...")
+        
+        try:
+            # Find PET file
+            pet_file = None
+            for file_path in self.processed_files:
+                if 'pet' in file_path.name:
+                    pet_file = file_path
+                    break
+            
+            if pet_file is None:
+                self.logger.error("PET file not found")
+                return pd.DataFrame()
+            
+            ds = xr.open_dataset(pet_file)
+            
+            # Get PET variable
+            pet_var = [v for v in ds.data_vars if 'time' in ds[v].dims][0]
+            
+            # Calculate spatial average
+            spatial_dims = [dim for dim in ds[pet_var].dims if dim != 'time']
+            pet_spatial_avg = ds[pet_var].mean(dim=spatial_dims)
+            
+            # Group by month and calculate mean climatology
+            monthly_climatology = pet_spatial_avg.groupby('time.month').mean()
+            
+            # Convert to DataFrame
+            monthly_df = monthly_climatology.to_dataframe().reset_index()
+            monthly_df = monthly_df.rename(columns={'month': 'month', pet_var: 'PET_avg_mm_per_day'})
+            
+            # Ensure we have exactly 12 months
+            full_months = pd.DataFrame({'month': list(range(1, 13))})
+            monthly_df = full_months.merge(monthly_df, on='month', how='left')
+            
+            # Round
+            monthly_df['PET_avg_mm_per_day'] = monthly_df['PET_avg_mm_per_day'].round(3)
+            
+            # Save to CSV
+            output_file = self.output_path / 'har_monthly_pet_averages.csv'
+            monthly_df.to_csv(output_file, index=False)
+            
+            self.logger.info(f"Monthly PET averages saved to: {output_file}")
+            
+            # Log values
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            
+            for i, row in monthly_df.iterrows():
+                month_name = month_names[int(row['month']) - 1]
+                pet = row['PET_avg_mm_per_day']
+                self.logger.info(f"  {month_name}: {pet:.3f} mm/day")
+            
+            ds.close()
+            return monthly_df
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating monthly PET averages: {e}")
+            return pd.DataFrame()
+
+    #---------------------------------------------------------------------------------
+
+    def plot_monthly_temperature_climatology(self, monthly_df: pd.DataFrame) -> None:
+        """
+        Create a plot of monthly temperature climatology
+        
+        Parameters
+        ----------
+        monthly_df : pd.DataFrame
+            Monthly temperature data
+        """
+        if monthly_df.empty:
+            self.logger.warning("No monthly temperature data to plot")
+            return
+        
+        self.logger.info("Creating monthly temperature climatology plot...")
+        
+        try:
+            fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+            
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            
+            bars = ax.bar(month_names, monthly_df['Temperature'], 
+                         color='steelblue', alpha=0.7, edgecolor='navy', linewidth=1)
+            
+            # Add value labels
+            for bar, temp in zip(bars, monthly_df['Temperature']):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+                       f'{temp:.1f}°C', ha='center', va='bottom', fontsize=10)
+            
+            ax.set_title(f'HAR Monthly Temperature Climatology - Gauge {self.gauge_id}', 
+                        fontsize=16, fontweight='bold')
+            ax.set_ylabel('Temperature (°C)', fontsize=12)
+            ax.set_xlabel('Month', fontsize=12)
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            # Add horizontal line at 0°C
+            ax.axhline(y=0, color='red', linestyle='--', alpha=0.7, linewidth=1, label='0°C')
+            ax.legend()
+            
+            plt.tight_layout()
+            
+            save_path = self.plots_dir / f'har_monthly_temperature_climatology_gauge_{self.gauge_id}.png'
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            self.logger.info(f"Monthly temperature climatology plot saved to: {save_path}")
+            
+            plt.show()
+            plt.close()
+            
+        except Exception as e:
+            self.logger.error(f"Error creating monthly temperature climatology plot: {e}")
+
+    #---------------------------------------------------------------------------------
+
+    def plot_monthly_pet_climatology(self, monthly_df: pd.DataFrame) -> None:
+        """
+        Create a plot of monthly PET climatology
+        
+        Parameters
+        ----------
+        monthly_df : pd.DataFrame
+            Monthly PET data
+        """
+        if monthly_df.empty:
+            self.logger.warning("No monthly PET data to plot")
+            return
+        
+        self.logger.info("Creating monthly PET climatology plot...")
+        
+        try:
+            fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+            
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            
+            bars = ax.bar(month_names, monthly_df['PET_avg_mm_per_day'], 
+                         color='orange', alpha=0.7, edgecolor='darkorange', linewidth=1)
+            
+            # Add value labels
+            for bar, pet in zip(bars, monthly_df['PET_avg_mm_per_day']):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.05,
+                       f'{pet:.2f}', ha='center', va='bottom', fontsize=10)
+            
+            ax.set_title(f'HAR Monthly PET Climatology - Gauge {self.gauge_id}', 
+                        fontsize=16, fontweight='bold')
+            ax.set_ylabel('PET (mm/day)', fontsize=12)
+            ax.set_xlabel('Month', fontsize=12)
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            ax.set_ylim(0, monthly_df['PET_avg_mm_per_day'].max() * 1.1)
+            
+            plt.tight_layout()
+            
+            save_path = self.plots_dir / f'har_monthly_pet_climatology_gauge_{self.gauge_id}.png'
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            self.logger.info(f"Monthly PET climatology plot saved to: {save_path}")
+            
+            plt.show()
+            plt.close()
+            
+        except Exception as e:
+            self.logger.error(f"Error creating monthly PET climatology plot: {e}")
+
+    #---------------------------------------------------------------------------------
+
+    def analyze_all_files(self) -> None:
+        """
+        Main method to analyze all processed files
+        ✅ FIXED: Actually calls calculate_spatial_average_timeseries before plotting!
+        """
+        self.logger.info(f"Starting analysis of processed data for gauge {self.gauge_id}")
+        self.logger.info(f"Analysis period: {self.start_date.date()} to {self.end_date.date()}")
+        
+        if not self.processed_files:
+            self.logger.warning("No processed files found to analyze")
+            return
+        
+        # ✅ Run missing value checks on all files first
+        self.logger.info("\n" + "="*80)
+        self.logger.info("🔍 MISSING VALUE CHECK")
+        self.logger.info("="*80)
+        
+        all_missing_results = {}
+        files_with_issues = []
+        
+        for processed_file in self.processed_files:
+            missing_results = self.check_missing_values_in_netcdf(processed_file)
+            all_missing_results[processed_file.name] = missing_results
+            
+            if missing_results.get('has_missing', False):
+                files_with_issues.append(processed_file.name)
+        
+        # Summary
+        if files_with_issues:
+            self.logger.warning(f"\n⚠️ {len(files_with_issues)} file(s) contain missing values:")
+            for fname in files_with_issues:
+                pct = all_missing_results[fname]['total_missing_pct']
+                self.logger.warning(f"  - {fname}: {pct:.2f}% missing")
+        else:
+            self.logger.info("\n✅ All files passed missing value check - no missing data detected!")
+        
+        self.logger.info("="*80 + "\n")
+        
+        # ✅ FIX: Continue with normal analysis - ACTUALLY create timeseries DataFrames!
+        all_timeseries = {}
+        
+        for processed_file in self.processed_files:
+            try:
+                self.logger.info(f"Analyzing file: {processed_file.name}")
+                
+                # Create spatial overview plot
+                self.plot_spatial_overview(processed_file)
+                
+                # ✅ FIX: Calculate spatial average timeseries FIRST
+                df_timeseries = self.calculate_spatial_average_timeseries(processed_file)
+                
+                # ✅ FIX: THEN plot it (only if we got data)
+                if not df_timeseries.empty:
+                    self.plot_timeseries(processed_file, df_timeseries)
+                    all_timeseries[processed_file.stem] = df_timeseries
+                else:
+                    self.logger.warning(f"No timeseries data to plot for {processed_file.name}")
+                
+            except Exception as e:
+                self.logger.error(f"Error analyzing {processed_file.name}: {str(e)}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                continue
+        
+        # Calculate and save monthly averages
+        monthly_temp_df = self.calculate_monthly_temperature_averages()
+        if not monthly_temp_df.empty:
+            self.plot_monthly_temperature_climatology(monthly_temp_df)
+        
+        monthly_pet_df = self.calculate_monthly_pet_averages()
+        if not monthly_pet_df.empty:
+            self.plot_monthly_pet_climatology(monthly_pet_df)
+        
+        self.logger.info("Analysis complete!")
+        self.logger.info(f"Plots saved in: {self.plots_dir}")
+        self.logger.info(f"Processed meteo files saved in: {self.output_path}")
+
+
+
+
+#--------------------------------------------------------------------------------
 ############################# GridWeights Generator #############################
 #--------------------------------------------------------------------------------
 
@@ -3480,3 +5736,375 @@ class GridWeightsGenerator:
         except Exception as e:
             self.logger.warning(f"❌ Failed to copy GridWeights.txt: {e}")
 
+
+#--------------------------------------------------------------------------------
+############################# HAR GridWeights Generator #########################
+#--------------------------------------------------------------------------------
+
+class HARGridWeightsGenerator:
+    """
+    A class for generating grid weights for HAR meteorological data.
+    Handles the Lambert Conformal Conic projection and curvilinear grid.
+    """
+    
+    def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
+        """
+        Initialize the HAR GridWeights Generator
+        
+        Parameters
+        ----------
+        namelist_path : str or Path
+            Path to the namelist YAML configuration file
+        force_reprocess : bool, optional
+            If True, reprocess files even if they already exist (default: False)
+        """
+        self.force_reprocess = force_reprocess
+        
+        # Load configuration
+        namelist_path = Path(namelist_path)
+        
+        if not namelist_path.exists():
+            raise FileNotFoundError(f"Namelist file not found: {namelist_path}")
+        
+        with open(namelist_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        # Store configuration parameters
+        self.main_dir = Path(self.config.get('main_dir'))
+        self.gauge_id = self.config.get('gauge_id')
+        self.model_type = self.config.get('model_type')
+        self.debug = self.config.get('debug', False)
+        self.model_dir = self.main_dir / self.config.get('config_dir')
+        
+        # Setup directories
+        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        self.model_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
+        self.out_dir = self.shared_data_dir
+        self.out_HRU_shape_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'topo_files' / 'HRU.shp'
+        self.plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'plots'
+        
+        # Create directories
+        self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+        self.model_data_dir.mkdir(parents=True, exist_ok=True)
+        self.plots_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Setup logger
+        self.logger = self._setup_logger()
+        
+        self.logger.info(f"HAR GridWeights Generator initialized for gauge {self.gauge_id}")
+
+    #---------------------------------------------------------------------------------
+
+    def _setup_logger(self) -> logging.Logger:
+        """Set up and configure logger"""
+        level = logging.DEBUG if self.debug else logging.INFO
+        
+        logging.basicConfig(
+            level=level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            force=True
+        )
+        
+        logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        
+        return logging.getLogger(f'HARGridWeightsGenerator_Gauge_{self.gauge_id}')
+
+    #---------------------------------------------------------------------------------
+
+    def generate(self) -> gpd.GeoDataFrame:
+        """
+        Generate grid weights file for HAR data
+        ✅ FIXED: Correct cell numbering and handle HRUs with no grid overlap
+        
+        Returns
+        -------
+        gpd.GeoDataFrame
+            Relative area calculations
+        """
+        self.logger.info(f"Generating HAR grid weights for catchment {self.gauge_id}")
+        
+        # Check if GridWeights file already exists
+        gridweights_file = self.out_dir / 'GridWeights_HAR.txt'
+        
+        if gridweights_file.exists() and not self.force_reprocess:
+            self.logger.info(f"✅ GridWeights_HAR.txt already exists")
+            self.logger.info("⏭️ Skipping grid weights generation")
+            self._copy_gridweights_to_model_directory()
+            return gpd.GeoDataFrame()
+        
+        # Find HAR precipitation file (use as grid reference)
+        har_file = self.out_dir / 'har_precip.nc'
+        
+        if not har_file.exists():
+            raise FileNotFoundError(f"HAR precipitation file not found: {har_file}")
+        
+        self.logger.info(f"Loading HAR grid from {har_file}")
+        ds = xr.open_dataset(har_file)
+        
+        # Load HRU shapefile
+        if not self.out_HRU_shape_dir.exists():
+            raise FileNotFoundError(f"HRU shapefile not found: {self.out_HRU_shape_dir}")
+        
+        HRU = gpd.read_file(self.out_HRU_shape_dir)
+        
+        # Ensure HRU ID column exists
+        if 'HRU_ID' in HRU.columns:
+            HRU = HRU.sort_values(by='HRU_ID').reset_index(drop=True)
+            HRU['HRU ID'] = HRU['HRU_ID']
+        elif 'HRU ID' not in HRU.columns:
+            HRU['HRU ID'] = list(range(1, len(HRU) + 1))
+        
+        self.logger.info(f"Loaded {len(HRU)} HRUs")
+        
+        # Reproject HRU to WGS84
+        HRU_wgs84 = HRU.to_crs('EPSG:4326')
+        
+        # ✅ FIX: Get the ACTUAL grid dimensions from the NetCDF file
+        # HAR uses south_north and west_east dimensions
+        if 'south_north' in ds.dims and 'west_east' in ds.dims:
+            ny = ds.dims['south_north']
+            nx = ds.dims['west_east']
+        else:
+            # Fallback to lat/lon shape
+            lat_2d = ds.coords['lat'].values
+            ny, nx = lat_2d.shape
+        
+        self.logger.info(f"HAR grid dimensions: {ny} x {nx} = {ny * nx} cells")
+        
+        # Get 2D lat/lon coordinates
+        lat_2d = ds.coords['lat'].values
+        lon_2d = ds.coords['lon'].values
+        
+        # ✅ FIX: Calculate cell size from coordinate spacing
+        # Use average spacing between adjacent points
+        dlat = np.abs(np.diff(lat_2d, axis=0)).mean() / 2
+        dlon = np.abs(np.diff(lon_2d, axis=1)).mean() / 2
+        
+        self.logger.info(f"Estimated half-cell size: dlat={dlat:.4f}°, dlon={dlon:.4f}°")
+        
+        # ✅ FIX: Create polygons for EACH grid cell (ny * nx cells)
+        # Each polygon is centered on the grid point
+        self.logger.info("Creating HAR grid polygons...")
+        
+        polygons = []
+        cell_ids = []
+        
+        for j in range(ny):
+            for i in range(nx):
+                # Get center point of this cell
+                center_lat = lat_2d[j, i]
+                center_lon = lon_2d[j, i]
+                
+                # Create polygon around the center point
+                corners = [
+                    (center_lon - dlon, center_lat - dlat),  # lower-left
+                    (center_lon + dlon, center_lat - dlat),  # lower-right
+                    (center_lon + dlon, center_lat + dlat),  # upper-right
+                    (center_lon - dlon, center_lat + dlat),  # upper-left
+                ]
+                
+                poly = Polygon(corners)
+                polygons.append(poly)
+                
+                # ✅ FIX: Cell ID matches flattened index (row-major order)
+                cell_id = j * nx + i
+                cell_ids.append(str(cell_id))
+        
+        # Create GeoDataFrame
+        har_grid = gpd.GeoDataFrame({
+            'cell_id': cell_ids,
+            'area_rel': 0,
+            'geometry': polygons
+        }, crs='EPSG:4326')
+        
+        self.logger.info(f"Created HAR grid with {len(har_grid)} cells")
+        self.logger.info(f"Cell IDs range: 0 to {len(har_grid) - 1}")
+        
+        # ✅ Plot HAR grid polygons over HRU shapefile if debug is enabled
+        if self.debug:
+            self.logger.debug("Plotting HAR grid polygons over HRU shapefile")
+            fig, ax = plt.subplots(figsize=(12, 10))
+            
+            # Plot HRUs
+            HRU_wgs84.plot(ax=ax, color='lightblue', edgecolor='blue', alpha=0.7, linewidth=1)
+            
+            # Plot HAR grid
+            har_grid.plot(ax=ax, facecolor='none', edgecolor='red', alpha=0.5, linewidth=0.5)
+            
+            plt.title(f"HAR Grid Polygons for Catchment {self.gauge_id}\n({len(har_grid)} cells)", 
+                    fontsize=14, fontweight='bold')
+            plt.xlabel('Longitude')
+            plt.ylabel('Latitude')
+            plt.grid(True, alpha=0.3)
+            
+            # Save plot
+            plot_path = self.plots_dir / 'har_grid_polygons.png'
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            self.logger.info(f"HAR grid polygons plot saved to {plot_path}")
+            plt.show()
+            plt.close()
+        
+        # Create overlay
+        self.logger.info("Creating overlay of HAR grid and HRU shapes...")
+        res_union = HRU_wgs84.overlay(har_grid, how='intersection')
+        
+        # Calculate relative areas
+        self.logger.info("Calculating relative areas...")
+        
+        # Find HRU ID column
+        hru_id_col = 'HRU ID' if 'HRU ID' in res_union.columns else 'HRU_ID'
+        
+        # Calculate areas
+        res_union_proj = res_union.to_crs('ESRI:54009')
+        res_union['area'] = res_union_proj.geometry.area
+        
+        # Calculate total area per HRU
+        hru_totals = res_union.groupby(hru_id_col)['area'].transform('sum')
+        res_union['area_rel'] = np.where(hru_totals > 0, res_union['area'] / hru_totals, 0)
+        res_union['area_rel'] = res_union['area_rel'].round(5)
+        
+        # Normalize within each HRU
+        def normalize_group(group):
+            total = group['area_rel'].sum()
+            if total > 0:
+                group['normalized_relative_area'] = (group['area_rel'] / total).round(5)
+            else:
+                group['normalized_relative_area'] = 0
+            return group
+        
+        relative_area = res_union.groupby(hru_id_col, group_keys=False).apply(normalize_group)
+        
+        # ✅ FIX: Check for HRUs with no grid overlap and assign nearest cell
+        all_hru_ids = set(HRU_wgs84[hru_id_col].values)
+        hrus_with_weights = set(relative_area[hru_id_col].values)
+        missing_hrus = all_hru_ids - hrus_with_weights
+        
+        if missing_hrus:
+            self.logger.warning(f"⚠️ {len(missing_hrus)} HRUs have no grid overlap!")
+            self.logger.warning(f"   Missing HRU IDs: {sorted(missing_hrus)[:10]}{'...' if len(missing_hrus) > 10 else ''}")
+            self.logger.info("🔧 Assigning nearest grid cell to each missing HRU...")
+            
+            # For each missing HRU, find the nearest grid cell centroid
+            new_rows = []
+            
+            for hru_id in missing_hrus:
+                # Get the HRU geometry
+                hru_geom = HRU_wgs84[HRU_wgs84[hru_id_col] == hru_id].geometry.values[0]
+                hru_centroid = hru_geom.centroid
+                
+                # Find nearest grid cell
+                distances = har_grid.geometry.centroid.distance(hru_centroid)
+                nearest_idx = distances.idxmin()
+                nearest_cell_id = har_grid.loc[nearest_idx, 'cell_id']
+                
+                self.logger.debug(f"   HRU {hru_id}: assigned to cell {nearest_cell_id}")
+                
+                # Create new row with weight = 1.0
+                new_row = {
+                    hru_id_col: hru_id,
+                    'cell_id': nearest_cell_id,
+                    'area_rel': 1.0,
+                    'normalized_relative_area': 1.0,
+                    'area': 0,
+                    'geometry': hru_geom
+                }
+                new_rows.append(new_row)
+            
+            # Add new rows to relative_area
+            if new_rows:
+                new_df = gpd.GeoDataFrame(new_rows, crs=relative_area.crs)
+                relative_area = pd.concat([relative_area, new_df], ignore_index=True)
+                self.logger.info(f"✅ Added {len(new_rows)} missing HRU assignments")
+        
+        # ✅ VERIFICATION: Check that all HRUs now have weights
+        final_hrus_with_weights = set(relative_area[hru_id_col].values)
+        still_missing = all_hru_ids - final_hrus_with_weights
+        
+        if still_missing:
+            self.logger.error(f"❌ Still missing {len(still_missing)} HRUs after fix!")
+        else:
+            self.logger.info(f"✅ All {len(all_hru_ids)} HRUs have grid weights")
+        
+        # ✅ VERIFICATION: Check weight sums per HRU
+        weight_sums = relative_area.groupby(hru_id_col)['normalized_relative_area'].sum()
+        bad_sums = weight_sums[~np.isclose(weight_sums, 1.0, atol=0.001)]
+        
+        if len(bad_sums) > 0:
+            self.logger.warning(f"⚠️ {len(bad_sums)} HRUs have weight sums != 1.0")
+            for hru_id, weight_sum in bad_sums.head(5).items():
+                self.logger.warning(f"   HRU {hru_id}: sum = {weight_sum:.6f}")
+        else:
+            self.logger.info(f"✅ All HRU weight sums equal 1.0")
+        
+        # Write grid weights file
+        self._write_gridweights(HRU, har_grid, relative_area, hru_id_col)
+        
+        # Copy to model directory
+        self._copy_gridweights_to_model_directory()
+        
+        ds.close()
+        
+        self.logger.info("HAR grid weights generation completed!")
+        
+        return relative_area
+
+    #---------------------------------------------------------------------------------
+
+    def _write_gridweights(self, hru: gpd.GeoDataFrame, grid: gpd.GeoDataFrame, 
+                          relative_area: gpd.GeoDataFrame, hru_id_col: str) -> None:
+        """
+        Write HAR grid weights to file
+        """
+        number_HRUs = len(hru)
+        number_cells = len(grid)
+        HRU_list = list(relative_area[hru_id_col])
+        cell_id = list(relative_area['cell_id'])
+        rel_area = list(relative_area['normalized_relative_area'])
+        
+        filename = self.out_dir / 'GridWeights_HAR.txt'
+        
+        self.logger.info(f"Writing HAR grid weights to {filename}")
+        
+        with open(filename, 'w') as ff:
+            ff.write('# ---------------------------------------------- \n')
+            ff.write('# Raven GridWeights file for HAR v2 data         \n')
+            ff.write('# Generated by HARGridWeightsGenerator           \n')
+            ff.write(f'# Catchment: {self.gauge_id}                    \n')
+            ff.write(f'# Model type: {self.model_type}                 \n')
+            ff.write('# ---------------------------------------------- \n')
+            ff.write('\n')
+            ff.write(':GridWeights                     \n')
+            ff.write('   #                                \n')
+            ff.write('   # [# HRUs]                       \n')
+            ff.write('   :NumberHRUs       {}            \n'.format(number_HRUs))
+            ff.write('   :NumberGridCells       {}            \n'.format(number_cells))
+            ff.write('   #                                \n')
+            ff.write('   # [HRU ID] [Cell #] [w_kl]       \n')
+            for i in range(len(relative_area)):
+                ff.write("   {}   {}   {}\n".format(HRU_list[i], cell_id[i], rel_area[i]))
+            ff.write(':EndGridWeights \n')
+        
+        self.logger.info(f"HAR grid weights written to {filename}")
+
+    #---------------------------------------------------------------------------------
+
+    def _copy_gridweights_to_model_directory(self) -> None:
+        """
+        Copy GridWeights_HAR.txt to model-specific directory
+        """
+        import shutil
+        
+        gridweights_file = self.shared_data_dir / 'GridWeights_HAR.txt'
+        
+        if not gridweights_file.exists():
+            self.logger.warning(f"GridWeights_HAR.txt not found")
+            return
+        
+        dest = self.model_data_dir / 'GridWeights_HAR.txt'
+        
+        try:
+            shutil.copy2(gridweights_file, dest)
+            self.logger.info(f"📋 Copied GridWeights_HAR.txt to: {self.model_data_dir}")
+        except Exception as e:
+            self.logger.warning(f"Failed to copy GridWeights_HAR.txt: {e}")

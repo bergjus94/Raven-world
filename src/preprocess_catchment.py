@@ -266,12 +266,47 @@ class CatchmentProcessor:
             
         self.catchment_extent = extent_catchment
         return extent_catchment
+    
+    #---------------------------------------------------------------------------------
+
+    def _optimize_dem_clipping(self, dem, catchment_bounds):
+        """
+        Pre-clip DEM to rough bounding box before reprojection (much faster for large DEMs)
+        
+        Parameters
+        ----------
+        dem : xr.DataArray
+            Full DEM to clip
+        catchment_bounds : tuple
+            Bounding box (minx, miny, maxx, maxy) in EPSG:4326
+            
+        Returns
+        -------
+        xr.DataArray
+            Pre-clipped DEM (much smaller, faster to reproject)
+        """
+        # Add 0.5 degree buffer to catchment bounds (safety margin)
+        minx, miny, maxx, maxy = catchment_bounds
+        bbox_clip = (minx - 0.5, miny - 0.5, maxx + 0.5, maxy + 0.5)
+        
+        self.logger.debug(f"Pre-clipping DEM to bbox: {bbox_clip}")
+        
+        # Clip DEM to bounding box BEFORE reprojection (MUCH faster!)
+        dem_bbox = dem.rio.clip_box(*bbox_clip)
+        
+        original_size = dem.shape
+        clipped_size = dem_bbox.shape
+        reduction = (1 - (clipped_size[0] * clipped_size[1]) / (original_size[0] * original_size[1])) * 100
+        
+        self.logger.debug(f"DEM size reduced: {original_size} -> {clipped_size} ({reduction:.1f}% reduction)")
+        
+        return dem_bbox
 
     #---------------------------------------------------------------------------------
 
     def clip_srtm_dem(self) -> xr.DataArray:
         """
-        Clip the SRTM DEM to the catchment shapefile
+        Clip the Upper Indus DEM to the catchment shapefile
         
         Returns
         -------
@@ -292,47 +327,63 @@ class CatchmentProcessor:
         if self.catchment_extent is None:
             self.extract_catchment_shape()
         
-        if not self.raster_dir.exists():
-            raise FileNotFoundError(f"SRTM DEM not found: {self.raster_dir}")
+        # ✅ SIMPLIFIED: Use raster_dir from namelist (already points to dem_Indus.tif)
+        upper_indus_dem_path = self.main_dir / self.config['raster_dir']
         
-        # Open SRTM DEM data
-        dem = rxr.open_rasterio(self.raster_dir).squeeze()
+        if not upper_indus_dem_path.exists():
+            raise FileNotFoundError(
+                f"Upper Indus DEM not found: {upper_indus_dem_path}\n"
+                f"Expected path from namelist: {self.config['raster_dir']}\n"
+                f"Please run download_SRTM_Indus.py first to download the DEM"
+            )
         
-        # Get the original CRS of the DEM (usually EPSG:4326 for SRTM)
+        self.logger.debug(f"Opening Upper Indus DEM: {upper_indus_dem_path.name}")
+        
+        # Open Upper Indus DEM data (lazy loading - doesn't load full 2GB into memory!)
+        dem = rxr.open_rasterio(upper_indus_dem_path, chunks='auto').squeeze()
+        
+        # Get the original CRS of the DEM (should be EPSG:4326 for SRTM)
         dem_crs = dem.rio.crs
         self.logger.debug(f"DEM CRS: {dem_crs}")
         
-        # Determine target CRS based on catchment location
-        # Get catchment bounds to determine appropriate UTM zone
+        # Get catchment bounds in EPSG:4326 for pre-clipping
         catchment_bounds = self.catchment_extent.to_crs('EPSG:4326').total_bounds
         lon_center = (catchment_bounds[0] + catchment_bounds[2]) / 2
         lat_center = (catchment_bounds[1] + catchment_bounds[3]) / 2
         
-        # Calculate UTM zone
+        # ✅ Pre-clip to bounding box BEFORE reprojection (HUGE speedup!)
+        self.logger.debug("Pre-clipping DEM to catchment bounding box (this speeds up reprojection)")
+        dem_bbox = self._optimize_dem_clipping(dem, catchment_bounds)
+        
+        # Calculate appropriate UTM zone for this catchment
         utm_zone = int((lon_center + 180) / 6) + 1
         utm_crs = f"EPSG:326{utm_zone:02d}" if lat_center >= 0 else f"EPSG:327{utm_zone:02d}"
         
-        self.logger.debug(f"Using UTM CRS: {utm_crs}")
+        self.logger.debug(f"Using UTM CRS: {utm_crs} for catchment at ({lon_center:.2f}, {lat_center:.2f})")
         
-        # Reproject DEM and catchment to the same CRS (UTM)
-        dem_proj = dem.rio.reproject(utm_crs)
+        # Reproject the SMALL clipped DEM (much faster than reprojecting full 2GB!)
+        self.logger.debug("Reprojecting clipped DEM to UTM...")
+        dem_proj = dem_bbox.rio.reproject(utm_crs)
+        
+        # Reproject catchment to same UTM
         extent_proj = self.catchment_extent.to_crs(utm_crs)
         
-        # Clip raster to catchment boundary
+        # Final clip to exact catchment boundary
         clip_bound = extent_proj.geometry
+        self.logger.debug("Clipping to exact catchment boundary...")
         clipped_raster = dem_proj.rio.clip(clip_bound, from_disk=True)
         
-        # Handle SRTM no-data values (typically -32768 or 0 for water)
-        # Replace no-data values with NaN
+        # Handle SRTM no-data values
         nodata_value = clipped_raster.rio.nodata
         if nodata_value is not None:
             clipped_raster = clipped_raster.where(clipped_raster != nodata_value, other=float('nan'))
         
-        # Also handle common SRTM void values
+        # Handle common SRTM void values
         clipped_raster = clipped_raster.where(clipped_raster != -32768, other=float('nan'))
         clipped_raster = clipped_raster.where(clipped_raster > -9999, other=float('nan'))
         
         # Save clipped raster
+        self.logger.debug(f"Saving clipped DEM to: {out_raster_path}")
         clipped_raster.rio.to_raster(out_raster_path)
         
         self.logger.info(f"DEM clipped and saved. Shape: {clipped_raster.shape}, "
@@ -400,33 +451,50 @@ class CatchmentProcessor:
         
         # Plot if debug is enabled
         if self.debug:
+            # ✅ FIX: Downsample for plotting to avoid memory spike
+            downsample_factor = max(1, max(slope.shape) // 2000)  # Max 2000 pixels in any dimension
+            
+            if downsample_factor > 1:
+                self.logger.debug(f"Downsampling by factor {downsample_factor} for plotting (memory optimization)")
+                dem_plot = self.dem_data[::downsample_factor, ::downsample_factor]
+                slope_plot = slope[::downsample_factor, ::downsample_factor]
+                aspect_plot = aspect[::downsample_factor, ::downsample_factor]
+            else:
+                dem_plot = self.dem_data
+                slope_plot = slope
+                aspect_plot = aspect
+            
             plt.figure(figsize=(15, 5))
             
             plt.subplot(1, 3, 1)
             plt.title('SRTM DEM')
-            plt.imshow(xr_dem, cmap='terrain')
+            plt.imshow(dem_plot, cmap='terrain')
             plt.colorbar(label='Elevation (m)')
             
             plt.subplot(1, 3, 2)
             plt.title('Slope')
-            plt.imshow(slope, cmap='viridis')
+            plt.imshow(slope_plot, cmap='viridis')
             plt.colorbar(label='Slope (degrees)')
             
             plt.subplot(1, 3, 3)
             plt.title('Aspect')
-            plt.imshow(aspect, cmap='twilight')
+            plt.imshow(aspect_plot, cmap='twilight')
             plt.colorbar(label='Aspect (degrees)')
             
             plt.tight_layout()
             
             # Save plot if debug mode
-            if self.debug:
-                plot_dir = Path(self.model_dir, 'plots')
-                plot_path = plot_dir / f"dem_slope_aspect_{self.gauge_id}.png"
-                plt.savefig(plot_path)
+            plot_dir = Path(self.model_dir, 'plots')
+            plot_path = plot_dir / f"dem_slope_aspect_{self.gauge_id}.png"
+            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+            self.logger.debug(f"Saved plot to {plot_path}")
+            plt.close()  # ✅ Close figure to free memory
             
-            plt.show()
-        
+            # Clear plot data from memory
+            del dem_plot, slope_plot, aspect_plot
+            import gc
+            gc.collect()
+
         self.slope_data = slope
         self.aspect_data = aspect
         return slope, aspect
@@ -436,6 +504,7 @@ class CatchmentProcessor:
     def reclassify_landuse(self) -> xr.DataArray:
         """
         Reclassify the landuse raster from ESA WorldCover V2
+        ✅ UPDATED: Handles both individual catchment files and basin-wide Indus landuse
         
         Returns
         -------
@@ -460,15 +529,119 @@ class CatchmentProcessor:
         if self.catchment_extent is None:
             self.extract_catchment_shape()
         
-        if not self.landuse_dir.exists():
-            raise FileNotFoundError(f"ESA WorldCover file not found: {self.landuse_dir}")
+        # Make sure DEM is loaded (we need it for CRS and grid matching)
+        if self.dem_data is None:
+            self.clip_srtm_dem()
         
-        # Open ESA WorldCover data
-        landuse = rxr.open_rasterio(self.landuse_dir).squeeze()
+        # Determine landuse source path
+        landuse_source_path = self.main_dir / self.config['landuse_dir']
+        
+        if not landuse_source_path.exists():
+            raise FileNotFoundError(f"ESA WorldCover file not found: {landuse_source_path}")
+        
+        # Check file size
+        file_size_mb = landuse_source_path.stat().st_size / 1024 / 1024
+        self.logger.info(f"Landuse file: {landuse_source_path.name} ({file_size_mb:.1f} MB)")
+        
+        # ✅ FIX: Use optimized loading for files > 50 MB OR if filename contains 'Indus'
+        # Even 50 MB compressed can be huge when decompressed!
+        use_optimized = (file_size_mb > 50) or ('indus' in landuse_source_path.name.lower())
+        
+        if use_optimized:
+            self.logger.info(f"Using optimized windowed loading for large landuse file")
+            
+            # Get catchment bounds in EPSG:4326 with 0.5 degree buffer
+            catchment_bounds = self.catchment_extent.to_crs('EPSG:4326').total_bounds
+            minx, miny, maxx, maxy = catchment_bounds
+            
+            # Add 0.5 degree buffer (same as DEM clipping)
+            bbox = (minx - 0.5, miny - 0.5, maxx + 0.5, maxy + 0.5)
+            
+            self.logger.debug(f"Catchment bounds: {catchment_bounds}")
+            self.logger.debug(f"Pre-clipping landuse to bbox: {bbox}")
+            
+            try:
+                # Use rasterio windowed reading for memory efficiency
+                with rasterio.open(landuse_source_path) as src:
+                    self.logger.debug(f"Landuse CRS: {src.crs}")
+                    self.logger.debug(f"Landuse full shape: {src.shape} ({src.shape[0] * src.shape[1] / 1e6:.1f} million pixels)")
+                    self.logger.debug(f"Landuse bounds: {src.bounds}")
+                    
+                    # Convert bbox to source CRS if needed
+                    if src.crs and str(src.crs) != 'EPSG:4326':
+                        from pyproj import Transformer
+                        transformer = Transformer.from_crs('EPSG:4326', src.crs, always_xy=True)
+                        # Transform corners
+                        x1, y1 = transformer.transform(bbox[0], bbox[1])
+                        x2, y2 = transformer.transform(bbox[2], bbox[3])
+                        bbox_transformed = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+                        self.logger.debug(f"Transformed bbox to {src.crs}: {bbox_transformed}")
+                        window = rasterio.windows.from_bounds(*bbox_transformed, transform=src.transform)
+                    else:
+                        window = rasterio.windows.from_bounds(*bbox, transform=src.transform)
+                    
+                    # Round window to valid pixel coordinates
+                    window = window.round_offsets().round_lengths()
+                    
+                    # Clamp window to valid bounds
+                    window = rasterio.windows.Window(
+                        col_off=max(0, window.col_off),
+                        row_off=max(0, window.row_off),
+                        width=min(window.width, src.width - max(0, window.col_off)),
+                        height=min(window.height, src.height - max(0, window.row_off))
+                    )
+                    
+                    self.logger.debug(f"Reading window: {window}")
+                    self.logger.debug(f"Window size: {window.height} x {window.width} = {window.height * window.width / 1e6:.2f} million pixels")
+                    
+                    # Read only the windowed data
+                    landuse_data = src.read(1, window=window)
+                    landuse_transform = src.window_transform(window)
+                    landuse_crs = src.crs
+                    
+                    self.logger.info(f"Loaded windowed landuse: {landuse_data.shape} "
+                                f"(reduced from {src.shape})")
+                
+                # Calculate coordinates for the windowed data
+                height, width = landuse_data.shape
+                
+                # Calculate coordinates from transform
+                cols = np.arange(width)
+                rows = np.arange(height)
+                xs = landuse_transform[2] + cols * landuse_transform[0]
+                ys = landuse_transform[5] + rows * landuse_transform[4]
+                
+                # Create xarray DataArray
+                landuse = xr.DataArray(
+                    data=landuse_data,
+                    dims=['y', 'x'],
+                    coords={'y': ys, 'x': xs}
+                )
+                landuse = landuse.rio.write_crs(landuse_crs)
+                landuse = landuse.rio.write_transform(landuse_transform)
+                
+                self.logger.debug(f"Created xarray DataArray with shape {landuse.shape}")
+                
+                # Free the numpy array
+                del landuse_data
+                import gc
+                gc.collect()
+                
+            except Exception as e:
+                self.logger.error(f"Error during windowed reading: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+                
+        else:
+            # Small file, load normally
+            self.logger.debug("Small landuse file, loading normally")
+            landuse = rxr.open_rasterio(landuse_source_path).squeeze()
 
         # CONVERT TO FLOAT FIRST, THEN HANDLE CLASS 0
-        landuse_values = landuse.values.astype(np.float32)  # Convert to float first!
-        landuse_values[landuse_values == 0] = np.nan  # Now we can assign NaN
+        self.logger.debug("Converting landuse values to float and handling nodata")
+        landuse_values = landuse.values.astype(np.float32)
+        landuse_values[landuse_values == 0] = np.nan
         
         # Update the DataArray with cleaned values
         landuse = xr.DataArray(
@@ -478,34 +651,50 @@ class CatchmentProcessor:
             attrs=landuse.attrs
         )
         
+        # Free memory
+        del landuse_values
+        import gc
+        gc.collect()
+        
+        # Ensure CRS is set
+        if landuse.rio.crs is None:
+            self.logger.warning("Landuse CRS was lost, re-setting")
+            landuse = landuse.rio.write_crs(landuse_crs)
+        
         # Get target CRS from DEM (should be UTM)
-        target_crs = self.dem_data.rio.crs if self.dem_data is not None else self.catchment_extent.crs
+        target_crs = self.dem_data.rio.crs
+        
+        self.logger.debug(f"Reprojecting landuse from {landuse.rio.crs} to {target_crs}")
         landuse = landuse.rio.reproject(target_crs)
         
         # Clip raster to catchment extent
         extent = self.catchment_extent.to_crs(target_crs)
         clip_bound = extent.geometry
+        
+        self.logger.debug("Clipping landuse to exact catchment boundary")
         landuse = landuse.rio.clip(clip_bound, from_disk=True)
         
         # IMPORTANT: Make sure the landuse data matches the DEM's grid
         if self.dem_data is not None and landuse.shape != self.dem_data.shape:
-            self.logger.warning(f"Resampling landuse to match DEM grid: {landuse.shape} -> {self.dem_data.shape}")
+            self.logger.info(f"Resampling landuse to match DEM grid: {landuse.shape} -> {self.dem_data.shape}")
             landuse = landuse.rio.reproject_match(self.dem_data)
         
-        # Create a copy of the landuse values to avoid in-place operations
+        # Create a copy of the landuse values for reclassification
         lista = landuse.values.copy()
         
-        # Define reclassification dictionary (same as your original)
+        # Define reclassification dictionary
+        # ESA WorldCover classes to Raven landuse classes
         reclassification_dict = {
-            '1': (lista == 10) | (lista == 95),  # Forest
-            '2': (lista == 20) | (lista == 30) | (lista == 90),  # Open
+            '1': (lista == 10) | (lista == 95),  # Forest (Tree cover, Mangroves)
+            '2': (lista == 20) | (lista == 30) | (lista == 90),  # Open (Shrubland, Grassland, Wetland)
             '3': (lista == 40),  # Crop
             '4': (lista == 50),  # Built
-            '5': (lista == 60) | (lista == 70) | (lista == 100),  # Rock
+            '5': (lista == 60) | (lista == 70) | (lista == 100),  # Rock (Bare, Snow/Ice, Moss)
             '6': (lista == 80),  # Lake
         }
         
         # Apply reclassification
+        self.logger.debug("Reclassifying landuse values")
         for value, condition in reclassification_dict.items():
             lista[condition] = int(value)
         
@@ -517,9 +706,18 @@ class CatchmentProcessor:
             attrs=landuse.attrs
         )
         
-        # SAVE RECLASSIFIED LANDUSE - Make sure this is saved!
+        # Ensure spatial reference is preserved
+        landuse_new = landuse_new.rio.write_crs(target_crs)
+        if hasattr(landuse, 'rio') and landuse.rio.transform() is not None:
+            landuse_new = landuse_new.rio.write_transform(landuse.rio.transform())
+        
+        # SAVE RECLASSIFIED LANDUSE
         self.logger.debug(f"Saving reclassified landuse to {landuse_path}")
         landuse_new.rio.to_raster(landuse_path)
+        
+        # Log summary
+        unique_values = np.unique(lista[~np.isnan(lista)])
+        self.logger.info(f"Reclassified landuse saved. Unique classes: {unique_values}")
         
         # Plot if debug is enabled
         if self.debug:
@@ -1677,7 +1875,7 @@ class HRUConnectivityCalculator:
             self.model_dir = main_dir / namelist_config.get('config_dir') / f"catchment_{self.gauge_id}"
             
             # Optional parameters from namelist or defaults
-            self.mode = namelist_config.get('mode', 'single')
+            self.mode = namelist_config.get('nconnect', 'single')
             self.min_area_threshold = namelist_config.get('min_area_threshold', 0.01)
             self.debug = namelist_config.get('debug', False)
             
