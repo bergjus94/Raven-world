@@ -411,50 +411,50 @@ def plot_hydrological_regime_subplots(multi_config, validation_start=None, valid
         
         # Plot observed data first (if available)
         if obs_data is not None:
-            ax.plot(obs_data.index, obs_data.values, 'k-', linewidth=2.5, 
+            ax.plot(obs_data.index, obs_data.values, 'k-', linewidth=3.5, 
                    label='Observed', zorder=10)
         
         # Plot simulated data for this configuration
         if 'sim_Q' in monthly_df.columns:
             ax.plot(monthly_df.index, monthly_df['sim_Q'], 
-                   color=color, linewidth=2.5, label='Simulated', zorder=5)
+                   color=color, linewidth=3, label='Simulated', zorder=5)
         
         # Formatting for this subplot
-        ax.set_title(f'{name}', fontsize=12, fontweight='bold')
+        ax.set_title(f'{name}', fontsize=16, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.7, zorder=0)
-        ax.legend(loc='best', fontsize=10)
+        ax.legend(loc='best', fontsize=13)
         
         # Add performance metrics as text
         if perf:
             perf_text = f"NSE={perf['NSE']:.3f}\nKGE={perf['KGE']:.3f}"
             ax.text(0.02, 0.98, perf_text, transform=ax.transAxes, 
-                   fontsize=9, verticalalignment='top',
+                   fontsize=12, verticalalignment='top',
                    bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
         
         # Set x-axis labels for bottom row
         if i >= (n_rows - 1) * n_cols or i >= n_configs - n_cols:
             ax.set_xticks(range(1, 13))
             ax.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+                               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], fontsize=13)
         
         # Set y-axis label for leftmost column
         if i % n_cols == 0:
-            ax.set_ylabel('Discharge (m³/s)', fontsize=11)
+            ax.set_ylabel('Discharge (m³/s)', fontsize=15, fontweight='bold')
     
     # Hide unused subplots
     for i in range(n_configs, len(axes)):
         axes[i].set_visible(False)
     
     # Add overall title and labels
-    fig.suptitle(f'Hydrological Regime Comparison by Configuration - Catchment {gauge_id}\n'
-                f'Validation Period: {validation_start} to {validation_end}', 
-                fontsize=16, fontweight='bold', y=0.98)
+    #fig.suptitle(f'Hydrological Regime Comparison by Configuration - Catchment {gauge_id}\n'
+    #            f'Validation Period: {validation_start} to {validation_end}', 
+    #            fontsize=16, fontweight='bold', y=0.98)
     
     # Add common x-label
-    fig.text(0.5, 0.02, 'Month', ha='center', fontsize=14)
+    fig.text(0.5, 0.02, 'Month', ha='center', fontsize=16, fontweight='bold')
     
     plt.tight_layout()
-    plt.subplots_adjust(top=0.92, bottom=0.08)
+    plt.subplots_adjust(top=0.95, bottom=0.08)
     
     # Save plot
     save_path = plot_dir / f'hydrological_regime_subplots_{gauge_id}.png'
@@ -2499,6 +2499,1042 @@ def plot_streamflow_contributions_comparison(multi_config, validation_start=None
                 print(f"    Snowmelt contribution: {snowmelt_pct:.1f}% of simulated flow")
     
     return config_contributions
+
+#--------------------------------------------------------------------------------
+
+def plot_streamflow_glogem_snowmelt_regime_comparison(multi_config, validation_start=None, validation_end=None, unit='mm'):
+    """
+    Plot streamflow regime with GloGEM ice melt and total snowmelt for multiple configurations.
+    
+    Shows stacked contributions in separate subplots for each configuration:
+    - Total Snowmelt (GloGEM snowmelt + HBV snowmelt) - filled area
+    - GloGEM ice melt - filled area
+    - Observed streamflow - solid line
+    - Simulated streamflow - dashed line
+    
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary containing:
+        - 'main_dir': main directory path
+        - 'gauge_id': gauge identifier
+        - 'configs': list of configuration directory names
+        - 'config_colors': dict mapping config names to colors
+        - 'config_names': dict mapping config names to display names
+        - 'model_type': model type (default 'HBV')
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+    unit : str, optional
+        Unit for display ('mm' for mm/day, 'm3' for m³/s), default is 'mm'
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing regime data for each configuration
+    """
+    
+    # Use dates from multi_config if not provided
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+    
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    model_type = multi_config.get('model_type', 'HBV')
+    
+    print(f"Creating streamflow regime with GloGEM and snowmelt comparison for {len(configs)} configurations:")
+    print(f"  - Catchment: {gauge_id}")
+    print(f"  - Validation period: {validation_start} to {validation_end}")
+    print(f"  - Unit: {unit}")
+    
+    # Create plot directory
+    plot_dir = create_multi_plot_dir(multi_config)
+    
+    # Set unit label
+    unit_label = 'mm/day' if unit == 'mm' else 'm³/s'
+    
+    # Store results for each configuration
+    config_results = {}
+    obs_data = None  # Store observed streamflow (should be same for all configs)
+    
+    # Process each configuration
+    for config_dir in configs:
+        config_path = Path(multi_config['main_dir']) / config_dir
+        catchment_dir = config_path / f"catchment_{gauge_id}" / model_type
+        
+        print(f"\n{'='*60}")
+        print(f"Processing: {config_names.get(config_dir, config_dir)}")
+        print(f"{'='*60}")
+        
+        # Create temporary config for single-config functions
+        temp_config = {
+            'main_dir': multi_config['main_dir'],
+            'config_dir': config_dir,
+            'gauge_id': gauge_id,
+            'model_type': model_type,
+            'start_date': multi_config.get('start_date', '2000-01-01'),
+            'end_date': multi_config.get('end_date', '2020-12-31'),
+            'cali_end_date': multi_config.get('cali_end_date', '2010-12-31')
+        }
+        
+        try:
+            # Load catchment area for unit conversion
+            conversion_m3s_to_mm_day = None
+            if unit == 'mm':
+                topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                catchment_shape_file = topo_dir / "HRU.shp"
+                
+                if catchment_shape_file.exists():
+                    import geopandas as gpd
+                    hru_gdf = gpd.read_file(catchment_shape_file)
+                    total_area_km2 = hru_gdf['Area_km2'].sum()
+                    conversion_m3s_to_mm_day = 86400 / (total_area_km2 * 1000000) * 1000
+                    print(f"  Catchment area: {total_area_km2:.2f} km²")
+            
+            # 1. LOAD STREAMFLOW DATA
+            from postprocessing_single import load_hydrograph_data
+            streamflow_data = load_hydrograph_data(temp_config)
+            if streamflow_data is None:
+                print(f"  ⚠️  Skipping {config_dir}: Could not load streamflow data")
+                continue
+            
+            # Filter for validation period
+            start_date = pd.to_datetime(validation_start)
+            end_date = pd.to_datetime(validation_end)
+            
+            streamflow_mask = (streamflow_data['date'] >= start_date) & (streamflow_data['date'] <= end_date)
+            streamflow_filtered = streamflow_data[streamflow_mask].copy()
+            
+            if len(streamflow_filtered) == 0:
+                print(f"  ⚠️  Skipping {config_dir}: No streamflow data in validation period")
+                continue
+            
+            # Convert streamflow if needed
+            if unit == 'mm' and conversion_m3s_to_mm_day is not None:
+                streamflow_filtered['obs_Q_converted'] = streamflow_filtered['obs_Q'] * conversion_m3s_to_mm_day
+                streamflow_filtered['sim_Q_converted'] = streamflow_filtered['sim_Q'] * conversion_m3s_to_mm_day
+            else:
+                streamflow_filtered['obs_Q_converted'] = streamflow_filtered['obs_Q']
+                streamflow_filtered['sim_Q_converted'] = streamflow_filtered['sim_Q']
+            
+            # Calculate monthly regime for streamflow
+            streamflow_filtered['month'] = streamflow_filtered['date'].dt.month
+            
+            streamflow_regime = {}
+            if 'obs_Q_converted' in streamflow_filtered.columns:
+                streamflow_regime['observed'] = streamflow_filtered.groupby('month')['obs_Q_converted'].mean()
+                # Store observed data for plotting (same for all configs)
+                if obs_data is None:
+                    obs_data = streamflow_regime['observed']
+            
+            if 'sim_Q_converted' in streamflow_filtered.columns:
+                streamflow_regime['simulated'] = streamflow_filtered.groupby('month')['sim_Q_converted'].mean()
+            
+            # 2. LOAD GLOGEM DATA
+            from postprocessing_single import load_glogem_data
+            glogem_df = load_glogem_data(temp_config, unit='mm', plot=False)
+            
+            if glogem_df is None:
+                print(f"  ⚠️  Skipping {config_dir}: Could not load GloGEM data")
+                continue
+            
+            # Filter GloGEM data for validation period
+            glogem_mask = (glogem_df['date'] >= start_date) & (glogem_df['date'] <= end_date)
+            glogem_filtered = glogem_df[glogem_mask].copy()
+            
+            if len(glogem_filtered) == 0:
+                print(f"  ⚠️  Skipping {config_dir}: No GloGEM data in validation period")
+                continue
+            
+            # Calculate monthly regime for GloGEM components
+            glogem_filtered['month'] = glogem_filtered['date'].dt.month
+            
+            # Use NORMALIZED (catchment area) values for fair comparison with streamflow
+            glogem_icemelt_regime = glogem_filtered.groupby('month')['icemelt_normalized'].mean()
+            glogem_snowmelt_regime = glogem_filtered.groupby('month')['snowmelt_normalized'].mean()
+            
+            # 3. LOAD HBV SNOWMELT MASS LOADINGS
+            from postprocessing_single import load_snowmelt_mass_loadings
+            hbv_snowmelt_df = load_snowmelt_mass_loadings(temp_config, validation_start, validation_end, unit=unit)
+            
+            if hbv_snowmelt_df is None:
+                print(f"  ⚠️  Skipping {config_dir}: Could not load HBV snowmelt data")
+                continue
+            
+            # Determine snowmelt column based on unit
+            snowmelt_col = 'snowmelt_mm_day' if unit == 'mm' and 'snowmelt_mm_day' in hbv_snowmelt_df.columns else 'snowmelt_m3s'
+            
+            # Calculate monthly regime for HBV snowmelt
+            hbv_snowmelt_df['month'] = hbv_snowmelt_df['date'].dt.month
+            hbv_snowmelt_regime = hbv_snowmelt_df.groupby('month')[snowmelt_col].mean()
+            
+            # 4. COMBINE SNOWMELT SOURCES
+            total_snowmelt_regime = glogem_snowmelt_regime.add(hbv_snowmelt_regime, fill_value=0)
+            
+            # Store results
+            config_results[config_dir] = {
+                'streamflow': streamflow_regime,
+                'glogem_icemelt': glogem_icemelt_regime,
+                'glogem_snowmelt': glogem_snowmelt_regime,
+                'hbv_snowmelt': hbv_snowmelt_regime,
+                'total_snowmelt': total_snowmelt_regime,
+                'color': config_colors.get(config_dir, '#1f77b4'),
+                'name': config_names.get(config_dir, config_dir)
+            }
+            
+            print(f"  ✓ Successfully processed {config_names.get(config_dir, config_dir)}")
+            print(f"    GloGEM ice melt mean: {glogem_icemelt_regime.mean():.4f} {unit_label}")
+            print(f"    Total snowmelt mean: {total_snowmelt_regime.mean():.4f} {unit_label}")
+            
+        except Exception as e:
+            print(f"  ⚠️  Error processing {config_dir}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    if len(config_results) == 0:
+        print("\n❌ No configurations were successfully processed")
+        return None
+    
+    # ===================================
+    # CREATE COMPARISON PLOT
+    # ===================================
+    
+    # Calculate subplot layout
+    n_configs = len(config_results)
+    if n_configs <= 2:
+        n_rows, n_cols = 1, n_configs
+        figsize = (14*n_configs, 8)
+    elif n_configs <= 4:
+        n_rows, n_cols = 2, 2
+        figsize = (24, 16)
+    elif n_configs <= 6:
+        n_rows, n_cols = 2, 3
+        figsize = (30, 16)
+    else:
+        n_cols = 3
+        n_rows = (n_configs + n_cols - 1) // n_cols
+        figsize = (30, 8*n_rows)
+    
+    # Create subplots
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True)
+    
+    # Handle single subplot case
+    if n_configs == 1:
+        axes = [axes]
+    elif n_rows == 1:
+        axes = axes
+    else:
+        axes = axes.flatten()
+    
+    months = range(1, 13)
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    
+    # Plot each configuration in its own subplot
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        
+        streamflow_regime = result['streamflow']
+        glogem_icemelt = result['glogem_icemelt']
+        total_snowmelt = result['total_snowmelt']
+        name = result['name']
+        
+        # Plot filled polygons FIRST (bottom layer, in order of magnitude)
+        # Total snowmelt as filled polygon - light blue
+        ax.fill_between(months, 0, total_snowmelt.values, 
+                        color='#B3D9FF', alpha=0.7, label='Total Snowmelt (GloGEM+HBV)', 
+                        zorder=1, edgecolor='#6DB3F2', linewidth=1.5)
+        
+        # GloGEM ice melt as filled polygon - brown/orange
+        ax.fill_between(months, 0, glogem_icemelt.values, 
+                        color='#C17817', alpha=0.6, label='GloGEM Ice Melt', 
+                        zorder=2, edgecolor='#8B5A00', linewidth=1.5)
+        
+        # Plot observed streamflow (thick solid line)
+        if 'observed' in streamflow_regime:
+            ax.plot(months, streamflow_regime['observed'].values, 'k-', 
+                   linewidth=3.5, label='Observed', zorder=4)
+        
+        # Plot simulated streamflow (dashed line)
+        if 'simulated' in streamflow_regime:
+            ax.plot(months, streamflow_regime['simulated'].values, 'C0--', 
+                   linewidth=3, label='Simulated', zorder=3)
+        
+        # Formatting for this subplot
+        ax.set_title(f'{name}', fontsize=16, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7, zorder=0)
+        ax.legend(loc='best', fontsize=13)
+        
+        # Set x-axis labels for bottom row
+        if i >= (n_rows - 1) * n_cols or i >= n_configs - n_cols:
+            ax.set_xticks(months)
+            ax.set_xticklabels(month_names, fontsize=13)
+        
+        # Set y-axis label for leftmost column
+        if i % n_cols == 0:
+            ax.set_ylabel(f'Discharge ({unit_label})', fontsize=15, fontweight='bold')
+        
+        # Add statistics text box
+        stats_lines = []
+        if 'simulated' in streamflow_regime:
+            sim_mean = streamflow_regime['simulated'].mean()
+            icemelt_mean = glogem_icemelt.mean()
+            snowmelt_mean = total_snowmelt.mean()
+            
+            if sim_mean > 0:
+                icemelt_pct = (icemelt_mean / sim_mean) * 100
+                snowmelt_pct = (snowmelt_mean / sim_mean) * 100
+                
+                stats_lines.append(f"Sim: {sim_mean:.2f} {unit_label}")
+                stats_lines.append(f"Ice: {icemelt_pct:.1f}%")
+                stats_lines.append(f"Snow: {snowmelt_pct:.1f}%")
+        
+        if stats_lines:
+            stats_text = '\n'.join(stats_lines)
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+                   verticalalignment='top', fontsize=12,
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.9))
+    
+    # Hide unused subplots
+    for i in range(n_configs, len(axes)):
+        axes[i].axis('off')
+    
+    # Add common x-label
+    fig.text(0.5, 0.02, 'Month', ha='center', fontsize=16, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.95, bottom=0.08)
+    
+    # Save plot
+    save_path = plot_dir / f'streamflow_glogem_snowmelt_regime_comparison_{unit}_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\n💾 Saved streamflow regime comparison plot to: {save_path}")
+    plt.show()
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print(f"STREAMFLOW REGIME WITH GLOGEM AND SNOWMELT COMPARISON")
+    print(f"{'='*60}")
+    print(f"Catchment: {gauge_id}")
+    print(f"Period: {validation_start} to {validation_end}")
+    print(f"Unit: {unit_label}")
+    print(f"Configurations processed: {len(config_results)}")
+    
+    for config_dir, result in config_results.items():
+        name = result['name']
+        streamflow = result['streamflow']
+        icemelt = result['glogem_icemelt']
+        snowmelt = result['total_snowmelt']
+        
+        print(f"\n{name}:")
+        if 'simulated' in streamflow:
+            sim_mean = streamflow['simulated'].mean()
+            icemelt_mean = icemelt.mean()
+            snowmelt_mean = snowmelt.mean()
+            
+            print(f"  Simulated flow: {sim_mean:.4f} {unit_label}")
+            print(f"  GloGEM ice melt: {icemelt_mean:.4f} {unit_label} ({(icemelt_mean/sim_mean*100):.1f}%)")
+            print(f"  Total snowmelt: {snowmelt_mean:.4f} {unit_label} ({(snowmelt_mean/sim_mean*100):.1f}%)")
+            print(f"  Combined melt: {(icemelt_mean+snowmelt_mean)/sim_mean*100:.1f}%")
+    
+    print(f"{'='*60}\n")
+    
+    return config_results
+
+#--------------------------------------------------------------------------------
+
+def plot_streamflow_all_melt_regime_comparison(multi_config, validation_start=None, validation_end=None, unit='mm'):
+    """
+    Plot streamflow regime with total glacier melt and snowmelt for multiple configurations.
+    
+    Shows stacked contributions in separate subplots for each configuration:
+    - Snowmelt (from mass loadings) - filled area
+    - Total Glacier Melt (ALL) - filled area
+    - Observed streamflow - solid line
+    - Simulated streamflow - dashed line
+    
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary containing:
+        - 'main_dir': main directory path
+        - 'gauge_id': gauge identifier
+        - 'configs': list of configuration directory names
+        - 'config_colors': dict mapping config names to colors
+        - 'config_names': dict mapping config names to display names
+        - 'model_type': model type (default 'HBV')
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+    unit : str, optional
+        Unit for display ('mm' for mm/day, 'm3' for m³/s), default is 'mm'
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing regime data for each configuration
+    """
+    
+    # Use dates from multi_config if not provided
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+    
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    model_type = multi_config.get('model_type', 'HBV')
+    
+    print(f"Creating streamflow regime with all melt contributions comparison for {len(configs)} configurations:")
+    print(f"  - Catchment: {gauge_id}")
+    print(f"  - Validation period: {validation_start} to {validation_end}")
+    print(f"  - Unit: {unit}")
+    
+    # Create plot directory
+    plot_dir = create_multi_plot_dir(multi_config)
+    
+    # Set unit label
+    unit_label = 'mm/day' if unit == 'mm' else 'm³/s'
+    
+    # Store results for each configuration
+    config_results = {}
+    obs_data = None  # Store observed streamflow (should be same for all configs)
+    
+    # Process each configuration
+    for config_dir in configs:
+        config_path = Path(multi_config['main_dir']) / config_dir
+        catchment_dir = config_path / f"catchment_{gauge_id}" / model_type
+        
+        print(f"\n{'='*60}")
+        print(f"Processing: {config_names.get(config_dir, config_dir)}")
+        print(f"{'='*60}")
+        
+        # Create temporary config for single-config functions
+        temp_config = {
+            'main_dir': multi_config['main_dir'],
+            'config_dir': config_dir,
+            'gauge_id': gauge_id,
+            'model_type': model_type,
+            'start_date': multi_config.get('start_date', '2000-01-01'),
+            'end_date': multi_config.get('end_date', '2020-12-31'),
+            'cali_end_date': multi_config.get('cali_end_date', '2010-12-31')
+        }
+        
+        try:
+            # Load catchment area for unit conversion
+            conversion_m3s_to_mm_day = None
+            if unit == 'mm':
+                topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                catchment_shape_file = topo_dir / "HRU.shp"
+                
+                if catchment_shape_file.exists():
+                    import geopandas as gpd
+                    hru_gdf = gpd.read_file(catchment_shape_file)
+                    total_area_km2 = hru_gdf['Area_km2'].sum()
+                    conversion_m3s_to_mm_day = 86400 / (total_area_km2 * 1000000) * 1000
+                    print(f"  Catchment area: {total_area_km2:.2f} km²")
+            
+            # 1. LOAD STREAMFLOW DATA
+            from postprocessing_single import load_hydrograph_data
+            streamflow_data = load_hydrograph_data(temp_config)
+            if streamflow_data is None:
+                print(f"  ⚠️  Skipping {config_dir}: Could not load streamflow data")
+                continue
+            
+            # Filter for validation period
+            start_date = pd.to_datetime(validation_start)
+            end_date = pd.to_datetime(validation_end)
+            
+            streamflow_mask = (streamflow_data['date'] >= start_date) & (streamflow_data['date'] <= end_date)
+            streamflow_filtered = streamflow_data[streamflow_mask].copy()
+            
+            if len(streamflow_filtered) == 0:
+                print(f"  ⚠️  Skipping {config_dir}: No streamflow data in validation period")
+                continue
+            
+            # Convert streamflow if needed
+            if unit == 'mm' and conversion_m3s_to_mm_day is not None:
+                streamflow_filtered['obs_Q_converted'] = streamflow_filtered['obs_Q'] * conversion_m3s_to_mm_day
+                streamflow_filtered['sim_Q_converted'] = streamflow_filtered['sim_Q'] * conversion_m3s_to_mm_day
+            else:
+                streamflow_filtered['obs_Q_converted'] = streamflow_filtered['obs_Q']
+                streamflow_filtered['sim_Q_converted'] = streamflow_filtered['sim_Q']
+            
+            # Calculate monthly regime for streamflow
+            streamflow_filtered['month'] = streamflow_filtered['date'].dt.month
+            
+            streamflow_regime = {}
+            if 'obs_Q_converted' in streamflow_filtered.columns:
+                streamflow_regime['observed'] = streamflow_filtered.groupby('month')['obs_Q_converted'].mean()
+                # Store observed data for plotting (same for all configs)
+                if obs_data is None:
+                    obs_data = streamflow_regime['observed']
+            
+            if 'sim_Q_converted' in streamflow_filtered.columns:
+                streamflow_regime['simulated'] = streamflow_filtered.groupby('month')['sim_Q_converted'].mean()
+            
+            # 2. LOAD SNOWMELT DATA
+            from postprocessing_single import load_snowmelt_mass_loadings
+            snowmelt_df = load_snowmelt_mass_loadings(temp_config, validation_start, validation_end, unit=unit)
+            
+            if snowmelt_df is None:
+                print(f"  ⚠️  Skipping {config_dir}: Could not load snowmelt data")
+                continue
+            
+            # Determine snowmelt column based on unit
+            snowmelt_col = 'snowmelt_mm_day' if unit == 'mm' and 'snowmelt_mm_day' in snowmelt_df.columns else 'snowmelt_m3s'
+            
+            # Calculate monthly regime for snowmelt
+            snowmelt_df['month'] = snowmelt_df['date'].dt.month
+            snowmelt_regime = snowmelt_df.groupby('month')[snowmelt_col].mean()
+            
+            # 3. LOAD GLACIER MELT DATA (ALL)
+            from postprocessing_single import load_glacier_melt_mass_loadings
+            glacier_data = load_glacier_melt_mass_loadings(temp_config, validation_start, validation_end, unit=unit)
+            
+            if glacier_data is None or glacier_data.get('all') is None:
+                print(f"  ⚠️  Skipping {config_dir}: Could not load glacier melt data")
+                continue
+            
+            # Determine glacier melt column based on unit
+            glacier_melt_col = 'glacier_melt_mm_day' if unit == 'mm' and 'glacier_melt_mm_day' in glacier_data['all'].columns else 'glacier_melt_m3s'
+            
+            # Calculate monthly regime for ALL glacier melt
+            glacier_all_df = glacier_data['all']
+            glacier_all_df['month'] = glacier_all_df['date'].dt.month
+            glacier_all_regime = glacier_all_df.groupby('month')[glacier_melt_col].mean()
+            
+            # Store results
+            config_results[config_dir] = {
+                'streamflow': streamflow_regime,
+                'snowmelt': snowmelt_regime,
+                'glacier_all': glacier_all_regime,
+                'color': config_colors.get(config_dir, '#1f77b4'),
+                'name': config_names.get(config_dir, config_dir)
+            }
+            
+            print(f"  ✓ Successfully processed {config_names.get(config_dir, config_dir)}")
+            print(f"    Snowmelt mean: {snowmelt_regime.mean():.4f} {unit_label}")
+            print(f"    Glacier melt mean: {glacier_all_regime.mean():.4f} {unit_label}")
+            
+        except Exception as e:
+            print(f"  ⚠️  Error processing {config_dir}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    if len(config_results) == 0:
+        print("\n❌ No configurations were successfully processed")
+        return None
+    
+    # ===================================
+    # CREATE COMPARISON PLOT
+    # ===================================
+    
+    # Calculate subplot layout
+    n_configs = len(config_results)
+    if n_configs <= 2:
+        n_rows, n_cols = 1, n_configs
+        figsize = (14*n_configs, 8)
+    elif n_configs <= 4:
+        n_rows, n_cols = 2, 2
+        figsize = (24, 16)
+    elif n_configs <= 6:
+        n_rows, n_cols = 2, 3
+        figsize = (30, 16)
+    else:
+        n_cols = 3
+        n_rows = (n_configs + n_cols - 1) // n_cols
+        figsize = (30, 8*n_rows)
+    
+    # Create subplots
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True)
+    
+    # Handle single subplot case
+    if n_configs == 1:
+        axes = [axes]
+    elif n_rows == 1:
+        axes = axes
+    else:
+        axes = axes.flatten()
+    
+    months = range(1, 13)
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    
+    # Plot each configuration in its own subplot
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        
+        streamflow_regime = result['streamflow']
+        snowmelt = result['snowmelt']
+        glacier_all = result['glacier_all']
+        name = result['name']
+        
+        # Plot filled polygons FIRST (bottom layer, in order of magnitude)
+        # Snowmelt as filled polygon - light blue
+        ax.fill_between(months, 0, snowmelt.values, 
+                        color='#B3D9FF', alpha=0.7, label='Snowmelt', 
+                        zorder=1, edgecolor='#6DB3F2', linewidth=1.5)
+        
+        # Glacier melt as filled polygon - brown/orange
+        ax.fill_between(months, 0, glacier_all.values, 
+                        color='#C17817', alpha=0.6, label='Glacier Runoff', 
+                        zorder=2, edgecolor='#8B5A00', linewidth=1.5)
+        
+        # Plot observed streamflow (thick solid line)
+        if 'observed' in streamflow_regime:
+            ax.plot(months, streamflow_regime['observed'].values, 'k-', 
+                   linewidth=3.5, label='Observed', zorder=4)
+        
+        # Plot simulated streamflow (dashed line)
+        if 'simulated' in streamflow_regime:
+            ax.plot(months, streamflow_regime['simulated'].values, 'C0--', 
+                   linewidth=3, label='Simulated', zorder=3)
+        
+        # Formatting for this subplot
+        ax.set_title(f'{name}', fontsize=16, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7, zorder=0)
+        ax.legend(loc='best', fontsize=13)
+        
+        # Set x-axis labels for bottom row
+        if i >= (n_rows - 1) * n_cols or i >= n_configs - n_cols:
+            ax.set_xticks(months)
+            ax.set_xticklabels(month_names, fontsize=13)
+        
+        # Set y-axis label for leftmost column
+        if i % n_cols == 0:
+            ax.set_ylabel(f'Discharge ({unit_label})', fontsize=15, fontweight='bold')
+        
+        # Add statistics text box
+        stats_lines = []
+        if 'simulated' in streamflow_regime:
+            sim_mean = streamflow_regime['simulated'].mean()
+            snowmelt_mean = snowmelt.mean()
+            glacier_mean = glacier_all.mean()
+            
+            if sim_mean > 0:
+                snowmelt_pct = (snowmelt_mean / sim_mean) * 100
+                glacier_pct = (glacier_mean / sim_mean) * 100
+                
+                stats_lines.append(f"Sim: {sim_mean:.2f} {unit_label}")
+                stats_lines.append(f"Snow: {snowmelt_pct:.1f}%")
+                stats_lines.append(f"Glacier: {glacier_pct:.1f}%")
+        
+        if stats_lines:
+            stats_text = '\n'.join(stats_lines)
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+                   verticalalignment='top', fontsize=12,
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.9))
+    
+    # Hide unused subplots
+    for i in range(n_configs, len(axes)):
+        axes[i].axis('off')
+    
+    # Add common x-label
+    fig.text(0.5, 0.02, 'Month', ha='center', fontsize=16, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.95, bottom=0.08)
+    
+    # Save plot
+    save_path = plot_dir / f'streamflow_all_melt_regime_comparison_{unit}_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\n💾 Saved streamflow all melt regime comparison plot to: {save_path}")
+    plt.show()
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print(f"STREAMFLOW REGIME WITH ALL MELT CONTRIBUTIONS COMPARISON")
+    print(f"{'='*60}")
+    print(f"Catchment: {gauge_id}")
+    print(f"Period: {validation_start} to {validation_end}")
+    print(f"Unit: {unit_label}")
+    print(f"Configurations processed: {len(config_results)}")
+    
+    for config_dir, result in config_results.items():
+        name = result['name']
+        streamflow = result['streamflow']
+        snowmelt = result['snowmelt']
+        glacier = result['glacier_all']
+        
+        print(f"\n{name}:")
+        if 'simulated' in streamflow:
+            sim_mean = streamflow['simulated'].mean()
+            snowmelt_mean = snowmelt.mean()
+            glacier_mean = glacier.mean()
+            
+            print(f"  Simulated flow: {sim_mean:.4f} {unit_label}")
+            print(f"  Snowmelt: {snowmelt_mean:.4f} {unit_label} ({(snowmelt_mean/sim_mean*100):.1f}%)")
+            print(f"  Glacier melt: {glacier_mean:.4f} {unit_label} ({(glacier_mean/sim_mean*100):.1f}%)")
+            print(f"  Combined melt: {(snowmelt_mean+glacier_mean)/sim_mean*100:.1f}%")
+    
+    print(f"{'='*60}\n")
+    
+    return config_results
+
+#--------------------------------------------------------------------------------
+
+def plot_comprehensive_annual_water_balance_comparison(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot comprehensive annual water balance comparison across multiple configurations.
+    
+    Creates side-by-side bar plots for each configuration showing:
+    - Rainfall (GloGEM + HBV)
+    - Snowmelt (GloGEM + HBV)
+    - Ice melt (GloGEM)
+    - Total input
+    - Observed streamflow
+    - Simulated streamflow
+    
+    All components are in mm/year for direct comparison.
+    
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary containing:
+        - 'main_dir': main directory path
+        - 'gauge_id': gauge identifier
+        - 'configs': list of configuration directory names
+        - 'config_colors': dict mapping config names to colors
+        - 'config_names': dict mapping config names to display names
+        - 'model_type': model type (default 'HBV')
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing annual water balance data for each configuration
+    """
+    
+    # Use dates from multi_config if not provided
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+    
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    model_type = multi_config.get('model_type', 'HBV')
+    
+    print(f"Creating comprehensive annual water balance comparison for {len(configs)} configurations:")
+    print(f"  - Catchment: {gauge_id}")
+    print(f"  - Validation period: {validation_start} to {validation_end}")
+    
+    # Create plot directory
+    plot_dir = create_multi_plot_dir(multi_config)
+    
+    # Store results for each configuration
+    config_results = {}
+    
+    # Process each configuration
+    for config_dir in configs:
+        config_path = Path(multi_config['main_dir']) / config_dir
+        catchment_dir = config_path / f"catchment_{gauge_id}" / model_type
+        
+        print(f"\n{'='*60}")
+        print(f"Processing: {config_names.get(config_dir, config_dir)}")
+        print(f"{'='*60}")
+        
+        # Create temporary config for single-config functions
+        temp_config = {
+            'main_dir': multi_config['main_dir'],
+            'config_dir': config_dir,
+            'gauge_id': gauge_id,
+            'model_type': model_type,
+            'start_date': multi_config.get('start_date', '2000-01-01'),
+            'end_date': multi_config.get('end_date', '2020-12-31'),
+            'cali_end_date': multi_config.get('cali_end_date', '2010-12-31'),
+            'coupled': multi_config.get('config_coupled', {}).get(config_dir, False)
+        }
+        
+        try:
+            # Load catchment area for unit conversion
+            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            catchment_shape_file = topo_dir / "HRU.shp"
+            
+            if not catchment_shape_file.exists():
+                print(f"  ⚠️  Skipping {config_dir}: Catchment shapefile not found")
+                continue
+            
+            import geopandas as gpd
+            hru_gdf = gpd.read_file(catchment_shape_file)
+            total_area_km2 = hru_gdf['Area_km2'].sum()
+            conversion_m3s_to_mm_day = 86400 / (total_area_km2 * 1000000) * 1000
+            print(f"  Catchment area: {total_area_km2:.2f} km²")
+            
+            # 1. LOAD STREAMFLOW DATA
+            from postprocessing_single import load_hydrograph_data
+            streamflow_data = load_hydrograph_data(temp_config)
+            if streamflow_data is None:
+                print(f"  ⚠️  Skipping {config_dir}: Could not load streamflow data")
+                continue
+            
+            # Filter for validation period
+            start_date = pd.to_datetime(validation_start)
+            end_date = pd.to_datetime(validation_end)
+            
+            streamflow_mask = (streamflow_data['date'] >= start_date) & (streamflow_data['date'] <= end_date)
+            streamflow_filtered = streamflow_data[streamflow_mask].copy()
+            
+            if len(streamflow_filtered) == 0:
+                print(f"  ⚠️  Skipping {config_dir}: No streamflow data in validation period")
+                continue
+            
+            # Convert streamflow from m³/s to mm/day
+            streamflow_filtered['obs_Q_mm_day'] = streamflow_filtered['obs_Q'] * conversion_m3s_to_mm_day
+            streamflow_filtered['sim_Q_mm_day'] = streamflow_filtered['sim_Q'] * conversion_m3s_to_mm_day
+            
+            # Calculate annual sums (mm/year)
+            streamflow_filtered['year'] = streamflow_filtered['date'].dt.year
+            streamflow_annual = streamflow_filtered.groupby('year').agg({
+                'obs_Q_mm_day': 'sum',
+                'sim_Q_mm_day': 'sum'
+            }).reset_index()
+            streamflow_annual.columns = ['year', 'obs_streamflow_mm', 'sim_streamflow_mm']
+            
+            # 2. LOAD GLOGEM DATA
+            from postprocessing_single import load_glogem_data
+            glogem_df = load_glogem_data(temp_config, unit='mm', plot=False)
+            
+            glogem_annual = None
+            if glogem_df is not None:
+                glogem_mask = (glogem_df['date'] >= start_date) & (glogem_df['date'] <= end_date)
+                glogem_filtered = glogem_df[glogem_mask].copy()
+                
+                if len(glogem_filtered) > 0:
+                    glogem_filtered['year'] = glogem_filtered['date'].dt.year
+                    glogem_annual = glogem_filtered.groupby('year').agg({
+                        'icemelt_normalized': 'sum',
+                        'snowmelt_normalized': 'sum',
+                        'rainfall_normalized': 'sum'
+                    }).reset_index()
+                    glogem_annual.columns = ['year', 'glogem_icemelt_mm', 'glogem_snowmelt_mm', 'glogem_rainfall_mm']
+            
+            # 3. LOAD HBV SNOWMELT DATA
+            from postprocessing_single import load_snowmelt_mass_loadings
+            snowmelt_df = load_snowmelt_mass_loadings(temp_config, validation_start, validation_end, unit='mm')
+            
+            snowmelt_annual = None
+            if snowmelt_df is not None:
+                snowmelt_col = 'snowmelt_mm_day' if 'snowmelt_mm_day' in snowmelt_df.columns else 'snowmelt_m3s'
+                
+                if snowmelt_col == 'snowmelt_m3s':
+                    snowmelt_df['snowmelt_mm_day'] = snowmelt_df['snowmelt_m3s'] * conversion_m3s_to_mm_day
+                
+                snowmelt_df['year'] = snowmelt_df['date'].dt.year
+                snowmelt_annual = snowmelt_df.groupby('year')['snowmelt_mm_day'].sum().reset_index()
+                snowmelt_annual.columns = ['year', 'hbv_snowmelt_mm']
+            
+            # 4. LOAD HBV RAINFALL DATA
+            from postprocessing_single import load_rainfall_mass_loadings
+            rainfall_df = load_rainfall_mass_loadings(temp_config, validation_start, validation_end)
+            
+            rainfall_annual = None
+            if rainfall_df is not None:
+                rainfall_df['year'] = rainfall_df['date'].dt.year
+                rainfall_annual = rainfall_df.groupby('year')['rainfall_mm_day'].sum().reset_index()
+                rainfall_annual.columns = ['year', 'hbv_rainfall_mm']
+            
+            # 5. COMBINE ALL DATA
+            annual_balance = streamflow_annual.copy()
+            
+            if glogem_annual is not None:
+                annual_balance = pd.merge(annual_balance, glogem_annual, on='year', how='inner')
+            if snowmelt_annual is not None:
+                annual_balance = pd.merge(annual_balance, snowmelt_annual, on='year', how='inner')
+            if rainfall_annual is not None:
+                annual_balance = pd.merge(annual_balance, rainfall_annual, on='year', how='inner')
+            
+            if len(annual_balance) == 0:
+                print(f"  ⚠️  Skipping {config_dir}: No overlapping years found")
+                continue
+            
+            # 6. CALCULATE COMBINED COMPONENTS
+            annual_balance['total_icemelt_mm'] = annual_balance.get('glogem_icemelt_mm', 0)
+            annual_balance['total_snowmelt_mm'] = (
+                annual_balance.get('glogem_snowmelt_mm', 0) + 
+                annual_balance.get('hbv_snowmelt_mm', 0)
+            )
+            annual_balance['total_rainfall_mm'] = (
+                annual_balance.get('glogem_rainfall_mm', 0) + 
+                annual_balance.get('hbv_rainfall_mm', 0)
+            )
+            annual_balance['total_input_mm'] = (
+                annual_balance['total_rainfall_mm'] + 
+                annual_balance['total_icemelt_mm'] +
+                annual_balance['total_snowmelt_mm']
+            )
+            
+            # Store results
+            config_results[config_dir] = {
+                'annual_balance': annual_balance,
+                'color': config_colors.get(config_dir, '#1f77b4'),
+                'name': config_names.get(config_dir, config_dir)
+            }
+            
+            print(f"  ✓ Successfully processed {config_names.get(config_dir, config_dir)}")
+            print(f"    Years: {len(annual_balance)}")
+            print(f"    Mean annual values (mm/year):")
+            print(f"      Ice melt: {annual_balance['total_icemelt_mm'].mean():.1f}")
+            print(f"      Snowmelt: {annual_balance['total_snowmelt_mm'].mean():.1f}")
+            print(f"      Rainfall: {annual_balance['total_rainfall_mm'].mean():.1f}")
+            print(f"      Sim. streamflow: {annual_balance['sim_streamflow_mm'].mean():.1f}")
+            
+        except Exception as e:
+            print(f"  ⚠️  Error processing {config_dir}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    if len(config_results) == 0:
+        print("\n❌ No configurations were successfully processed")
+        return None
+    
+    # ===================================
+    # CREATE COMPARISON BAR PLOT
+    # ===================================
+    
+    # Calculate subplot layout
+    n_configs = len(config_results)
+    if n_configs <= 2:
+        n_rows, n_cols = 1, n_configs
+        figsize = (12*n_configs, 10)
+    elif n_configs <= 4:
+        n_rows, n_cols = 2, 2
+        figsize = (24, 20)
+    elif n_configs <= 6:
+        n_rows, n_cols = 2, 3
+        figsize = (30, 20)
+    else:
+        n_cols = 3
+        n_rows = (n_configs + n_cols - 1) // n_cols
+        figsize = (30, 10*n_rows)
+    
+    # Create subplots
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=False, sharey=True)
+    
+    # Handle single subplot case
+    if n_configs == 1:
+        axes = [axes]
+    elif n_rows == 1:
+        axes = axes
+    else:
+        axes = axes.flatten()
+    
+    # Plot each configuration in its own subplot
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        annual_balance = result['annual_balance']
+        name = result['name']
+        
+        x = np.arange(len(annual_balance))
+        width = 0.15
+        
+        # Plot bars for each component
+        ax.bar(x - 2.5*width, annual_balance['total_rainfall_mm'], width, 
+               label='Rainfall', color='navy', alpha=0.8, edgecolor='black', linewidth=1)
+        
+        ax.bar(x - 1.5*width, annual_balance['total_snowmelt_mm'], width, 
+               label='Snowmelt', color='lightblue', alpha=0.8, edgecolor='black', linewidth=1)
+        
+        ax.bar(x - 0.5*width, annual_balance['total_icemelt_mm'], width, 
+               label='Ice Melt', color='grey', alpha=0.8, edgecolor='black', linewidth=1)
+        
+        ax.bar(x + 0.5*width, annual_balance['total_input_mm'], width, 
+               label='Total Input', color='darkgreen', alpha=0.8, edgecolor='black', linewidth=1)
+        
+        ax.bar(x + 1.5*width, annual_balance['obs_streamflow_mm'], width, 
+               label='Obs. Q', color='black', alpha=0.8, edgecolor='white', linewidth=1)
+        
+        ax.bar(x + 2.5*width, annual_balance['sim_streamflow_mm'], width, 
+               label='Sim. Q', color='orange', alpha=0.8, edgecolor='black', linewidth=1)
+        
+        # Formatting for this subplot
+        ax.set_title(f'{name}', fontsize=16, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(int(year)) for year in annual_balance['year']], rotation=45, fontsize=11)
+        ax.grid(True, axis='y', alpha=0.3, zorder=0)
+        
+        # Set y-axis label for leftmost column
+        if i % n_cols == 0:
+            ax.set_ylabel('Annual Sum (mm/year)', fontsize=15, fontweight='bold')
+        
+        # Set x-axis label for bottom row
+        if i >= (n_rows - 1) * n_cols or i >= n_configs - n_cols:
+            ax.set_xlabel('Year', fontsize=14, fontweight='bold')
+        
+        # Add legend to first subplot
+        if i == 0:
+            ax.legend(fontsize=11, loc='upper left', ncol=2)
+    
+    # Hide unused subplots
+    for i in range(n_configs, len(axes)):
+        axes[i].axis('off')
+    
+    plt.tight_layout()
+    
+    # Save plot
+    save_path = plot_dir / f'comprehensive_annual_water_balance_comparison_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\n💾 Saved water balance comparison plot to: {save_path}")
+    plt.show()
+    
+    # ===================================
+    # CREATE SUMMARY STATISTICS TABLE
+    # ===================================
+    
+    print(f"\n{'='*80}")
+    print(f"COMPREHENSIVE ANNUAL WATER BALANCE COMPARISON SUMMARY")
+    print(f"{'='*80}")
+    print(f"Catchment: {gauge_id}")
+    print(f"Period: {validation_start} to {validation_end}")
+    print(f"Configurations processed: {len(config_results)}")
+    
+    for config_dir, result in config_results.items():
+        name = result['name']
+        annual_balance = result['annual_balance']
+        
+        print(f"\n{name}:")
+        print(f"  Years: {len(annual_balance)} ({int(annual_balance['year'].min())} - {int(annual_balance['year'].max())})")
+        print(f"  Mean annual values (mm/year):")
+        print(f"    Rainfall: {annual_balance['total_rainfall_mm'].mean():.1f} ± {annual_balance['total_rainfall_mm'].std():.1f}")
+        print(f"    Snowmelt: {annual_balance['total_snowmelt_mm'].mean():.1f} ± {annual_balance['total_snowmelt_mm'].std():.1f}")
+        print(f"    Ice melt: {annual_balance['total_icemelt_mm'].mean():.1f} ± {annual_balance['total_icemelt_mm'].std():.1f}")
+        print(f"    Total input: {annual_balance['total_input_mm'].mean():.1f} ± {annual_balance['total_input_mm'].std():.1f}")
+        print(f"    Obs. streamflow: {annual_balance['obs_streamflow_mm'].mean():.1f} ± {annual_balance['obs_streamflow_mm'].std():.1f}")
+        print(f"    Sim. streamflow: {annual_balance['sim_streamflow_mm'].mean():.1f} ± {annual_balance['sim_streamflow_mm'].std():.1f}")
+        
+        # Calculate contribution percentages
+        sim_mean = annual_balance['sim_streamflow_mm'].mean()
+        if sim_mean > 0:
+            ice_pct = (annual_balance['total_icemelt_mm'].mean() / sim_mean) * 100
+            snow_pct = (annual_balance['total_snowmelt_mm'].mean() / sim_mean) * 100
+            rain_pct = (annual_balance['total_rainfall_mm'].mean() / sim_mean) * 100
+            
+            print(f"  Contributions to simulated streamflow:")
+            print(f"    Ice melt: {ice_pct:.1f}%")
+            print(f"    Snowmelt: {snow_pct:.1f}%")
+            print(f"    Rainfall: {rain_pct:.1f}%")
+            print(f"    Total: {ice_pct + snow_pct + rain_pct:.1f}%")
+    
+    print(f"{'='*80}\n")
+    
+    return config_results
 
 #--------------------------------------------------------------------------------
 ################################ uncertainties ##################################
