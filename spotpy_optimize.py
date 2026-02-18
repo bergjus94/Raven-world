@@ -1265,47 +1265,64 @@ class RavenSCEUA(object):
                 "  :WriteForcingFunctions\n",
                 "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE SNOW BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE RUNOFF BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE PRECIP BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE PRECIP BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE ATMOSPHERE BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE ATMOSPHERE BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE SOIL[0] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SOIL[1] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE AET BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE SURFACE_WATER BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE AET BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_BASIN\n",
                 "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE To:LAKE_STORAGE BY_BASIN\n",
-                "  :CustomOutput DAILY AVERAGE To:LAKE_STORAGE BY_HRU_GROUP\n",
-                "  :CustomOutput DAILY AVERAGE To:LAKE_STORAGE BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE TEMP_AVE  BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE TEMP_AVE  BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE POTENTIAL_MELT BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE POTENTIAL_MELT BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE RAINFALL BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE RAINFALL BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE SNOWFALL BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE SNOWFALL BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU_GROUP\n",
+                "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_HRU_GROUP\n",
+                "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_BASIN\n",
+                "  :CustomOutput DAILY AVERAGE Between:SNOW.And.ATMOSPHERE BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE Between:SNOW.And.ATMOSPHERE BY_HRU_GROUP\n",
                 "  :WriteMassLoadings\n",
             ]
             
-            # ✅ NEW: Define transport tracers for snowmelt and glacier melt tracking
-            transport_tracers = [
-                "\n#Transport for Snowmelt and Glacier Melt Tracking\n",
-                "\n",
-                ":Transport SNOWMELT TRACER\n",
-                ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0\n",
-                ":FixedConcentration SNOWMELT SLOW_RESERVOIR 0.0\n",
-                "\n",
-                ":Transport GLACIERMELT_ALL TRACER\n",
-                ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
-                "\n",
-                ":Transport GLACIERMELT_SMALL TRACER\n",
-                ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER\n",
-                "\n",
-                ":Transport GLACIERMELT_LARGE TRACER\n",
-                ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
-            ]
+            # ✅ Define transport tracers based on coupled flag
+            if self.coupled:
+                # COUPLED MODE: Tracers for GloGEM-driven glacier melt
+                transport_tracers = [
+                    "\n#Transport for Snowmelt and Glacier Melt Tracking (Coupled Mode)\n",
+                    "\n",
+                    ":Transport SNOWMELT TRACER\n",
+                    ":FixedConcentration SNOWMELT SNOW 1.0\n",
+                    "\n",
+                    ":Transport GLACIERMELT_ALL TRACER\n",
+                    ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
+                    "\n",
+                    ":Transport GLACIERMELT_SMALL TRACER\n",
+                    ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER\n",
+                    "\n",
+                    ":Transport GLACIERMELT_LARGE TRACER\n",
+                    ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
+                ]
+            else:
+                # NON-COUPLED MODE: Tracers for standard Raven glacier/snow processes
+                transport_tracers = [
+                    "\n#Transport for Snowmelt and Glacier Melt Tracking (Non-Coupled Mode)\n",
+                    "\n",
+                    ":Transport SNOWMELT TRACER\n",
+                    ":FixedConcentration SNOWMELT SNOW 1.0\n",
+                    "\n",
+                    ":Transport GLACIERMELT_ALL TRACER\n",
+                    ":FixedConcentration GLACIERMELT_ALL GLACIER 1.0\n",
+                ]
             
             # Find the #Output Options line and insert everything after it
             new_lines = []

@@ -120,51 +120,78 @@ class GloGEMProcessor:
         filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_scenario}.nc'
         return self.glogem_dir / filename
     
-    def _get_glacier_ids_from_catchment(self) -> Tuple[set, str]:
+    def _get_glacier_ids_from_catchment(self) -> Tuple[set, str, Dict[str, List[str]]]:
         """
-        Get glacier IDs needed for this catchment from HRU shapefile
+        Get glacier IDs needed for this catchment from glacier_id_mapping.csv.
+        ✅ UPDATED: Reads from glacier_id_mapping.csv instead of HRU.shp (no character limits!)
         
         Returns
         -------
-        Tuple[set, str]
-            Set of numeric glacier IDs and the RGI region code
+        Tuple[set, str, Dict[str, List[str]]]
+            - Set of numeric glacier IDs (with leading zeros, e.g., "00029")
+            - RGI region code  
+            - Dictionary mapping glacier size category ('large', 'small', 'all') to list of glacier IDs
         """
-        # Get catchment shapefile to identify needed glaciers
-        catchment_shape_file = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
+        self.logger.info("Getting glacier IDs from catchment...")
         
-        if not catchment_shape_file.exists():
-            raise FileNotFoundError(f"Catchment shapefile not found: {catchment_shape_file}")
+        # ✅ NEW: Read from glacier_id_mapping.csv instead of HRU shapefile
+        mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
         
-        catchment = gpd.read_file(catchment_shape_file)
+        if not mapping_path.exists():
+            self.logger.error(f"❌ Glacier ID mapping not found: {mapping_path}")
+            self.logger.error("Please run preprocess_catchment.py first to generate the mapping file!")
+            raise FileNotFoundError(f"Missing glacier_id_mapping.csv at {mapping_path}")
         
-        # Extract glacier IDs from the catchment
+        # Load the mapping CSV
+        mapping_df = pd.read_csv(mapping_path)
+        
+        self.logger.info(f"✅ Loaded {len(mapping_df)} glacier IDs from mapping file")
+        
+        # Extract glacier IDs and classify by size
         glacier_ids_needed = set()
+        large_glacier_ids = []
+        small_glacier_ids = []
         rgi_region_code = None
         
-        if 'Glacier_Cl' in catchment.columns:
-            glacier_series = catchment['Glacier_Cl'].dropna()
-            if not glacier_series.empty:
-                # Auto-detect RGI region code
-                for glacier_id in glacier_series.unique():
-                    if isinstance(glacier_id, str) and glacier_id.startswith('RGI60-'):
-                        parts = glacier_id.split('.')
-                        if len(parts) >= 2:
-                            rgi_region_code = parts[0]
-                            break
-                
-                self.logger.info(f"Auto-detected RGI region code: {rgi_region_code}")
-                
-                # Convert RGI60-XX.xxxxx to xxxxx format
-                for glacier_id in glacier_series.unique():
-                    if isinstance(glacier_id, str) and rgi_region_code and glacier_id.startswith(rgi_region_code + '.'):
-                        glacier_ids_needed.add(glacier_id.replace(rgi_region_code + '.', ''))
+        for _, row in mapping_df.iterrows():
+            rgi_id = row['RGIId']
+            numeric_id = str(row['numeric_id'])  # Ensure it's a string
+            is_large = row.get('is_large', False)  # Default to False if column missing
+            
+            # Auto-detect RGI region code from first glacier
+            if rgi_region_code is None and rgi_id.startswith('RGI60-'):
+                parts = rgi_id.split('.')
+                if len(parts) >= 2:
+                    rgi_region_code = parts[0]
+            
+            # Ensure numeric ID has leading zeros (5 digits) to match NetCDF format
+            numeric_id_padded = numeric_id.zfill(5)
+            glacier_ids_needed.add(numeric_id_padded)
+            
+            # Add to size category lists
+            if is_large:
+                large_glacier_ids.append(numeric_id_padded)
+            else:
+                small_glacier_ids.append(numeric_id_padded)
         
-        if not glacier_ids_needed:
-            self.logger.warning("No glacier IDs found in catchment shapefile")
-        else:
-            self.logger.info(f"Found {len(glacier_ids_needed)} glacier IDs in catchment")
+        # Create size category mapping
+        glacier_categories = {
+            'all': list(glacier_ids_needed),
+            'large': large_glacier_ids,
+            'small': small_glacier_ids
+        }
         
-        return glacier_ids_needed, rgi_region_code
+        self.logger.info(f"✅ Found {len(glacier_ids_needed)} glacier IDs in catchment")
+        self.logger.info(f"   - Large glaciers (>=2 km²): {len(large_glacier_ids)}")
+        self.logger.info(f"   - Small glaciers (<2 km²): {len(small_glacier_ids)}")
+        self.logger.info(f"   - RGI region code: {rgi_region_code}")
+        
+        # Debug: Show sample IDs
+        if self.debug and len(glacier_ids_needed) > 0:
+            sample_ids = list(glacier_ids_needed)[:5]
+            self.logger.debug(f"   Sample glacier IDs: {sample_ids}")
+        
+        return glacier_ids_needed, rgi_region_code, glacier_categories
     
     # ...existing code...
 
@@ -182,7 +209,7 @@ class GloGEMProcessor:
         self.logger.info("Processing GloGEM NetCDF files...")
         
         # Get glacier IDs needed for this catchment
-        glacier_ids_needed, rgi_region_code = self._get_glacier_ids_from_catchment()
+        glacier_ids_needed, rgi_region_code, glacier_categories = self._get_glacier_ids_from_catchment()
         
         if not glacier_ids_needed:
             return pd.DataFrame(columns=['id', 'date', 'q'])
@@ -356,24 +383,26 @@ class GloGEMProcessor:
 
     def create_catchment_averaged_melt(self) -> pd.DataFrame:
         """
-        Create an additional CSV file with catchment-averaged, area-weighted glacier data.
-        This does NOT replace the existing individual glacier CSV files.
+        Create catchment-averaged, area-weighted glacier data for ALL glaciers, LARGE glaciers, and SMALL glaciers.
+        ✅ UPDATED: Calculates 3 separate weighted averages (all, large >=2km², small <2km²)
         
         Process ALL components: icemelt, snowmelt, rain, and total melt
         
         Process:
         1. Load individual glacier data for each component (id, date, q)
         2. Weight each glacier's values by its actual area in catchment
-        3. Calculate area-weighted average: sum(value_i * area_i) / sum(area_i)
-        4. Normalize by glacier fraction to get values over whole catchment area
-        5. Save as GloGEM_catchment_averaged.csv
+        3. Calculate 3 area-weighted averages: 
+           - All glaciers: sum(value_i * area_i) / sum(area_i)
+           - Large glaciers (>=2km²): same but only for large glaciers
+           - Small glaciers (<2km²): same but only for small glaciers
+        4. Save as GloGEM_catchment_averaged.csv
         
         Returns
         -------
         pd.DataFrame
-            DataFrame with catchment-averaged data (date, icemelt_*, snowmelt_*, rain_*, melt_*)
+            DataFrame with catchment-averaged data (date, component_all, component_large, component_small)
         """
-        self.logger.info("Creating catchment-averaged glacier data file (ALL components)...")
+        self.logger.info("Creating catchment-averaged glacier data (ALL, LARGE, SMALL)...")
         
         # Output path for the new file
         topo_dir = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files"
@@ -385,50 +414,34 @@ class GloGEMProcessor:
             self.logger.info("   Loading existing file...")
             return pd.read_csv(output_path, parse_dates=['date'])
         
-        # Load HRU shapefile to get glacier areas
-        hru_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
-        hru_gdf = gpd.read_file(hru_path)
+        # Get glacier IDs by category
+        glacier_ids_needed, rgi_region_code, glacier_categories = self._get_glacier_ids_from_catchment()
         
-        # Get area column name
-        area_col = 'Area_km2' if 'Area_km2' in hru_gdf.columns else 'area'
+        # ✅ NEW: Load glacier areas from mapping CSV instead of shapefile
+        mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
         
-        # Auto-detect RGI region code
-        rgi_region_code = None
-        if 'Glacier_Cl' in hru_gdf.columns:
-            glacier_series = hru_gdf['Glacier_Cl'].dropna()
-            if not glacier_series.empty:
-                for glacier_id in glacier_series.unique():
-                    if isinstance(glacier_id, str) and glacier_id.startswith('RGI60-'):
-                        parts = glacier_id.split('.')
-                        if len(parts) >= 2:
-                            rgi_region_code = parts[0]
-                            break
+        if not mapping_path.exists():
+            raise FileNotFoundError(f"Glacier ID mapping not found: {mapping_path}")
         
-        self.logger.info(f"Auto-detected RGI region code: {rgi_region_code}")
+        mapping_df = pd.read_csv(mapping_path)
         
-        # Extract glacier areas from HRU shapefile
-        glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
-        
-        # Group by glacier ID and sum areas (in case glacier spans multiple HRUs)
-        glacier_areas = glacier_hrus.groupby('Glacier_Cl')[area_col].sum()
-        
-        # Create mapping: numeric ID -> area
+        # Create area mapping: numeric ID (with padding) -> area
         area_map = {}
-        for full_id, area in glacier_areas.items():
-            if isinstance(full_id, str) and rgi_region_code and full_id.startswith(rgi_region_code + '.'):
-                numeric_id = full_id.replace(rgi_region_code + '.', '')
-                area_map[numeric_id] = area
+        for _, row in mapping_df.iterrows():
+            numeric_id = str(row['numeric_id']).zfill(5)  # Ensure 5-digit format
+            area_km2 = row['area_km2']
+            area_map[numeric_id] = area_km2
         
-        self.logger.info(f"Found {len(area_map)} glaciers with areas")
+        self.logger.info(f"Loaded {len(area_map)} glacier areas from mapping CSV")
         
-        # Calculate total areas
-        total_glacier_area_km2 = sum(area_map.values())
-        total_catchment_area_km2 = hru_gdf[area_col].sum()
-        glacier_fraction = total_glacier_area_km2 / total_catchment_area_km2
+        # Calculate total areas by category
+        area_all = sum(area_map.get(gid, 0.0) for gid in glacier_categories['all'])
+        area_large = sum(area_map.get(gid, 0.0) for gid in glacier_categories['large'])
+        area_small = sum(area_map.get(gid, 0.0) for gid in glacier_categories['small'])
         
-        self.logger.info(f"Total catchment area: {total_catchment_area_km2:.2f} km²")
-        self.logger.info(f"Total glacier area: {total_glacier_area_km2:.2f} km²")
-        self.logger.info(f"Glacier fraction: {glacier_fraction*100:.1f}%")
+        self.logger.info(f"Total glacier area: {area_all:.2f} km²")
+        self.logger.info(f"  - Large glaciers (>=2 km²): {area_large:.2f} km² ({len(glacier_categories['large'])} glaciers)")
+        self.logger.info(f"  - Small glaciers (<2 km²): {area_small:.2f} km² ({len(glacier_categories['small'])} glaciers)")
         
         # Define components to process
         components = {
@@ -472,20 +485,45 @@ class GloGEMProcessor:
             if before_filter > after_filter:
                 self.logger.warning(f"  Removed {before_filter - after_filter} records without area information")
             
-            # STEP 1: Calculate area-weighted average (mm/day over glacier area)
-            # Formula: sum(value_i * area_i) / sum(area_i) for each date
-            daily_weighted = comp_df.groupby('date').apply(
-                lambda x: pd.Series({
-                    f'{component}_glacier_area': (x['q'] * x['area_km2']).sum() / x['area_km2'].sum()
-                })
-            ).reset_index()
+            # Classify glaciers as large or small
+            comp_df['glacier_size'] = comp_df['id'].apply(
+                lambda x: 'large' if x in glacier_categories['large'] else 'small'
+            )
             
-            # STEP 2: Normalize by glacier fraction to get values over whole catchment area
-            daily_weighted[f'{component}_catchment_area'] = daily_weighted[f'{component}_glacier_area'] * glacier_fraction
+            # ✅ Calculate 3 area-weighted averages: ALL, LARGE, SMALL
+            def calc_weighted_avg(group):
+                total_area = group['area_km2'].sum()
+                if total_area > 0:
+                    return (group['q'] * group['area_km2']).sum() / total_area
+                return 0.0
+            
+            # ALL glaciers
+            daily_all = comp_df.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
+            daily_all.columns = ['date', f'{component}_all']
+            
+            # LARGE glaciers
+            comp_large = comp_df[comp_df['glacier_size'] == 'large']
+            if not comp_large.empty:
+                daily_large = comp_large.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
+                daily_large.columns = ['date', f'{component}_large']
+            else:
+                daily_large = pd.DataFrame({'date': daily_all['date'], f'{component}_large': 0.0})
+            
+            # SMALL glaciers
+            comp_small = comp_df[comp_df['glacier_size'] == 'small']
+            if not comp_small.empty:
+                daily_small = comp_small.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
+                daily_small.columns = ['date', f'{component}_small']
+            else:
+                daily_small = pd.DataFrame({'date': daily_all['date'], f'{component}_small': 0.0})
+            
+            # Merge all three categories
+            daily_weighted = daily_all.merge(daily_large, on='date', how='outer').merge(daily_small, on='date', how='outer')
             
             self.logger.info(f"  ✓ Calculated area-weighted {component}")
-            self.logger.info(f"    Mean (glacier area): {daily_weighted[f'{component}_glacier_area'].mean():.3f} mm/day")
-            self.logger.info(f"    Mean (catchment area): {daily_weighted[f'{component}_catchment_area'].mean():.3f} mm/day")
+            self.logger.info(f"    Mean (all glaciers): {daily_weighted[f'{component}_all'].mean():.3f} mm/day")
+            self.logger.info(f"    Mean (large glaciers): {daily_weighted[f'{component}_large'].mean():.3f} mm/day")
+            self.logger.info(f"    Mean (small glaciers): {daily_weighted[f'{component}_small'].mean():.3f} mm/day")
             
             # Merge with master dataframe
             if all_daily_weighted is None:
@@ -496,6 +534,58 @@ class GloGEMProcessor:
         # Sort by date
         all_daily_weighted = all_daily_weighted.sort_values('date').reset_index(drop=True)
         
+        # ✅ NEW: Calculate catchment-scaled values
+        # Load HRU shapefile to get total catchment area and glacier HRU areas
+        hru_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
+        hru_gdf = gpd.read_file(hru_path)
+        area_col = 'Area_km2' if 'Area_km2' in hru_gdf.columns else 'area'
+        total_catchment_area_km2 = hru_gdf[area_col].sum()
+        
+        # Get glacier HRU areas from HRU shapefile
+        glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
+        
+        all_glacier_area_km2 = 0.0
+        large_glacier_area_km2 = 0.0
+        small_glacier_area_km2 = 0.0
+        
+        for idx, row in glacier_hrus.iterrows():
+            hru_area = row[area_col]
+            glacier_id_str = row['Glacier_Cl']
+            all_glacier_area_km2 += hru_area
+            
+            # Determine if this HRU contains large or small glaciers
+            # by checking the first glacier ID in the pipe-separated list
+            if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
+                id_list = glacier_id_str.split('|')
+                first_glacier_id = id_list[0].replace(rgi_region_code + '.', '') if rgi_region_code else id_list[0]
+                if first_glacier_id in glacier_categories['large']:
+                    large_glacier_area_km2 += hru_area
+                else:
+                    small_glacier_area_km2 += hru_area
+            elif isinstance(glacier_id_str, str):
+                glacier_id = glacier_id_str.replace(rgi_region_code + '.', '') if rgi_region_code else glacier_id_str
+                if glacier_id in glacier_categories['large']:
+                    large_glacier_area_km2 += hru_area
+                else:
+                    small_glacier_area_km2 += hru_area
+        
+        # Calculate glacier fractions
+        fraction_all = all_glacier_area_km2 / total_catchment_area_km2 if total_catchment_area_km2 > 0 else 0
+        fraction_large = large_glacier_area_km2 / total_catchment_area_km2 if total_catchment_area_km2 > 0 else 0
+        fraction_small = small_glacier_area_km2 / total_catchment_area_km2 if total_catchment_area_km2 > 0 else 0
+        
+        self.logger.info(f"\nCatchment scaling factors:")
+        self.logger.info(f"  Total catchment area: {total_catchment_area_km2:.2f} km²")
+        self.logger.info(f"  All glacier area (from HRU): {all_glacier_area_km2:.2f} km² → fraction: {fraction_all*100:.2f}%")
+        self.logger.info(f"  Large glacier area (from HRU): {large_glacier_area_km2:.2f} km² → fraction: {fraction_large*100:.2f}%")
+        self.logger.info(f"  Small glacier area (from HRU): {small_glacier_area_km2:.2f} km² → fraction: {fraction_small*100:.2f}%")
+        
+        # Add catchment-scaled columns for each component
+        for component in components.keys():
+            all_daily_weighted[f'{component}_all_catchment'] = all_daily_weighted[f'{component}_all'] * fraction_all
+            all_daily_weighted[f'{component}_large_catchment'] = all_daily_weighted[f'{component}_large'] * fraction_large
+            all_daily_weighted[f'{component}_small_catchment'] = all_daily_weighted[f'{component}_small'] * fraction_small
+        
         # Save to CSV
         all_daily_weighted.to_csv(output_path, index=False)
         
@@ -504,28 +594,25 @@ class GloGEMProcessor:
         self.logger.info(f"   Columns:")
         self.logger.info(f"     - date: Date")
         for component in components.keys():
-            self.logger.info(f"     - {component}_glacier_area: Area-weighted average over glacier area (mm/day)")
-            self.logger.info(f"     - {component}_catchment_area: Normalized by catchment area (mm/day)")
+            self.logger.info(f"     - {component}_all: All glaciers (mm/day over glacier area)")
+            self.logger.info(f"     - {component}_large: Large glaciers >=2km² (mm/day over large glacier area)")
+            self.logger.info(f"     - {component}_small: Small glaciers <2km² (mm/day over small glacier area)")
         
-        self.logger.info(f"\n   Summary Statistics (glacier area):")
+        self.logger.info(f"\n   Summary Statistics:")
         for component in components.keys():
-            mean_val = all_daily_weighted[f'{component}_glacier_area'].mean()
-            max_val = all_daily_weighted[f'{component}_glacier_area'].max()
-            self.logger.info(f"     {component}: mean={mean_val:.3f} mm/day, max={max_val:.3f} mm/day")
-        
-        self.logger.info(f"\n   Summary Statistics (catchment area):")
-        for component in components.keys():
-            mean_val = all_daily_weighted[f'{component}_catchment_area'].mean()
-            max_val = all_daily_weighted[f'{component}_catchment_area'].max()
-            self.logger.info(f"     {component}: mean={mean_val:.3f} mm/day, max={max_val:.3f} mm/day")
+            self.logger.info(f"   {component}:")
+            for category in ['all', 'large', 'small']:
+                col = f'{component}_{category}'
+                mean_val = all_daily_weighted[col].mean()
+                max_val = all_daily_weighted[col].max()
+                self.logger.info(f"     {category}: mean={mean_val:.3f} mm/day, max={max_val:.3f} mm/day")
         
         return all_daily_weighted
     
     def create_irrigation_netcdf(self, force_reprocess: bool = False) -> xr.Dataset:
         """
-        Create irrigation NetCDF file with GloGEM melt on glacier HRUs, zeros elsewhere
-        ✅ OPTIMIZED: Uses numpy operations instead of pandas pivot for speed
-        ✅ FIXED: Proper subsetting using numpy indexing on loaded data
+        Create irrigation NetCDF file with GloGEM melt on glacier HRUs, zeros elsewhere.
+        ✅ UPDATED: Handles aggregated glacier HRUs (2 HRUs: large + small) instead of per-glacier HRUs
         """
         self.logger.info("Creating irrigation NetCDF file...")
         
@@ -544,12 +631,26 @@ class GloGEMProcessor:
         hru_gdf['HRU ID'] = range(1, len(hru_gdf) + 1)
         num_hrus = len(hru_gdf)
         
-        # Get glacier IDs from catchment
-        glacier_ids_needed, rgi_region_code = self._get_glacier_ids_from_catchment()
+        # Get glacier IDs from catchment with size categories
+        glacier_ids_needed, rgi_region_code, glacier_categories = self._get_glacier_ids_from_catchment()
         
         if not glacier_ids_needed:
             self.logger.warning("No glaciers in catchment - creating empty irrigation file")
             return self._create_empty_irrigation_netcdf(hru_gdf, output_path)
+        
+        # ✅ NEW: Load glacier areas from mapping CSV instead of shapefile
+        mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
+        if not mapping_path.exists():
+            raise FileNotFoundError(f"Glacier ID mapping not found: {mapping_path}")
+        
+        mapping_df = pd.read_csv(mapping_path)
+        area_map = {}
+        for _, row in mapping_df.iterrows():
+            numeric_id = str(row['numeric_id']).zfill(5)  # Ensure 5-digit format
+            area_km2 = row['area_km2']
+            area_map[numeric_id] = area_km2
+        
+        self.logger.info(f"Loaded {len(area_map)} glacier areas from mapping CSV")
         
         # ✅ Load Discharge (total melt) from NetCDF directly
         nc_path = self._get_netcdf_path('Discharge')
@@ -590,7 +691,7 @@ class GloGEMProcessor:
         end_date_for_file = pd.to_datetime(self.end_date)
         sim_start = pd.to_datetime(self.start_date)
         
-        # ✅ FIX: Create boolean masks for time and glacier filtering
+        # ✅ Create boolean masks for time and glacier filtering
         time_mask = (all_nc_times >= sim_start) & (all_nc_times <= end_date_for_file)
         glacier_mask = np.isin(all_glacier_ids, matching_glaciers)
         
@@ -604,63 +705,119 @@ class GloGEMProcessor:
         
         if len(time_indices) == 0:
             self.logger.error("No time steps found in the specified date range!")
-            self.logger.error(f"NetCDF time range: {all_nc_times[0]} to {all_nc_times[-1]}")
             ds_glogem.close()
             raise ValueError("No time steps found in the specified date range")
         
-        # ✅ FIX: Load the full data array first, then subset with numpy
+        # ✅ Load and subset discharge data
         self.logger.info("Loading discharge data from NetCDF...")
-        full_discharge = ds_glogem['discharge'].values  # Shape: (all_times, all_glaciers)
-        
-        self.logger.info(f"Full data shape: {full_discharge.shape}")
-        
-        # ✅ FIX: Subset using numpy indexing (much faster and reliable)
-        self.logger.info("Subsetting data with numpy...")
+        full_discharge = ds_glogem['discharge'].values
         discharge_data = full_discharge[np.ix_(time_indices, glacier_indices)]
         
-        # Get the corresponding time and glacier arrays
         sim_times = all_nc_times[time_indices]
         sim_glacier_ids = all_glacier_ids[glacier_indices]
         
         self.logger.info(f"Subset data shape: {discharge_data.shape}")
-        self.logger.info(f"Actual date range: {sim_times[0].date()} to {sim_times[-1].date()}")
         
-        # Clean up full array
         del full_discharge
         ds_glogem.close()
         
         # Replace NaN with 0
         discharge_data = np.nan_to_num(discharge_data, nan=0.0).astype(np.float32)
         
-        # Create mapping: numeric glacier ID -> HRU index (0-based)
-        glacier_to_hru_idx = {}
-        glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
-        for idx, row in glacier_hrus.iterrows():
-            full_glacier_id = row['Glacier_Cl']
-            if isinstance(full_glacier_id, str) and rgi_region_code and full_glacier_id.startswith(f'{rgi_region_code}.'):
-                numeric_id = full_glacier_id.replace(f'{rgi_region_code}.', '')
-                hru_idx = int(row['HRU ID']) - 1  # 0-based index
-                glacier_to_hru_idx[numeric_id] = hru_idx
+        # ✅ NEW: Calculate area-weighted averages for LARGE and SMALL glacier HRUs
+        self.logger.info("Calculating area-weighted averages for glacier HRUs...")
         
-        self.logger.info(f"Found {len(glacier_to_hru_idx)} glacier-HRU mappings")
+        # Identify large and small glaciers in the data
+        large_glacier_set = set(glacier_categories['large'])
+        small_glacier_set = set(glacier_categories['small'])
         
-        # ✅ OPTIMIZED: Create result array using numpy directly
-        self.logger.info("Creating result array using numpy (fast)...")
+        large_indices = []
+        large_areas = []
+        small_indices = []
+        small_areas = []
+        
+        for g_idx, glacier_id in enumerate(sim_glacier_ids):
+            area = area_map.get(glacier_id, 0.0)
+            if glacier_id in large_glacier_set:
+                large_indices.append(g_idx)
+                large_areas.append(area)
+            elif glacier_id in small_glacier_set:
+                small_indices.append(g_idx)
+                small_areas.append(area)
+        
+        self.logger.info(f"Found {len(large_indices)} large glaciers and {len(small_indices)} small glaciers in data")
+        
+        # Calculate area-weighted averages
         n_sim_times = len(sim_times)
+        large_weighted = np.zeros(n_sim_times, dtype=np.float32)
+        small_weighted = np.zeros(n_sim_times, dtype=np.float32)
+        
+        if large_indices:
+            large_data = discharge_data[:, large_indices]  # (time, n_large_glaciers)
+            large_weights = np.array(large_areas, dtype=np.float32)
+            total_large_area = large_weights.sum()
+            
+            if total_large_area > 0:
+                # Weighted average: sum(value_i * area_i) / sum(area_i)
+                large_weighted = (large_data * large_weights).sum(axis=1) / total_large_area
+                self.logger.info(f"Large glacier mean irrigation: {large_weighted.mean():.3f} mm/day")
+        
+        if small_indices:
+            small_data = discharge_data[:, small_indices]  # (time, n_small_glaciers)
+            small_weights = np.array(small_areas, dtype=np.float32)
+            total_small_area = small_weights.sum()
+            
+            if total_small_area > 0:
+                # Weighted average: sum(value_i * area_i) / sum(area_i)
+                small_weighted = (small_data * small_weights).sum(axis=1) / total_small_area
+                self.logger.info(f"Small glacier mean irrigation: {small_weighted.mean():.3f} mm/day")
+        
+        # ✅ NEW: Find glacier HRU indices in HRU shapefile
+        # Look for HRUs with pipe-separated glacier IDs
+        glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
+        
+        large_hru_idx = None
+        small_hru_idx = None
+        
+        for idx, row in glacier_hrus.iterrows():
+            glacier_id_str = row['Glacier_Cl']
+            hru_id = int(row['HRU ID']) - 1  # 0-based index
+            
+            # Check if this is aggregated format (contains pipe separator)
+            if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
+                # Parse pipe-separated IDs
+                id_list = glacier_id_str.split('|')
+                numeric_ids = []
+                for full_id in id_list:
+                    if rgi_region_code and full_id.startswith(rgi_region_code + '.'):
+                        numeric_id = full_id.replace(rgi_region_code + '.', '')
+                        numeric_ids.append(numeric_id)
+                
+                # Check if this is the large or small HRU
+                has_large = any(nid in large_glacier_set for nid in numeric_ids)
+                has_small = any(nid in small_glacier_set for nid in numeric_ids)
+                
+                if has_large and not has_small:
+                    large_hru_idx = hru_id
+                    self.logger.info(f"Found LARGE glacier HRU at index {hru_id} (HRU ID {row['HRU ID']})")
+                elif has_small and not has_large:
+                    small_hru_idx = hru_id
+                    self.logger.info(f"Found SMALL glacier HRU at index {hru_id} (HRU ID {row['HRU ID']})")
+        
+        # ✅ Create result array with irrigation values only for glacier HRUs
+        self.logger.info("Creating result array...")
         result_sim = np.zeros((n_sim_times, num_hrus), dtype=np.float32)
         
-        # Map glacier columns to HRU indices
-        matched_count = 0
-        for g_idx, glacier_id in enumerate(sim_glacier_ids):
-            if glacier_id in glacier_to_hru_idx:
-                hru_idx = glacier_to_hru_idx[glacier_id]
-                result_sim[:, hru_idx] = discharge_data[:, g_idx]
-                matched_count += 1
+        if large_hru_idx is not None:
+            result_sim[:, large_hru_idx] = large_weighted
+            self.logger.info(f"Assigned large glacier irrigation to HRU index {large_hru_idx}")
         
-        self.logger.info(f"Matched {matched_count} glaciers to HRU columns")
+        if small_hru_idx is not None:
+            result_sim[:, small_hru_idx] = small_weighted
+            self.logger.info(f"Assigned small glacier irrigation to HRU index {small_hru_idx}")
         
         # Clean up
-        del discharge_data
+        del discharge_data, large_weighted, small_weighted
         
         # ✅ Handle warm-up period by repeating first year
         if simulation_start is not None:
@@ -886,8 +1043,8 @@ class GloGEMProcessor:
     
     def validate_glacier_ids(self) -> Dict[str, List[str]]:
         """
-        Advanced validation of glacier IDs between HRU shapefile and GloGEM NetCDF.
-        ✅ UPDATED: Reads from NetCDF instead of .dat files
+        Advanced validation of glacier IDs between catchment and GloGEM NetCDF.
+        ✅ FIXED: Uses actual RGI IDs from mapping CSV (not reconstructed IDs)
         
         Returns
         -------
@@ -903,11 +1060,34 @@ class GloGEMProcessor:
         }
         
         try:
-            # Get glacier IDs from catchment
-            glacier_ids_needed, rgi_region_code = self._get_glacier_ids_from_catchment()
+            # ✅ NEW: Load mapping CSV to get TRUE RGI IDs (not reconstructed!)
+            mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
+            
+            if not mapping_path.exists():
+                self.logger.warning(f"Glacier ID mapping not found: {mapping_path}")
+                return results
+            
+            mapping_df = pd.read_csv(mapping_path)
+            
+            # Create mapping: numeric_id (padded) → RGI ID
+            numeric_to_rgi = {}
+            rgi_region_code = None
+            
+            for _, row in mapping_df.iterrows():
+                numeric_id = str(row['numeric_id']).zfill(5)
+                rgi_id = row['RGIId']
+                numeric_to_rgi[numeric_id] = rgi_id
+                
+                # Extract region code from first RGI ID
+                if rgi_region_code is None and rgi_id.startswith('RGI60-'):
+                    rgi_region_code = rgi_id.split('.')[0]
+            
+            glacier_ids_needed = set(numeric_to_rgi.keys())
+            
+            self.logger.debug(f"Loaded {len(glacier_ids_needed)} glacier IDs from mapping CSV")
             
             if not glacier_ids_needed:
-                self.logger.warning("No glacier IDs found in catchment shapefile")
+                self.logger.warning("No glacier IDs found in mapping CSV")
                 return results
             
             # Load GloGEM NetCDF to get available glacier IDs
@@ -916,44 +1096,42 @@ class GloGEMProcessor:
             if not nc_path.exists():
                 self.logger.warning(f"GloGEM Discharge NetCDF not found: {nc_path}")
                 # All glaciers are missing
-                for g_id in glacier_ids_needed:
-                    full_id = f"{rgi_region_code}.{g_id}" if rgi_region_code else g_id
-                    results['missing_in_glogem'].append(full_id)
+                for numeric_id in glacier_ids_needed:
+                    results['missing_in_glogem'].append(numeric_to_rgi[numeric_id])
                 return results
             
             ds = xr.open_dataset(nc_path)
             glacier_ids_glogem = set(ds.glacier_id.values.astype(str))
             ds.close()
             
-            # Compare sets
-            hru_set = glacier_ids_needed
+            # Compare sets (using NUMERIC IDs)
+            missing_in_glogem = glacier_ids_needed - glacier_ids_glogem
+            missing_in_hru = glacier_ids_glogem - glacier_ids_needed
+            matched = glacier_ids_needed.intersection(glacier_ids_glogem)
             
-            missing_in_glogem = hru_set - glacier_ids_glogem
-            missing_in_hru = glacier_ids_glogem - hru_set
-            matched = hru_set.intersection(glacier_ids_glogem)
+            # ✅ Convert to ACTUAL RGI IDs for reporting (not reconstructed!)
+            for numeric_id in missing_in_glogem:
+                results['missing_in_glogem'].append(numeric_to_rgi[numeric_id])
             
-            # Store results with full IDs
-            for g_id in missing_in_glogem:
-                full_id = f"{rgi_region_code}.{g_id}" if rgi_region_code else g_id
-                results['missing_in_glogem'].append(full_id)
+            for numeric_id in matched:
+                results['matched'].append(numeric_to_rgi[numeric_id])
             
-            for g_id in missing_in_hru:
-                full_id = f"{rgi_region_code}.{g_id}" if rgi_region_code else g_id
+            # For IDs in GloGEM but not in HRU, we need to reconstruct
+            # (we don't have the actual RGI ID for these)
+            for numeric_id in missing_in_hru:
+                full_id = f"{rgi_region_code}.{numeric_id}" if rgi_region_code else numeric_id
                 results['missing_in_hru'].append(full_id)
-            
-            for g_id in matched:
-                full_id = f"{rgi_region_code}.{g_id}" if rgi_region_code else g_id
-                results['matched'].append(full_id)
             
             # Log summary
             self.logger.info(f"✅ Matched glaciers: {len(results['matched'])}")
             
             if results['missing_in_glogem']:
                 self.logger.warning(f"⚠️  Missing in GloGEM: {len(results['missing_in_glogem'])}")
+                self.logger.warning(f"   Sample missing glaciers:")
                 for g_id in results['missing_in_glogem'][:5]:
-                    self.logger.warning(f"   - {g_id}")
+                    self.logger.warning(f"     - {g_id}")
                 if len(results['missing_in_glogem']) > 5:
-                    self.logger.warning(f"   - ... and {len(results['missing_in_glogem'])-5} more")
+                    self.logger.warning(f"     - ... and {len(results['missing_in_glogem'])-5} more")
             
             if results['missing_in_hru']:
                 self.logger.info(f"ℹ️  In GloGEM but not in catchment: {len(results['missing_in_hru'])}")
@@ -1014,7 +1192,10 @@ class GloGEMProcessor:
     
     def _create_validation_map(self, hru_gdf: gpd.GeoDataFrame, results: Dict[str, List[str]], 
                                rgi_region_code: str) -> None:
-        """Create map showing matched and missing glaciers"""
+        """
+        Create map showing matched and missing glaciers.
+        ✅ UPDATED: Handles pipe-separated glacier IDs, no labels on map
+        """
         out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'validation')
         out_dir.mkdir(parents=True, exist_ok=True)
         
@@ -1023,15 +1204,26 @@ class GloGEMProcessor:
             hru_gdf = hru_gdf.copy()
             hru_gdf['validation_status'] = 'non-glacier'
             
-            # Mark matched glaciers
-            for g_id in results['matched']:
-                mask = hru_gdf['Glacier_Cl'] == g_id
-                hru_gdf.loc[mask, 'validation_status'] = 'matched'
-            
-            # Mark missing glaciers
-            for g_id in results['missing_in_glogem']:
-                mask = hru_gdf['Glacier_Cl'] == g_id
-                hru_gdf.loc[mask, 'validation_status'] = 'missing_in_glogem'
+            # ✅ NEW: Handle pipe-separated glacier IDs
+            for idx, row in hru_gdf.iterrows():
+                glacier_id_str = row.get('Glacier_Cl', None)
+                if pd.isna(glacier_id_str):
+                    continue
+                
+                # Parse pipe-separated IDs
+                if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
+                    id_list = glacier_id_str.split('|')
+                else:
+                    id_list = [glacier_id_str]
+                
+                # Check status of each glacier in this HRU
+                has_matched = any(g_id in results['matched'] for g_id in id_list)
+                has_missing = any(g_id in results['missing_in_glogem'] for g_id in id_list)
+                
+                if has_missing:
+                    hru_gdf.at[idx, 'validation_status'] = 'missing_in_glogem'
+                elif has_matched:
+                    hru_gdf.at[idx, 'validation_status'] = 'matched'
             
             # Create figure
             fig, ax = plt.subplots(figsize=(14, 10))
@@ -1050,14 +1242,7 @@ class GloGEMProcessor:
                     subset.plot(ax=ax, color=color, edgecolor='black', linewidth=0.5, 
                               label=status.replace('_', ' ').title())
             
-            # Add labels for missing glaciers
-            missing_glaciers = hru_gdf[hru_gdf['validation_status'] == 'missing_in_glogem']
-            for idx, row in missing_glaciers.iterrows():
-                centroid = row.geometry.centroid
-                glacier_id = row['Glacier_Cl'].split('.')[-1] if '.' in str(row['Glacier_Cl']) else row['Glacier_Cl']
-                ax.annotate(glacier_id, (centroid.x, centroid.y),
-                          fontsize=8, ha='center', va='center',
-                          bbox=dict(boxstyle="round,pad=0.1", facecolor='white', alpha=0.7))
+            # ✅ REMOVED: No glacier ID labels on map (as requested)
             
             ax.set_title(f'Glacier Validation Map - Gauge {self.gauge_id}\n'
                         f'Matched: {len(results["matched"])}, '
@@ -1124,7 +1309,7 @@ class GloGEMProcessor:
                     return
                 
                 # Get glacier IDs from catchment
-                glacier_ids_needed, rgi_region_code = self._get_glacier_ids_from_catchment()
+                glacier_ids_needed, rgi_region_code, glacier_categories = self._get_glacier_ids_from_catchment()
                 
                 ds = xr.open_dataset(nc_path)
                 
@@ -1179,13 +1364,17 @@ class GloGEMProcessor:
                 self.logger.warning("No GloGEM data available. Skipping plots.")
                 return
             
-            # --- 2. Load HRU data to get glacier areas ---
+            # --- 2. Load HRU data to get catchment and glacier areas ---
             hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
             hru_gdf = gpd.read_file(hru_path)
             hru_gdf = hru_gdf.sort_values(by='HRU_ID').reset_index(drop=True)
             
             # Get area column
             area_col = 'Area_km2' if 'Area_km2' in hru_gdf.columns else 'area'
+            
+            # ✅ STEP 1: Calculate TOTAL catchment area from entire HRU shapefile
+            total_catchment_area_km2 = hru_gdf[area_col].sum()
+            self.logger.info(f"Total catchment area (from HRU.shp): {total_catchment_area_km2:.2f} km²")
             
             # Auto-detect RGI region code
             rgi_region_code = None
@@ -1194,33 +1383,94 @@ class GloGEMProcessor:
                 if not glacier_series.empty:
                     for glacier_id in glacier_series.unique():
                         if isinstance(glacier_id, str) and glacier_id.startswith('RGI60-'):
-                            parts = glacier_id.split('.')
+                            # Handle pipe-separated IDs
+                            first_id = glacier_id.split('|')[0]
+                            parts = first_id.split('.')
                             if len(parts) >= 2:
                                 rgi_region_code = parts[0]
                                 break
             
             self.logger.info(f"RGI region code: {rgi_region_code}")
             
-            # Map glacier IDs to areas
-            glacier_areas_df = hru_gdf[hru_gdf['Glacier_Cl'].notna()][['Glacier_Cl', area_col]].copy()
+            # Load glacier shapefile to get individual glacier sizes for classification
+            glacier_shp_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'clipped_glacier.shp')
+            glacier_size_map = {}  # Maps RGI ID -> glacier size in km²
+            if glacier_shp_path.exists():
+                glacier_gdf = gpd.read_file(glacier_shp_path)
+                for _, row in glacier_gdf.iterrows():
+                    rgi_id = row.get('RGIId', None)
+                    area_km2 = row.get('Area', 0.0)
+                    if rgi_id:
+                        glacier_size_map[rgi_id] = area_km2
+                self.logger.info(f"Loaded {len(glacier_size_map)} glacier sizes from shapefile")
             
-            if rgi_region_code:
-                glacier_areas_df['id'] = glacier_areas_df['Glacier_Cl'].str.replace(f'{rgi_region_code}.', '', regex=False)
-            else:
-                glacier_areas_df['id'] = glacier_areas_df['Glacier_Cl']
+            # ✅ STEP 2: Calculate glacier HRU areas in catchment by category (from HRU.shp)
+            glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
             
-            area_map = glacier_areas_df.set_index('id')[area_col].to_dict()
+            all_glacier_area_in_catchment_km2 = 0.0
+            large_glacier_area_in_catchment_km2 = 0.0
+            small_glacier_area_in_catchment_km2 = 0.0
             
-            self.logger.info(f"Area map has {len(area_map)} glaciers")
+            for idx, row in glacier_hrus.iterrows():
+                hru_area = row[area_col]  # Area of this glacier HRU in catchment
+                glacier_id_str = row['Glacier_Cl']
+                
+                all_glacier_area_in_catchment_km2 += hru_area  # Total glacier coverage
+                
+                # Handle pipe-separated IDs (aggregated format)
+                if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
+                    # Aggregated HRU contains multiple glaciers
+                    id_list = glacier_id_str.split('|')
+                    
+                    # Check if this is large or small HRU by checking first glacier
+                    first_glacier_size = glacier_size_map.get(id_list[0], 0.0)
+                    if first_glacier_size >= 2.0:
+                        large_glacier_area_in_catchment_km2 += hru_area
+                    else:
+                        small_glacier_area_in_catchment_km2 += hru_area
+                
+                elif isinstance(glacier_id_str, str):
+                    # Single glacier HRU
+                    glacier_size = glacier_size_map.get(glacier_id_str, 0.0)
+                    if glacier_size >= 2.0:
+                        large_glacier_area_in_catchment_km2 += hru_area
+                    else:
+                        small_glacier_area_in_catchment_km2 += hru_area
             
-            # Add areas to GloGEM data
+            # ✅ STEP 3: Calculate glacier fractions of total catchment
+            glacier_fraction_all = all_glacier_area_in_catchment_km2 / total_catchment_area_km2
+            glacier_fraction_large = large_glacier_area_in_catchment_km2 / total_catchment_area_km2
+            glacier_fraction_small = small_glacier_area_in_catchment_km2 / total_catchment_area_km2
+            
+            self.logger.info(f"Glacier coverage in catchment:")
+            self.logger.info(f"  All glaciers: {all_glacier_area_in_catchment_km2:.2f} km² ({glacier_fraction_all*100:.2f}%)")
+            self.logger.info(f"  Large glaciers (>=2km²): {large_glacier_area_in_catchment_km2:.2f} km² ({glacier_fraction_large*100:.2f}%)")
+            self.logger.info(f"  Small glaciers (<2km²): {small_glacier_area_in_catchment_km2:.2f} km² ({glacier_fraction_small*100:.2f}%)")
+            
+            # Create mapping for GloGEM data (numeric ID -> glacier size for classification)
+            area_map = {}
+            for rgi_id, size in glacier_size_map.items():
+                if rgi_region_code and rgi_id.startswith(rgi_region_code + '.'):
+                    numeric_id = rgi_id.replace(rgi_region_code + '.', '')
+                    area_map[numeric_id] = size
+            
+            # ✅ STEP 4: Add individual glacier areas to GloGEM data for weighted averaging
             glogem_df['area'] = glogem_df['id'].map(area_map)
             glogem_df['area'] = pd.to_numeric(glogem_df['area'], errors='coerce')
+            
+            # Classify glaciers by size for GloGEM data processing
+            glogem_df['size_category'] = glogem_df['area'].apply(
+                lambda x: 'large' if x >= 2.0 else 'small' if pd.notna(x) else None
+            )
             
             # ✅ DEBUG: Check area mapping
             matched_areas = glogem_df['area'].notna().sum()
             total_records = len(glogem_df)
-            self.logger.info(f"Area mapping: {matched_areas}/{total_records} records have area info")
+            self.logger.info(f"Area mapping for GloGEM: {matched_areas}/{total_records} records have area info")
+            
+            n_large = (glogem_df['size_category'] == 'large').sum()
+            n_small = (glogem_df['size_category'] == 'small').sum()
+            self.logger.info(f"Size classification in GloGEM: {n_large} large, {n_small} small glacier-day records")
             
             # Filter out records without area
             glogem_df = glogem_df[glogem_df['area'].notna()].copy()
@@ -1229,34 +1479,52 @@ class GloGEMProcessor:
                 self.logger.warning("No glaciers with area information. Skipping plots.")
                 return
             
-            # Calculate total areas
-            glacier_area_km2 = hru_gdf[hru_gdf['Glacier_Cl'].notna()][area_col].sum()
-            catchment_area_km2 = hru_gdf[area_col].sum()
-            glacier_fraction = glacier_area_km2 / catchment_area_km2
-            
-            self.logger.info(f"Catchment area: {catchment_area_km2:.2f} km²")
-            self.logger.info(f"Glacier area: {glacier_area_km2:.2f} km² ({glacier_fraction*100:.1f}%)")
-            
-            # --- 3. Calculate area-weighted glacier runoff per day (mm/day) ---
+            # --- 3. Calculate area-weighted glacier runoff per day (mm/day over glacier area) ---
             def calc_weighted_avg(group):
                 total_area = group['area'].sum()
                 if total_area > 0:
                     return (group['q'] * group['area']).sum() / total_area
                 return 0.0
             
-            # ✅ FIX: Use proper aggregation
-            daily_glacier = glogem_df.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
-            daily_glacier.columns = ['date', 'glacier_runoff_per_glacier_area']
+            # ✅ Calculate for ALL glaciers
+            daily_all = glogem_df.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
+            daily_all.columns = ['date', 'glacier_runoff_all_glacier_area']
             
-            # Normalize to catchment area (multiply by glacier fraction)
-            daily_glacier['glacier_runoff_catchment_norm'] = daily_glacier['glacier_runoff_per_glacier_area'] * glacier_fraction
+            # ✅ Calculate for LARGE glaciers
+            glogem_large = glogem_df[glogem_df['size_category'] == 'large']
+            if not glogem_large.empty:
+                daily_large = glogem_large.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
+                daily_large.columns = ['date', 'glacier_runoff_large_glacier_area']
+            else:
+                daily_large = pd.DataFrame({'date': daily_all['date'], 'glacier_runoff_large_glacier_area': 0.0})
+            
+            # ✅ Calculate for SMALL glaciers
+            glogem_small = glogem_df[glogem_df['size_category'] == 'small']
+            if not glogem_small.empty:
+                daily_small = glogem_small.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
+                daily_small.columns = ['date', 'glacier_runoff_small_glacier_area']
+            else:
+                daily_small = pd.DataFrame({'date': daily_all['date'], 'glacier_runoff_small_glacier_area': 0.0})
+            
+            # Merge all three
+            daily_glacier = daily_all.merge(daily_large, on='date', how='outer').merge(daily_small, on='date', how='outer')
+            
+            # ✅ NEW: Scale to catchment area using respective glacier fractions
+            daily_glacier['glacier_runoff_all'] = daily_glacier['glacier_runoff_all_glacier_area'] * glacier_fraction_all
+            daily_glacier['glacier_runoff_large'] = daily_glacier['glacier_runoff_large_glacier_area'] * glacier_fraction_large
+            daily_glacier['glacier_runoff_small'] = daily_glacier['glacier_runoff_small_glacier_area'] * glacier_fraction_small
             
             # ✅ DEBUG: Check daily data
             self.logger.info(f"Daily glacier runoff calculated for {len(daily_glacier)} days")
             self.logger.info(f"Date range: {daily_glacier['date'].min()} to {daily_glacier['date'].max()}")
-            self.logger.info(f"Mean runoff (glacier area): {daily_glacier['glacier_runoff_per_glacier_area'].mean():.3f} mm/day")
-            self.logger.info(f"Mean runoff (catchment): {daily_glacier['glacier_runoff_catchment_norm'].mean():.3f} mm/day")
-            self.logger.info(f"Non-zero days: {(daily_glacier['glacier_runoff_catchment_norm'] > 0).sum()}")
+            self.logger.info(f"Mean runoff over glacier area:")
+            self.logger.info(f"  All glaciers: {daily_glacier['glacier_runoff_all_glacier_area'].mean():.3f} mm/day")
+            self.logger.info(f"  Large glaciers: {daily_glacier['glacier_runoff_large_glacier_area'].mean():.3f} mm/day")
+            self.logger.info(f"  Small glaciers: {daily_glacier['glacier_runoff_small_glacier_area'].mean():.3f} mm/day")
+            self.logger.info(f"Mean runoff over catchment area (scaled):")
+            self.logger.info(f"  All glaciers: {daily_glacier['glacier_runoff_all'].mean():.3f} mm/day")
+            self.logger.info(f"  Large glaciers: {daily_glacier['glacier_runoff_large'].mean():.3f} mm/day")
+            self.logger.info(f"  Small glaciers: {daily_glacier['glacier_runoff_small'].mean():.3f} mm/day")
             
             # --- 4. Load observed streamflow from Q_daily.rvt ---
             q_file = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs', 'Q_daily.rvt')
@@ -1297,8 +1565,8 @@ class GloGEMProcessor:
                             obs_dates = pd.date_range(start=start_date_str, periods=len(value_lines), freq='D')
                             obs_series = pd.Series(value_lines, index=obs_dates, name='observed_streamflow_m3s')
                             
-                            # Convert from m³/s to mm/day
-                            obs_series_mm = obs_series * 86400 / (catchment_area_km2 * 1e6) * 1000
+                            # Convert from m³/s to mm/day using total catchment area
+                            obs_series_mm = obs_series * 86400 / (total_catchment_area_km2 * 1e6) * 1000
                             obs_series_mm.name = 'observed_streamflow_mm'
                             
                             self.logger.info(f"Loaded {len(obs_series_mm)} days of observed streamflow")
@@ -1322,18 +1590,21 @@ class GloGEMProcessor:
             # --- 6. Create time series plot (mm/day) ---
             fig, ax = plt.subplots(figsize=(14, 6))
             
-            # ✅ FIX: Convert dates to datetime for proper plotting
+            # ✅ Convert dates to datetime for proper plotting
             plot_dates = pd.to_datetime(plot_df['date'])
             
-            # Plot glacier runoff (per glacier area)
-            ax.plot(plot_dates, plot_df['glacier_runoff_per_glacier_area'].values, 
-                label='Glacier Runoff (per glacier area)', 
-                color='blue', alpha=0.7, linewidth=1)
+            # ✅ NEW: Plot all 3 glacier categories (catchment-normalized)
+            ax.plot(plot_dates, plot_df['glacier_runoff_all'].values, 
+                label=f'All Glaciers ({glacier_fraction_all*100:.1f}% of catchment)', 
+                color='blue', alpha=0.8, linewidth=1.5)
             
-            # Plot catchment-normalized glacier runoff
-            ax.plot(plot_dates, plot_df['glacier_runoff_catchment_norm'].values, 
-                label=f'Glacier Runoff (catchment-normalized, {glacier_fraction*100:.1f}% glacier)', 
-                color='green', alpha=0.7, linewidth=1.5)
+            ax.plot(plot_dates, plot_df['glacier_runoff_large'].values, 
+                label=f'Large Glaciers ≥2 km² ({glacier_fraction_large*100:.1f}% of catchment)', 
+                color='darkblue', alpha=0.7, linewidth=1, linestyle='--')
+            
+            ax.plot(plot_dates, plot_df['glacier_runoff_small'].values, 
+                label=f'Small Glaciers <2 km² ({glacier_fraction_small*100:.1f}% of catchment)', 
+                color='cyan', alpha=0.7, linewidth=1, linestyle=':')
             
             # Plot observed streamflow if available
             if 'observed_streamflow_mm' in plot_df.columns:
@@ -1344,10 +1615,10 @@ class GloGEMProcessor:
                         color='black', linewidth=1)
                     self.logger.info(f"Plotted {valid_mask.sum()} days of observed data")
             
-            ax.set_title(f'Glacier Runoff vs Observed Streamflow - Gauge {self.gauge_id}', 
+            ax.set_title(f'Glacier Runoff vs Observed Streamflow (Catchment-Normalized) - Gauge {self.gauge_id}', 
                         fontsize=14, fontweight='bold')
             ax.set_xlabel('Date')
-            ax.set_ylabel('Discharge (mm/day)')
+            ax.set_ylabel('Discharge (mm/day over catchment area)')
             ax.legend(loc='best', fontsize=10)
             ax.grid(True, linestyle='--', alpha=0.7)
             
@@ -1368,24 +1639,26 @@ class GloGEMProcessor:
             regime_df = plot_df.copy()
             regime_df['month'] = pd.to_datetime(regime_df['date']).dt.month
             
-            # Calculate monthly means
-            monthly_glacier = regime_df.groupby('month')['glacier_runoff_catchment_norm'].mean()
-            monthly_glacier = monthly_glacier.reindex(range(1, 13), fill_value=0)
+            # ✅ Calculate monthly means for all 3 categories
+            monthly_all = regime_df.groupby('month')['glacier_runoff_all'].mean().reindex(range(1, 13), fill_value=0)
+            monthly_large = regime_df.groupby('month')['glacier_runoff_large'].mean().reindex(range(1, 13), fill_value=0)
+            monthly_small = regime_df.groupby('month')['glacier_runoff_small'].mean().reindex(range(1, 13), fill_value=0)
             
             month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
             x = np.arange(1, 13)
             
-            self.logger.info(f"Monthly glacier runoff values: {monthly_glacier.values}")
+            self.logger.info(f"Monthly glacier runoff (all): {monthly_all.values}")
             
             fig, ax = plt.subplots(figsize=(12, 6))
             
-            # Plot glacier runoff regime as bars
-            bars = ax.bar(x, monthly_glacier.values, color='lightblue', alpha=0.7, 
-                edgecolor='blue', label='Glacier Runoff (catchment-normalized)')
-            
-            # Add line on top of bars
-            ax.plot(x, monthly_glacier.values, 'bo-', linewidth=2, markersize=8)
+            # ✅ NEW: Plot all 3 categories
+            ax.plot(x, monthly_all.values, 'bo-', linewidth=2.5, markersize=8, 
+                   label='All Glaciers', alpha=0.8)
+            ax.plot(x, monthly_large.values, 's--', color='darkblue', linewidth=2, markersize=6, 
+                   label='Large Glaciers (>=2 km²)', alpha=0.7)
+            ax.plot(x, monthly_small.values, 'd:', color='cyan', linewidth=2, markersize=6, 
+                   label='Small Glaciers (<2 km²)', alpha=0.7)
             
             # Plot observed if available
             if 'observed_streamflow_mm' in regime_df.columns:
@@ -1396,16 +1669,10 @@ class GloGEMProcessor:
                     ax.plot(x, monthly_obs.values, 'ko-', linewidth=2, markersize=8, 
                         label='Observed Streamflow')
             
-            # Add value labels on bars
-            for i, val in enumerate(monthly_glacier.values):
-                if val > 0:
-                    ax.text(i + 1, val + max(monthly_glacier.values) * 0.02, f'{val:.2f}', 
-                        ha='center', va='bottom', fontsize=8, color='blue')
-            
-            ax.set_title(f'Monthly Regime: Glacier Runoff vs Observed Streamflow\nGauge {self.gauge_id}', 
+            ax.set_title(f'Monthly Regime: Glacier Runoff (Catchment-Normalized) vs Observed\nGauge {self.gauge_id}', 
                         fontsize=14, fontweight='bold')
             ax.set_xlabel('Month')
-            ax.set_ylabel('Mean Discharge (mm/day)')
+            ax.set_ylabel('Mean Discharge (mm/day over catchment area)')
             ax.set_xticks(x)
             ax.set_xticklabels(month_names)
             ax.legend(loc='best', fontsize=10)
@@ -1423,18 +1690,29 @@ class GloGEMProcessor:
             self.logger.info("\n" + "="*60)
             self.logger.info("GLACIER RUNOFF VS OBSERVED STREAMFLOW STATISTICS")
             self.logger.info("="*60)
-            self.logger.info(f"Catchment area: {catchment_area_km2:.2f} km²")
-            self.logger.info(f"Glacier area: {glacier_area_km2:.2f} km² ({glacier_fraction*100:.1f}%)")
-            self.logger.info(f"Mean glacier runoff (per glacier area): {daily_glacier['glacier_runoff_per_glacier_area'].mean():.3f} mm/day")
-            self.logger.info(f"Mean glacier runoff (catchment-normalized): {daily_glacier['glacier_runoff_catchment_norm'].mean():.3f} mm/day")
+            self.logger.info(f"Catchment area: {total_catchment_area_km2:.2f} km²")
+            self.logger.info(f"All glacier area: {all_glacier_area_in_catchment_km2:.2f} km² ({glacier_fraction_all*100:.1f}%)")
+            self.logger.info(f"Large glacier area: {large_glacier_area_in_catchment_km2:.2f} km² ({glacier_fraction_large*100:.1f}%)")
+            self.logger.info(f"Small glacier area: {small_glacier_area_in_catchment_km2:.2f} km² ({glacier_fraction_small*100:.1f}%)")
+            self.logger.info(f"\nMean glacier runoff (over catchment area):")
+            self.logger.info(f"  All glaciers: {daily_glacier['glacier_runoff_all'].mean():.3f} mm/day")
+            self.logger.info(f"  Large glaciers: {daily_glacier['glacier_runoff_large'].mean():.3f} mm/day")
+            self.logger.info(f"  Small glaciers: {daily_glacier['glacier_runoff_small'].mean():.3f} mm/day")
             
             if 'observed_streamflow_mm' in plot_df.columns and plot_df['observed_streamflow_mm'].notna().any():
                 mean_obs = plot_df['observed_streamflow_mm'].mean()
-                mean_glacier = daily_glacier['glacier_runoff_catchment_norm'].mean()
-                self.logger.info(f"Mean observed streamflow: {mean_obs:.3f} mm/day")
+                mean_glacier_all = daily_glacier['glacier_runoff_all'].mean()
+                mean_glacier_large = daily_glacier['glacier_runoff_large'].mean()
+                mean_glacier_small = daily_glacier['glacier_runoff_small'].mean()
+                self.logger.info(f"\nMean observed streamflow: {mean_obs:.3f} mm/day")
                 if mean_obs > 0:
-                    glacier_contribution = (mean_glacier / mean_obs) * 100
-                    self.logger.info(f"Glacier contribution to streamflow: {glacier_contribution:.1f}%")
+                    contrib_all = (mean_glacier_all / mean_obs) * 100
+                    contrib_large = (mean_glacier_large / mean_obs) * 100
+                    contrib_small = (mean_glacier_small / mean_obs) * 100
+                    self.logger.info(f"Glacier contribution to streamflow:")
+                    self.logger.info(f"  All glaciers: {contrib_all:.1f}%")
+                    self.logger.info(f"  Large glaciers: {contrib_large:.1f}%")
+                    self.logger.info(f"  Small glaciers: {contrib_small:.1f}%")
             
         except Exception as e:
             self.logger.error(f"Error creating glacier runoff comparison plots: {e}")

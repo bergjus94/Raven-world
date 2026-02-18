@@ -377,7 +377,10 @@ class HBVProcessor:
         print(f"Successfully wrote HBV RVH file to {file_path}")
 
     def _create_hru_groups(self, hru_df: pd.DataFrame) -> List[str]:
-        """Create HRU groups including filtered AllHRUs, elevation bands, and glacier groups."""
+        """
+        Create HRU groups including filtered AllHRUs, elevation bands, and glacier groups.
+        ✅ UPDATED: Handles aggregated glacier HRUs (2 HRUs: 1 large, 1 small)
+        """
         
         def format_hru_list(hru_ids: List[int], max_per_line: int = 50) -> List[str]:
             """
@@ -419,34 +422,38 @@ class HBVProcessor:
         hru_groups.extend(format_hru_list(filtered_hru_ids))
         hru_groups.extend([":EndHRUGroup", ""])
 
-        # ✅ ALL_GLACIER group
+        # ✅ Glacier HRU groups - hardcoded based on preprocess_catchment.py logic
+        # In preprocess_catchment.py, glacier HRUs are created FIRST:
+        #   - HRU 1 = LARGE glaciers (>= 2 km²) - created first
+        #   - HRU 2 = SMALL glaciers (< 2 km²) - created second
+        # We can't use HRU area to determine this because the aggregated HRU areas
+        # (sum of all small glaciers) will often be > 2 km²
+        
         all_glacier_hrus = hru_df[hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
+        
+        # Hard-code based on creation order in preprocess_catchment.py
+        large_glacier_hrus = [hru_id for hru_id in all_glacier_hrus if hru_id == 1]  # First glacier HRU
+        small_glacier_hrus = [hru_id for hru_id in all_glacier_hrus if hru_id == 2]  # Second glacier HRU
+        
+        # ✅ ALL_GLACIER group (should have 2 HRUs for aggregated format)
         hru_groups.append(":HRUGroup ALL_GLACIER")
         hru_groups.extend(format_hru_list(all_glacier_hrus))
         hru_groups.extend([":EndHRUGroup", ""])
         print(f"ALL_GLACIER group: {len(all_glacier_hrus)} HRUs")
         
-        # ✅ SMALL_GLACIER group
-        small_glacier_hrus = hru_df[
-            (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
-            (hru_df['AREA'] < 2)
-        ][':ATTRIBUTES'].tolist()
+        # ✅ SMALL_GLACIER group (should have 1 HRU for aggregated format)
         hru_groups.append(":HRUGroup SMALL_GLACIER")
         hru_groups.extend(format_hru_list(small_glacier_hrus))
         hru_groups.extend([":EndHRUGroup", ""])
-        print(f"SMALL_GLACIER group: {len(small_glacier_hrus)} HRUs (area < 2 km²)")
+        print(f"SMALL_GLACIER group: {len(small_glacier_hrus)} HRUs")
         
-        # ✅ LARGE_GLACIER group
-        large_glacier_hrus = hru_df[
-            (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
-            (hru_df['AREA'] >= 2)
-        ][':ATTRIBUTES'].tolist()
+        # ✅ LARGE_GLACIER group (should have 1 HRU for aggregated format)
         hru_groups.append(":HRUGroup LARGE_GLACIER")
         hru_groups.extend(format_hru_list(large_glacier_hrus))
         hru_groups.extend([":EndHRUGroup", ""])
-        print(f"LARGE_GLACIER group: {len(large_glacier_hrus)} HRUs (area >= 2 km²)")
+        print(f"LARGE_GLACIER group: {len(large_glacier_hrus)} HRUs")
         
-        # ✅ NO_GLACIER group
+        # ✅ NO_GLACIER group (all non-glacier HRUs)
         no_glacier_hrus = hru_df[~hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
         hru_groups.append(":HRUGroup NO_GLACIER")
         hru_groups.extend(format_hru_list(no_glacier_hrus))
@@ -741,18 +748,19 @@ class HBVProcessor:
             ''
         ]
         
-        # Irrigation forcing block (always uses same format)
-        forcing_data['Irrigation'] = [
-            ":GriddedForcing           Irrigation",
-            "    :ForcingType          IRRIGATION",
-            "    :FileNameNC           data_obs/irrigation.nc",
-            "    :VarNameNC            data",
-            "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
-            "    :ElevationVarNameNC   elevation",
-            "    :RedirectToFile       data_obs/GridWeights_Irrigation.txt",
-            ":EndGriddedForcing",
-            ''
-        ]
+        # ✅ Irrigation forcing block (only for coupled mode)
+        if self.coupled:
+            forcing_data['Irrigation'] = [
+                ":GriddedForcing           Irrigation",
+                "    :ForcingType          IRRIGATION",
+                "    :FileNameNC           data_obs/irrigation.nc",
+                "    :VarNameNC            data",
+                "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
+                "    :ElevationVarNameNC   elevation",
+                "    :RedirectToFile       data_obs/GridWeights_Irrigation.txt",
+                ":EndGriddedForcing",
+                ''
+            ]
 
         return forcing_data
 
@@ -974,8 +982,8 @@ class HBVProcessor:
             ] if hru_groups_definition else [],
             "#Hydrologic Process Order": [
                 ":HydrologicProcesses",
-                "#   :Flush             RAVEN_DEFAULT      SNOW            ATMOSPHERE",
-                "#       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
+                "   :Flush             RAVEN_DEFAULT      SNOW            ATMOSPHERE",
+                "       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
                 "   :SnowRefreeze      FREEZE_DEGREE_DAY  SNOW_LIQ        SNOW",
                 "   :Precipitation     PRECIP_RAVEN       ATMOS_PRECIP    MULTIPLE",
                 "   :CanopyEvaporation CANEVP_ALL         CANOPY          ATMOSPHERE",

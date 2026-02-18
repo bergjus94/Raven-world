@@ -921,15 +921,22 @@ class CatchmentProcessor:
                 self.logger.debug(f"Reprojecting glaciers from {gdf.crs} to {dem_crs}")
                 gdf = gdf.to_crs(dem_crs)
             
-            # ✅ FIX: Create unique numeric IDs for each glacier
-            # Extract numeric part from RGI IDs for rasterization
-            gdf['numeric_id'] = range(1, len(gdf) + 1)  # Simple sequential IDs
+            # ✅ FIX: Extract numeric IDs from RGI IDs (e.g., "RGI60-14.04481" → "04481")
+            # This matches the format used in GloGEM NetCDF files
+            gdf['numeric_id_str'] = gdf['RGIId'].apply(lambda x: x.split('.')[-1])
             
-            # Store mapping between numeric IDs and RGI IDs
-            self.glacier_id_mapping = dict(zip(gdf['numeric_id'], gdf['RGIId']))
+            # For rasterization, we need integer IDs (convert string to int)
+            gdf['numeric_id_int'] = gdf['numeric_id_str'].astype(int)
             
-            # Create shapes for rasterization with unique IDs
-            shapes = [(geom, numeric_id) for geom, numeric_id in zip(gdf.geometry, gdf['numeric_id'])]
+            # Store mapping between numeric IDs (as strings with zero-padding) and RGI IDs
+            # This is used for GloGEM validation
+            self.glacier_id_mapping = dict(zip(gdf['numeric_id_str'], gdf['RGIId']))
+            
+            # Also store reverse mapping: integer ID → string ID (for raster lookups)
+            self.glacier_int_to_str = dict(zip(gdf['numeric_id_int'], gdf['numeric_id_str']))
+            
+            # Create shapes for rasterization with integer IDs
+            shapes = [(geom, numeric_id) for geom, numeric_id in zip(gdf.geometry, gdf['numeric_id_int'])]
             
             self.logger.debug(f"Rasterizing {len(shapes)} glacier geometries with unique IDs")
             
@@ -970,10 +977,44 @@ class CatchmentProcessor:
             )
             glacier_xr.rio.to_raster(glacier_raster_path)
             
-            # Also save the mapping as a CSV for reference
-            mapping_df = pd.DataFrame(list(self.glacier_id_mapping.items()), 
-                                    columns=['numeric_id', 'RGIId'])
+            # ✅ NEW: Save mapping with size classification (area in km²)
+            self.logger.info("Creating glacier ID mapping with size classification...")
+            mapping_data = []
+            
+            for numeric_id, rgi_id in self.glacier_id_mapping.items():
+                # Find this glacier in the glacier shapefile to get its area
+                glacier_row = gdf[gdf['RGIId'] == rgi_id]
+                
+                if len(glacier_row) > 0:
+                    area_km2 = glacier_row.iloc[0].get('Area', 0.0)
+                    is_large = area_km2 >= 2.0
+                else:
+                    # Glacier not found in shapefile (shouldn't happen)
+                    area_km2 = 0.0
+                    is_large = False
+                    self.logger.warning(f"Glacier {rgi_id} (ID {numeric_id}) not found in shapefile!")
+                
+                mapping_data.append({
+                    'numeric_id': numeric_id,
+                    'RGIId': rgi_id,
+                    'area_km2': area_km2,
+                    'is_large': is_large
+                })
+            
+            mapping_df = pd.DataFrame(mapping_data)
             mapping_df.to_csv(self.get_path('glacier_id_mapping.csv'), index=False)
+            
+            # Log summary
+            n_large = mapping_df['is_large'].sum()
+            n_small = (~mapping_df['is_large']).sum()
+            total_area = mapping_df['area_km2'].sum()
+            large_area = mapping_df[mapping_df['is_large']]['area_km2'].sum()
+            small_area = mapping_df[~mapping_df['is_large']]['area_km2'].sum()
+            
+            self.logger.info(f"✅ Saved glacier mapping with size classification:")
+            self.logger.info(f"   Large glaciers (>=2 km²): {n_large} glaciers, {large_area:.2f} km²")
+            self.logger.info(f"   Small glaciers (<2 km²): {n_small} glaciers, {small_area:.2f} km²")
+            self.logger.info(f"   Total: {len(mapping_df)} glaciers, {total_area:.2f} km²")
             
             return rasterized
             
@@ -1118,49 +1159,210 @@ class CatchmentProcessor:
         }
         
         # Handle glaciers if coupled mode is active
+        # ✅ NEW: Create 2 aggregated glacier HRUs (small and large) instead of per-glacier HRUs
         if self.coupled and self.glacier_data is not None:
             glacier_data_np = self.glacier_data
-            unique_glaciers = np.unique(glacier_data_np[~np.isnan(glacier_data_np)])
+            # Get unique glacier IDs, filtering out NaN and infinite values
+            valid_glacier_data = glacier_data_np[~np.isnan(glacier_data_np)]
+            valid_glacier_data = valid_glacier_data[np.isfinite(valid_glacier_data)]
+            unique_glaciers = np.unique(valid_glacier_data)
             
-            self.logger.info(f"Creating {len(unique_glaciers)} glacier HRUs")
+            self.logger.info(f"Creating 2 aggregated glacier HRUs from {len(unique_glaciers)} glaciers")
+            self.logger.info(f"  - Large glaciers: >= 2 km²")
+            self.logger.info(f"  - Small glaciers: < 2 km²")
             
-            for numeric_glacier_id in unique_glaciers:
-                mask_glacier = (glacier_data_np == numeric_glacier_id)
-                if np.count_nonzero(mask_glacier) > 0:
-                    # Assign HRU ID to glacier
-                    map_unit_ids[mask_glacier] = unit_id
+            # Load glacier shapefile to get actual glacier areas
+            glacier_shapefile_path = self.get_path('clipped_glacier.shp')
+            
+            if not glacier_shapefile_path.exists():
+                self.logger.warning(f"Glacier shapefile not found: {glacier_shapefile_path}")
+                self.logger.warning("Cannot classify glaciers by size, creating single aggregated HRU")
+                
+                # Fallback: Create single aggregated glacier HRU
+                mask_all_glaciers = ~np.isnan(glacier_data_np)
+                
+                if np.count_nonzero(mask_all_glaciers) > 0:
+                    map_unit_ids[mask_all_glaciers] = unit_id
                     
-                    # Calculate centroid
-                    rows, cols = np.where(mask_glacier)
+                    # Calculate centroid for all glaciers
+                    rows, cols = np.where(mask_all_glaciers)
                     with rasterio.open(self.get_path('clipped_dem.tif')) as src:
                         transform = src.transform
                         lon, lat = xy(transform, np.mean(cols), np.mean(rows))
                     
-                    # ✅ FIX: Get actual RGI ID from mapping
-                    if hasattr(self, 'glacier_id_mapping') and numeric_glacier_id in self.glacier_id_mapping:
-                        rgi_id = self.glacier_id_mapping[numeric_glacier_id]
-                    else:
-                        # Fallback if mapping doesn't exist
-                        rgi_id = f"RGI60-11.{int(numeric_glacier_id):05d}"
+                    # Get all RGI IDs
+                    rgi_ids = []
+                    for numeric_glacier_id_int in unique_glaciers:
+                        # Skip invalid values
+                        if not np.isfinite(numeric_glacier_id_int):
+                            self.logger.warning(f"Skipping invalid glacier ID: {numeric_glacier_id_int}")
+                            continue
+                        
+                        # Convert integer ID from raster to string ID with zero-padding
+                        if hasattr(self, 'glacier_int_to_str'):
+                            try:
+                                numeric_id_str = self.glacier_int_to_str.get(int(numeric_glacier_id_int))
+                                if numeric_id_str and numeric_id_str in self.glacier_id_mapping:
+                                    rgi_ids.append(self.glacier_id_mapping[numeric_id_str])
+                                else:
+                                    # Fallback: create RGI ID from integer
+                                    rgi_ids.append(f"RGI60-11.{int(numeric_glacier_id_int):05d}")
+                            except (ValueError, OverflowError) as e:
+                                self.logger.warning(f"Cannot convert glacier ID {numeric_glacier_id_int}: {e}")
+                                continue
+                        else:
+                            # Old behavior: assume numeric_glacier_id is already a string
+                            try:
+                                if numeric_glacier_id_int in self.glacier_id_mapping:
+                                    rgi_ids.append(self.glacier_id_mapping[numeric_glacier_id_int])
+                                else:
+                                    rgi_ids.append(f"RGI60-11.{int(numeric_glacier_id_int):05d}")
+                            except (ValueError, OverflowError) as e:
+                                self.logger.warning(f"Cannot convert glacier ID {numeric_glacier_id_int}: {e}")
+                                continue
+                    
+                    # Store as pipe-separated string
+                    rgi_id_string = "|".join(rgi_ids)
                     
                     # Store glacier HRU attributes
                     columns['Unit ID'].append(unit_id)
-                    columns['Glacier Class'].append(rgi_id)  # ✅ Use actual RGI ID
+                    columns['Glacier Class'].append(rgi_id_string)
                     columns['Latitude'].append(lat)
                     columns['Longitude'].append(lon)
                     
-                    # Fill other fields with NaN for glacier HRUs
+                    # Fill other fields with NaN
                     for field in ['Elevation', 'Elevation Min', 'Elevation Max', 
                                 'Slope', 'Slope Min', 'Slope Max', 
                                 'Aspect Class', 'Land Use Class']:
                         columns[field].append(np.nan)
                     
-                    self.logger.debug(f"Created glacier HRU {unit_id} for {rgi_id}")
+                    self.logger.info(f"Created aggregated glacier HRU {unit_id} with {len(rgi_ids)} glaciers")
+                    unit_id += 1
+                    
+            else:
+                # Load glacier shapefile to get glacier areas
+                import geopandas as gpd
+                glacier_gdf = gpd.read_file(glacier_shapefile_path)
+                
+                # Create mapping of RGI ID to area
+                glacier_areas = {}
+                for _, glacier_row in glacier_gdf.iterrows():
+                    rgi_id = glacier_row.get('RGIId', None)
+                    area_km2 = glacier_row.get('Area', 0.0)  # Area should be in km²
+                    if rgi_id:
+                        glacier_areas[rgi_id] = area_km2
+                
+                # Classify glaciers by size (2 km² threshold)
+                large_glacier_ids = []
+                small_glacier_ids = []
+                large_glacier_mask = np.zeros(glacier_data_np.shape, dtype=bool)
+                small_glacier_mask = np.zeros(glacier_data_np.shape, dtype=bool)
+                
+                for numeric_glacier_id_int in unique_glaciers:
+                    # Skip invalid values
+                    if not np.isfinite(numeric_glacier_id_int):
+                        self.logger.warning(f"Skipping invalid glacier ID: {numeric_glacier_id_int}")
+                        continue
+                    
+                    # Convert integer ID from raster to string ID with zero-padding
+                    if hasattr(self, 'glacier_int_to_str'):
+                        try:
+                            numeric_id_str = self.glacier_int_to_str.get(int(numeric_glacier_id_int))
+                            if numeric_id_str and numeric_id_str in self.glacier_id_mapping:
+                                rgi_id = self.glacier_id_mapping[numeric_id_str]
+                            else:
+                                # Fallback: create RGI ID from integer
+                                rgi_id = f"RGI60-11.{int(numeric_glacier_id_int):05d}"
+                        except (ValueError, OverflowError) as e:
+                            self.logger.warning(f"Cannot convert glacier ID {numeric_glacier_id_int} to integer: {e}")
+                            continue
+                    else:
+                        # Old behavior
+                        if hasattr(self, 'glacier_id_mapping') and numeric_glacier_id_int in self.glacier_id_mapping:
+                            rgi_id = self.glacier_id_mapping[numeric_glacier_id_int]
+                        else:
+                            try:
+                                rgi_id = f"RGI60-11.{int(numeric_glacier_id_int):05d}"
+                            except (ValueError, OverflowError) as e:
+                                self.logger.warning(f"Cannot convert glacier ID {numeric_glacier_id_int} to integer: {e}")
+                                continue
+                    
+                    # Get glacier area
+                    area_km2 = glacier_areas.get(rgi_id, 0.0)
+                    
+                    # Get glacier mask
+                    glacier_mask = (glacier_data_np == numeric_glacier_id_int)
+                    
+                    # Classify by size
+                    if area_km2 >= 2.0:
+                        large_glacier_ids.append(rgi_id)
+                        large_glacier_mask |= glacier_mask
+                    else:
+                        small_glacier_ids.append(rgi_id)
+                        small_glacier_mask |= glacier_mask
+                
+                self.logger.info(f"  - {len(large_glacier_ids)} large glaciers (>= 2 km²)")
+                self.logger.info(f"  - {len(small_glacier_ids)} small glaciers (< 2 km²)")
+                
+                # Create LARGE glacier HRU (if any large glaciers exist)
+                if np.count_nonzero(large_glacier_mask) > 0:
+                    map_unit_ids[large_glacier_mask] = unit_id
+                    
+                    # Calculate centroid
+                    rows, cols = np.where(large_glacier_mask)
+                    with rasterio.open(self.get_path('clipped_dem.tif')) as src:
+                        transform = src.transform
+                        lon, lat = xy(transform, np.mean(cols), np.mean(rows))
+                    
+                    # Store all large glacier RGI IDs as pipe-separated string
+                    rgi_id_string = "|".join(large_glacier_ids)
+                    
+                    # Store glacier HRU attributes
+                    columns['Unit ID'].append(unit_id)
+                    columns['Glacier Class'].append(rgi_id_string)
+                    columns['Latitude'].append(lat)
+                    columns['Longitude'].append(lon)
+                    
+                    # Fill other fields with NaN
+                    for field in ['Elevation', 'Elevation Min', 'Elevation Max', 
+                                'Slope', 'Slope Min', 'Slope Max', 
+                                'Aspect Class', 'Land Use Class']:
+                        columns[field].append(np.nan)
+                    
+                    self.logger.info(f"Created LARGE glacier HRU {unit_id} with {len(large_glacier_ids)} glaciers")
+                    unit_id += 1
+                
+                # Create SMALL glacier HRU (if any small glaciers exist)
+                if np.count_nonzero(small_glacier_mask) > 0:
+                    map_unit_ids[small_glacier_mask] = unit_id
+                    
+                    # Calculate centroid
+                    rows, cols = np.where(small_glacier_mask)
+                    with rasterio.open(self.get_path('clipped_dem.tif')) as src:
+                        transform = src.transform
+                        lon, lat = xy(transform, np.mean(cols), np.mean(rows))
+                    
+                    # Store all small glacier RGI IDs as pipe-separated string
+                    rgi_id_string = "|".join(small_glacier_ids)
+                    
+                    # Store glacier HRU attributes
+                    columns['Unit ID'].append(unit_id)
+                    columns['Glacier Class'].append(rgi_id_string)
+                    columns['Latitude'].append(lat)
+                    columns['Longitude'].append(lon)
+                    
+                    # Fill other fields with NaN
+                    for field in ['Elevation', 'Elevation Min', 'Elevation Max', 
+                                'Slope', 'Slope Min', 'Slope Max', 
+                                'Aspect Class', 'Land Use Class']:
+                        columns[field].append(np.nan)
+                    
+                    self.logger.info(f"Created SMALL glacier HRU {unit_id} with {len(small_glacier_ids)} glaciers")
                     unit_id += 1
         
             # Plot initial results if debug mode
             if self.debug:
-                plot_map(map_unit_ids, title="Glacier HRUs")
+                plot_map(map_unit_ids, title="Aggregated Glacier HRUs (Large + Small)")
         
         # Generate all combinations of criteria
         combinations = list(itertools.product(*criteria_dict.values()))

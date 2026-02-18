@@ -2271,8 +2271,29 @@ class ERA5LandAnalyzer:
             ds = xr.open_dataset(temp_mean_file)
             temp_var = list(ds.data_vars)[0]  # Get the temperature variable name
             
-            # Calculate spatial average over catchment area
-            temp_spatial_avg = ds[temp_var].mean(dim=['latitude', 'longitude'])
+            # ✅ NEW: Mask data to only include grid cells within catchment
+            if self.catchment_extent is not None:
+                self.logger.info("Masking temperature data to catchment extent...")
+                
+                # Get catchment bounds
+                catchment_bounds = self.catchment_extent.total_bounds  # minx, miny, maxx, maxy
+                
+                # Create boolean masks using DataArray coordinates (proper broadcasting)
+                lat_mask = (ds['latitude'] >= catchment_bounds[1]) & (ds['latitude'] <= catchment_bounds[3])
+                lon_mask = (ds['longitude'] >= catchment_bounds[0]) & (ds['longitude'] <= catchment_bounds[2])
+                
+                # Apply mask to temperature data
+                ds_masked = ds[temp_var].where(lat_mask & lon_mask, drop=False)
+                
+                # Calculate spatial average only over masked (catchment) area
+                temp_spatial_avg = ds_masked.mean(dim=['latitude', 'longitude'], skipna=True)
+                
+                n_valid_cells = int(ds_masked.isel(time=0).count())
+                self.logger.info(f"  Using {n_valid_cells} grid cells within catchment bounds")
+            else:
+                # Fallback: Calculate spatial average over entire grid
+                self.logger.warning("No catchment shapefile - using entire grid")
+                temp_spatial_avg = ds[temp_var].mean(dim=['latitude', 'longitude'])
             
             # Group by month and calculate mean for each month (climatology)
             # This creates a 12-month climatology by averaging all Januaries, all Februaries, etc.
@@ -2410,8 +2431,29 @@ class ERA5LandAnalyzer:
             ds = xr.open_dataset(pet_file)
             pet_var = list(ds.data_vars)[0]  # Get the PET variable name
             
-            # Calculate spatial average over catchment area
-            pet_spatial_avg = ds[pet_var].mean(dim=['latitude', 'longitude'])
+            # ✅ NEW: Mask data to only include grid cells within catchment
+            if self.catchment_extent is not None:
+                self.logger.info("Masking PET data to catchment extent...")
+                
+                # Get catchment bounds
+                catchment_bounds = self.catchment_extent.total_bounds  # minx, miny, maxx, maxy
+                
+                # Create boolean masks using DataArray coordinates (proper broadcasting)
+                lat_mask = (ds['latitude'] >= catchment_bounds[1]) & (ds['latitude'] <= catchment_bounds[3])
+                lon_mask = (ds['longitude'] >= catchment_bounds[0]) & (ds['longitude'] <= catchment_bounds[2])
+                
+                # Apply mask to PET data
+                ds_masked = ds[pet_var].where(lat_mask & lon_mask, drop=False)
+                
+                # Calculate spatial average only over masked (catchment) area
+                pet_spatial_avg = ds_masked.mean(dim=['latitude', 'longitude'], skipna=True)
+                
+                n_valid_cells = int(ds_masked.isel(time=0).count())
+                self.logger.info(f"  Using {n_valid_cells} grid cells within catchment bounds")
+            else:
+                # Fallback: Calculate spatial average over entire grid
+                self.logger.warning("No catchment shapefile - using entire grid")
+                pet_spatial_avg = ds[pet_var].mean(dim=['latitude', 'longitude'])
             
             # Group by month and calculate mean for each month (climatology)
             # This creates a 12-month climatology by averaging all Januaries, all Februaries, etc.
@@ -4702,9 +4744,41 @@ class HARAnalyzer:
             # Get temperature variable
             temp_var = [v for v in ds.data_vars if 'time' in ds[v].dims][0]
             
-            # Calculate spatial average
-            spatial_dims = [dim for dim in ds[temp_var].dims if dim != 'time']
-            temp_spatial_avg = ds[temp_var].mean(dim=spatial_dims)
+            # ✅ NEW: Mask data to only include grid cells within catchment
+            if self.catchment_extent is not None:
+                self.logger.info("Masking temperature data to catchment extent...")
+                
+                # Get lat/lon coordinates (HAR has 2D lat/lon)
+                if 'lat' in ds.coords:
+                    lats = ds['lat'].values
+                    lons = ds['lon'].values
+                else:
+                    lats = ds['latitude'].values
+                    lons = ds['longitude'].values
+                
+                # Get catchment bounds
+                catchment_bounds = self.catchment_extent.total_bounds  # minx, miny, maxx, maxy
+                
+                # Create boolean mask for grid cells within catchment bounds
+                # HAR has 2D lat/lon arrays
+                lat_mask = (lats >= catchment_bounds[1]) & (lats <= catchment_bounds[3])
+                lon_mask = (lons >= catchment_bounds[0]) & (lons <= catchment_bounds[2])
+                combined_mask = lat_mask & lon_mask
+                
+                # Apply mask to temperature data
+                ds_masked = ds[temp_var].where(combined_mask, drop=False)
+                
+                # Calculate spatial average only over masked (catchment) area
+                spatial_dims = [dim for dim in ds[temp_var].dims if dim != 'time']
+                temp_spatial_avg = ds_masked.mean(dim=spatial_dims, skipna=True)
+                
+                n_valid_cells = int(combined_mask.sum())
+                self.logger.info(f"  Using {n_valid_cells} grid cells within catchment bounds")
+            else:
+                # Fallback: Calculate spatial average over entire grid
+                self.logger.warning("No catchment shapefile - using entire grid")
+                spatial_dims = [dim for dim in ds[temp_var].dims if dim != 'time']
+                temp_spatial_avg = ds[temp_var].mean(dim=spatial_dims)
             
             # Group by month and calculate mean climatology
             monthly_climatology = temp_spatial_avg.groupby('time.month').mean()
@@ -4772,9 +4846,41 @@ class HARAnalyzer:
             # Get PET variable
             pet_var = [v for v in ds.data_vars if 'time' in ds[v].dims][0]
             
-            # Calculate spatial average
-            spatial_dims = [dim for dim in ds[pet_var].dims if dim != 'time']
-            pet_spatial_avg = ds[pet_var].mean(dim=spatial_dims)
+            # ✅ NEW: Mask data to only include grid cells within catchment
+            if self.catchment_extent is not None:
+                self.logger.info("Masking PET data to catchment extent...")
+                
+                # Get lat/lon coordinates (HAR has 2D lat/lon)
+                if 'lat' in ds.coords:
+                    lats = ds['lat'].values
+                    lons = ds['lon'].values
+                else:
+                    lats = ds['latitude'].values
+                    lons = ds['longitude'].values
+                
+                # Get catchment bounds
+                catchment_bounds = self.catchment_extent.total_bounds  # minx, miny, maxx, maxy
+                
+                # Create boolean mask for grid cells within catchment bounds
+                # HAR has 2D lat/lon arrays
+                lat_mask = (lats >= catchment_bounds[1]) & (lats <= catchment_bounds[3])
+                lon_mask = (lons >= catchment_bounds[0]) & (lons <= catchment_bounds[2])
+                combined_mask = lat_mask & lon_mask
+                
+                # Apply mask to PET data
+                ds_masked = ds[pet_var].where(combined_mask, drop=False)
+                
+                # Calculate spatial average only over masked (catchment) area
+                spatial_dims = [dim for dim in ds[pet_var].dims if dim != 'time']
+                pet_spatial_avg = ds_masked.mean(dim=spatial_dims, skipna=True)
+                
+                n_valid_cells = int(combined_mask.sum())
+                self.logger.info(f"  Using {n_valid_cells} grid cells within catchment bounds")
+            else:
+                # Fallback: Calculate spatial average over entire grid
+                self.logger.warning("No catchment shapefile - using entire grid")
+                spatial_dims = [dim for dim in ds[pet_var].dims if dim != 'time']
+                pet_spatial_avg = ds[pet_var].mean(dim=spatial_dims)
             
             # Group by month and calculate mean climatology
             monthly_climatology = pet_spatial_avg.groupby('time.month').mean()

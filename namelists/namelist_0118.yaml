@@ -5,7 +5,7 @@ cali_end_date: '1991-12-31'
 warm_up_date: '1983-01-01'
 model_type: 'HBV'
 template: true
-main_dir: '/home/jberg/OneDrive/Raven_worldwide'
+main_dir: '/home/jberg/OneDrive/Raven_worldwide/03_model_setups_14.02'
 coupled: true
 # lateral connections: 'multiple': HRU connects to multiple HRUs downstream, 'single': each HRU has one lateral connection
 nconnect: 'multiple'
@@ -30,7 +30,7 @@ glogem_dir: '01_data/GloGEM/Indus/GMB'
 params_dir: 'src/config/default_params.yaml'
 
 
-config_dir: '03_model_setups_gmb'
+config_dir: '03_model_setups_snowline'
 
 
 # Forcing files (can be empty or filled as needed)
