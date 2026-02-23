@@ -43,7 +43,7 @@ class HBVProcessor:
     """
     
     def __init__(self, namelist_path: Union[str, Path]):
-        """
+        """        
         Initialize the HBV preprocessor with namelist file.
         
         Args:
@@ -795,9 +795,9 @@ class HBVProcessor:
             "   :Attributes, MAX_HT, MAX_LAI, MAX_LEAF_COND",
             "   :Units, m, none, mm_per_s",
             "   DEFAULT_V, 0.0, 0.0, 0.0",
-            "   FOREST,  25,  6.0, 5.0",
-            "   GRAS,    0.6, 2.0, 5.0",
-            "   CROP,    2.0, 4.0, 5.0",
+            "   FOREST,  20,  4.5, 3.5",
+            "   GRAS,    0.6, 1.5, 2.5",
+            "   CROP,    2.0, 3.0, 4.0",
             ":EndVegetationClasses"
         ]
 

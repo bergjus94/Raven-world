@@ -110,11 +110,15 @@ class CatchmentProcessor:
         else:
             self.glacier_dir = None
         
+        # Landuse source: 'ESA', 'ICIMOD', or 'auto'
+        self.landuse_source = self.config.get('landuse_source', 'auto').upper()
+        
         # Processing parameters
         criteria = self.config.get('criteria', ['elevation', 'landuse'])
         self.criteria = criteria if isinstance(criteria, list) else [criteria]
         self.elevation_distance = self.config.get('elevation_distance', 100)
         self.slope_distance = self.config.get('slope_distance', 10)
+        self.aspect_slope_threshold = self.config.get('aspect_slope_threshold', 15.0)
         self.debug = self.config.get('debug', False)
         
         # Initialize data containers
@@ -500,18 +504,195 @@ class CatchmentProcessor:
         return slope, aspect
 
     #---------------------------------------------------------------------------------
+    # ── Landuse reclassification schemes and auto-detection ──────────────────────
+    #---------------------------------------------------------------------------------
+
+    # ESA WorldCover V2 class values (10, 20, ..., 100)
+    _ESA_SIGNATURE = {10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100}
+
+    # ICIMOD HKH Land Cover class values (1–9)
+    _ICIMOD_SIGNATURE = {1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+    # ── Reclassification to Raven landuse classes ────────────────────────────────
+    #
+    # Raven class  |  Meaning                          |  LAND_USE_CLASS  |  VEG_CLASS
+    # -------------|-----------------------------------|------------------|----------
+    #   1          |  Forest                           |  FOREST          |  FOREST
+    #   2          |  Open vegetated (shrub/grass/wet) |  OPEN            |  GRAS
+    #   3          |  Crop                             |  OPEN            |  CROP
+    #   4          |  Built-up / urban                 |  BUILT           |  DEFAULT_V
+    #   5          |  Rock / snow & ice                |  ROCK            |  DEFAULT_V
+    #   6          |  Water (lake / river)             |  LAKE            |  DEFAULT_V
+    #   9          |  Bare open (sparse veg / soil)    |  OPEN            |  DEFAULT_V
+    #
+
+    # ESA WorldCover V2 → Raven classes
+    _RECLASSIFY_ESA = {
+        1: {10, 95},       # Forest  (Tree cover, Mangroves)
+        2: {20, 30, 90},   # Open    (Shrubland, Grassland, Herbaceous wetland)
+        3: {40},           # Crop    (Cropland)
+        4: {50},           # Built   (Built-up)
+        5: {70},      # Rock    (Snow & Ice, Moss & lichen)
+        6: {80},           # Water   (Permanent water bodies)
+        9: {60, 100},           # Bare open (Bare / sparse vegetation)
+    }
+
+    # ICIMOD HKH Land Cover 2021 → Raven classes
+    # Source codes:  1=Water, 2=Snow/glacier, 3=Forest, 4=Riverbed,
+    #               5=Built-up, 6=Cropland, 7=Bare soil, 8=Bare rock, 9=Grassland
+    _RECLASSIFY_ICIMOD = {
+        1: {3},            # Forest  (ICIMOD: Forest)
+        2: {9},            # Open    (ICIMOD: Grassland)
+        3: {6},            # Crop    (ICIMOD: Cropland)
+        4: {5},            # Built   (ICIMOD: Built-up area)
+        5: {2, 8},         # Rock    (ICIMOD: Snow/glacier, Bare rock)
+        6: {1, 4},         # Water   (ICIMOD: Water body, Riverbed)
+        9: {7},            # Bare open (ICIMOD: Bare soil)
+    }
+
+    def _detect_landuse_source(self, raw_values: np.ndarray) -> str:
+        """
+        Auto-detect landuse classification scheme from unique pixel values.
+
+        Parameters
+        ----------
+        raw_values : np.ndarray
+            Raw landuse pixel values (may contain NaN / nodata)
+
+        Returns
+        -------
+        str
+            'ESA' or 'ICIMOD'
+        """
+        valid = raw_values[~np.isnan(raw_values)]
+        if valid.size == 0:
+            self.logger.warning("No valid landuse pixels – defaulting to ESA")
+            return 'ESA'
+
+        unique_vals = set(np.unique(valid).astype(int))
+
+        overlap_esa    = len(unique_vals & self._ESA_SIGNATURE)
+        overlap_icimod = len(unique_vals & self._ICIMOD_SIGNATURE)
+
+        # ESA has values like 10, 20, …, 100 so any value > 9 is a strong ESA signal
+        has_high_vals = any(v > 9 for v in unique_vals)
+
+        if has_high_vals or overlap_esa > overlap_icimod:
+            detected = 'ESA'
+        else:
+            detected = 'ICIMOD'
+
+        self.logger.info(
+            f"Auto-detected landuse source: {detected}  "
+            f"(unique values: {sorted(unique_vals)}, "
+            f"ESA overlap: {overlap_esa}, ICIMOD overlap: {overlap_icimod})"
+        )
+        return detected
+
+    def _get_landuse_source(self, raw_values: np.ndarray) -> str:
+        """
+        Resolve which landuse scheme to use, optionally validating against
+        auto-detection.
+
+        Parameters
+        ----------
+        raw_values : np.ndarray
+            Raw landuse raster values (float, NaN for nodata)
+
+        Returns
+        -------
+        str
+            'ESA' or 'ICIMOD'
+        """
+        declared = self.landuse_source  # already uppercased in __init__
+
+        if declared == 'AUTO':
+            return self._detect_landuse_source(raw_values)
+
+        if declared not in ('ESA', 'ICIMOD'):
+            raise ValueError(
+                f"landuse_source '{declared}' not recognised. "
+                f"Use 'ESA', 'ICIMOD', or 'auto'."
+            )
+
+        # Validate declared source against auto-detection
+        detected = self._detect_landuse_source(raw_values)
+        if detected != declared:
+            self.logger.warning(
+                f"⚠️  landuse_source in namelist is '{declared}' but auto-detection "
+                f"says '{detected}'.  Using declared value '{declared}'.  "
+                f"Double-check your landuse_dir path!"
+            )
+
+        return declared
+
+    def _apply_reclassification(self, raw: np.ndarray, source: str) -> np.ndarray:
+        """
+        Apply the correct reclassification mapping to raw landuse values.
+
+        Parameters
+        ----------
+        raw : np.ndarray
+            Float32 array with NaN for nodata
+        source : str
+            'ESA' or 'ICIMOD'
+
+        Returns
+        -------
+        np.ndarray
+            Reclassified array (same shape) with Raven classes 1–6
+        """
+        scheme = self._RECLASSIFY_ESA if source == 'ESA' else self._RECLASSIFY_ICIMOD
+
+        result = np.full_like(raw, np.nan)  # start all-NaN
+
+        for raven_class, src_values in scheme.items():
+            mask = np.zeros(raw.shape, dtype=bool)
+            for v in src_values:
+                mask |= (raw == v)
+            result[mask] = raven_class
+
+        # Report unmapped pixels (excluding nodata)
+        mapped = ~np.isnan(result)
+        valid  = ~np.isnan(raw)
+        n_unmapped = int(np.sum(valid & ~mapped))
+        if n_unmapped > 0:
+            unmapped_vals = np.unique(raw[valid & ~mapped]).astype(int)
+            self.logger.warning(
+                f"{n_unmapped:,} pixels have source values not in the {source} scheme "
+                f"and were set to NaN.  Unmapped values: {unmapped_vals.tolist()}"
+            )
+
+        unique_out = np.unique(result[~np.isnan(result)]).astype(int)
+        self.logger.info(
+            f"Reclassified with {source} scheme → Raven classes present: {unique_out.tolist()}"
+        )
+        return result
+
+    #---------------------------------------------------------------------------------
 
     def reclassify_landuse(self) -> xr.DataArray:
         """
-        Reclassify the landuse raster from ESA WorldCover V2
-        ✅ UPDATED: Handles both individual catchment files and basin-wide Indus landuse
+        Reclassify the landuse raster to Raven landuse classes.
+        
+        Supports:
+          - ESA WorldCover V2 (class values 10–100)
+          - ICIMOD HKH Land Cover 2021 (class values 1–9)
+        
+        Which scheme is used is controlled by ``landuse_source`` in the namelist:
+          - ``'ESA'``    → use ESA reclassification (validated against pixel values)
+          - ``'ICIMOD'`` → use ICIMOD reclassification (validated against pixel values)
+          - ``'auto'``   → auto-detect from the unique pixel values in the file
+        
+        Raven target classes (identical for both sources):
+          1 = Forest,  2 = Open,  3 = Crop,  4 = Built,  5 = Rock/Snow,  6 = Water
         
         Returns
         -------
         xr.DataArray
             Reclassified landuse raster
         """
-        self.logger.info("Reclassifying ESA WorldCover landuse")
+        self.logger.info("Reclassifying landuse")
         
         # Check if output file already exists
         landuse_path = self.get_path('reclassified_landuse.tif')
@@ -537,15 +718,15 @@ class CatchmentProcessor:
         landuse_source_path = self.main_dir / self.config['landuse_dir']
         
         if not landuse_source_path.exists():
-            raise FileNotFoundError(f"ESA WorldCover file not found: {landuse_source_path}")
+            raise FileNotFoundError(f"Landuse file not found: {landuse_source_path}")
         
         # Check file size
         file_size_mb = landuse_source_path.stat().st_size / 1024 / 1024
         self.logger.info(f"Landuse file: {landuse_source_path.name} ({file_size_mb:.1f} MB)")
         
-        # ✅ FIX: Use optimized loading for files > 50 MB OR if filename contains 'Indus'
-        # Even 50 MB compressed can be huge when decompressed!
-        use_optimized = (file_size_mb > 50) or ('indus' in landuse_source_path.name.lower())
+        # Use optimized windowed loading for large files (both ESA Indus and ICIMOD HKH are huge)
+        use_optimized = (file_size_mb > 50) or ('indus' in landuse_source_path.name.lower()) \
+                        or ('hkh' in landuse_source_path.name.lower())
         
         if use_optimized:
             self.logger.info(f"Using optimized windowed loading for large landuse file")
@@ -679,24 +860,12 @@ class CatchmentProcessor:
             self.logger.info(f"Resampling landuse to match DEM grid: {landuse.shape} -> {self.dem_data.shape}")
             landuse = landuse.rio.reproject_match(self.dem_data)
         
-        # Create a copy of the landuse values for reclassification
-        lista = landuse.values.copy()
-        
-        # Define reclassification dictionary
-        # ESA WorldCover classes to Raven landuse classes
-        reclassification_dict = {
-            '1': (lista == 10) | (lista == 95),  # Forest (Tree cover, Mangroves)
-            '2': (lista == 20) | (lista == 30) | (lista == 90),  # Open (Shrubland, Grassland, Wetland)
-            '3': (lista == 40),  # Crop
-            '4': (lista == 50),  # Built
-            '5': (lista == 60) | (lista == 70) | (lista == 100),  # Rock (Bare, Snow/Ice, Moss)
-            '6': (lista == 80),  # Lake
-        }
-        
-        # Apply reclassification
-        self.logger.debug("Reclassifying landuse values")
-        for value, condition in reclassification_dict.items():
-            lista[condition] = int(value)
+        # ── Detect / validate landuse source and apply reclassification ──────
+        raw = landuse.values.copy()
+        source = self._get_landuse_source(raw)
+        self.logger.info(f"Using landuse reclassification scheme: {source}")
+        lista = self._apply_reclassification(raw, source)
+        del raw
         
         # Create a new DataArray with the reclassified values
         landuse_new = xr.DataArray(
@@ -721,7 +890,7 @@ class CatchmentProcessor:
         
         # Plot if debug is enabled
         if self.debug:
-            plot_raster(landuse_new, title="Reclassified ESA WorldCover", cmap="tab10")
+            plot_raster(landuse_new, title=f"Reclassified Landuse ({source})", cmap="tab10")
         
         self.landuse_data = landuse_new
         return landuse_new
@@ -1843,6 +2012,7 @@ class CatchmentProcessor:
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 6, 'LAND_USE_CLASS'] = 'LAKE'
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 7, 'LAND_USE_CLASS'] = 'GLACIER'
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 8, 'LAND_USE_CLASS'] = 'MASKED_GLACIER'
+        all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 9, 'LAND_USE_CLASS'] = 'OPEN'
         
         # Assign soil classes 
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 5, 'SOIL_PROFILE'] = 'ROCK'
@@ -1850,7 +2020,7 @@ class CatchmentProcessor:
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 7, 'SOIL_PROFILE'] = 'GLACIER'
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 8, 'SOIL_PROFILE'] = 'MASKED_GLACIER'
         
-        # Assign vegetation classes
+        # Assign vegetation classes (class 9 = bare open keeps DEFAULT_V)
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 1, 'VEG_CLASS'] = 'FOREST'
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 2, 'VEG_CLASS'] = 'GRAS'
         all_HRUs.loc[self.hru_stats['Landuse_Cl'] == 3, 'VEG_CLASS'] = 'CROP'
@@ -1885,6 +2055,124 @@ class CatchmentProcessor:
                 f.write(' '.join(map(str, row)) + '\n')
         
         return HRU
+
+    #---------------------------------------------------------------------------------
+
+    def merge_low_slope_hrus(self, hru_table: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge HRUs that share the same elevation band and landuse/veg/soil
+        combination when their mean slope is below the aspect_slope_threshold.
+
+        On gentle terrain, aspect orientation has negligible effect for all
+        landuse types.  Instead of keeping up to 4 separate HRUs (one per
+        aspect direction) we merge them into one, using area-weighted averages
+        for all continuous properties.
+
+        The slope threshold comes from the namelist key ``aspect_slope_threshold``
+        (default 15°).
+
+        Parameters
+        ----------
+        hru_table : pd.DataFrame
+            The Raven HRU table produced by ``create_hru_table()``.
+
+        Returns
+        -------
+        pd.DataFrame
+            HRU table with low-slope HRUs merged (fewer rows).
+        """
+        threshold = self.aspect_slope_threshold
+        if threshold <= 0 or self.hru_stats is None:
+            self.logger.info("Aspect-slope merge disabled (threshold <= 0)")
+            return hru_table
+
+        # ── Build a working copy with elevation-band info ───────────────
+        work = hru_table.copy()
+        work['_elev_min'] = self.hru_stats['Elev_Min'].values
+        work['_elev_max'] = self.hru_stats['Elev_Max'].values
+
+        # All HRUs with mean slope below threshold are eligible — regardless of landuse
+        is_low_slope = (work['SLOPE'] < threshold)
+        eligible = is_low_slope
+
+        n_eligible = int(eligible.sum())
+        if n_eligible == 0:
+            self.logger.info("No HRUs eligible for low-slope aspect merge")
+            return hru_table
+
+        self.logger.info(
+            f"Low-slope merge: {n_eligible} HRUs eligible (slope < {threshold}°, all landuse classes)"
+        )
+
+        # ── Split into mergeable vs keep-as-is ──────────────────────────
+        keep = work[~eligible].copy()
+        to_merge = work[eligible].copy()
+
+        # Group by elevation band + all Raven class columns
+        group_cols = ['_elev_min', '_elev_max',
+                      'LAND_USE_CLASS', 'VEG_CLASS', 'SOIL_PROFILE',
+                      'AQUIFER_PROFILE', 'TERRAIN_CLASS', 'BASIN_ID']
+
+        merged_rows = []
+        for _key, grp in to_merge.groupby(group_cols, dropna=False):
+            if len(grp) == 1:
+                merged_rows.append(grp.iloc[0])
+                continue
+
+            area = grp['AREA']
+            total_area = area.sum()
+            w = area / total_area  # area weights
+
+            # Area-weighted continuous properties
+            merged_elev = float((grp['ELEVATION'] * w).sum())
+            merged_lat  = float((grp['LATITUDE']  * w).sum())
+            merged_lon  = float((grp['LONGITUDE'] * w).sum())
+            merged_slope = float((grp['SLOPE']    * w).sum())
+
+            # Area-weighted circular mean for aspect
+            asp_rad = np.deg2rad(grp['ASPECT'].values)
+            w_vals = w.values
+            mean_sin = np.sum(np.sin(asp_rad) * w_vals)
+            mean_cos = np.sum(np.cos(asp_rad) * w_vals)
+            merged_aspect = float((np.rad2deg(np.arctan2(mean_sin, mean_cos)) + 360) % 360)
+
+            # Take the lowest original ID for traceability
+            merged_id = int(grp[':ATTRIBUTES'].min())
+
+            row = grp.iloc[0].copy()
+            row[':ATTRIBUTES'] = merged_id
+            row['AREA']       = float(total_area)
+            row['ELEVATION']  = merged_elev
+            row['LATITUDE']   = merged_lat
+            row['LONGITUDE']  = merged_lon
+            row['SLOPE']      = merged_slope
+            row['ASPECT']     = merged_aspect
+            merged_rows.append(row)
+
+        merged_df = pd.DataFrame(merged_rows)
+
+        # ── Combine and re-number ───────────────────────────────────────
+        result = pd.concat([keep, merged_df], ignore_index=True)
+        # Drop helper columns
+        result.drop(columns=['_elev_min', '_elev_max'], inplace=True)
+        # Re-assign sequential IDs
+        result = result.sort_values(':ATTRIBUTES').reset_index(drop=True)
+        result[':ATTRIBUTES'] = range(1, len(result) + 1)
+
+        n_removed = len(hru_table) - len(result)
+        self.logger.info(
+            f"Low-slope merge complete: {len(hru_table)} → {len(result)} HRUs "
+            f"({n_removed} removed)"
+        )
+
+        # ── Overwrite saved files ───────────────────────────────────────
+        result.to_csv(self.get_path('HRU_table.csv'), index=False)
+        with open(self.get_path('HRU.txt'), 'w') as f:
+            f.write(' '.join(result.columns) + '\n')
+            for _, row in result.iterrows():
+                f.write(' '.join(map(str, row)) + '\n')
+
+        return result
 
     #---------------------------------------------------------------------------------
 
@@ -2002,6 +2290,10 @@ class CatchmentProcessor:
             
             # Step 9: Create HRU table
             hru_table_df = self.create_hru_table()
+            
+            # Step 10: Merge low-slope HRUs across aspects
+            if self.aspect_slope_threshold > 0 and 'aspect' in self.criteria:
+                hru_table_df = self.merge_low_slope_hrus(hru_table_df)
             
             self.logger.info(f"Catchment processing completed for gauge ID {self.gauge_id}")
             

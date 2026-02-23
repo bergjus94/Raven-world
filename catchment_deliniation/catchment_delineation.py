@@ -1247,7 +1247,7 @@ def main():
     
     # Upper Indus Basin bounding box
     upper_indus_bbox = (
-        70.5,  # West
+        69.5,  # West
         30.0,  # South
         82.0,  # East
         37.5   # North
