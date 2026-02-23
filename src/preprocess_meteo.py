@@ -1765,14 +1765,12 @@ class ERA5LandAnalyzer:
                     'elevation_included': 'true' if has_elevation else 'false'
                 })
                 
-                # ✅ CRITICAL FIX: Close datasets BEFORE saving to release file handles
-                self.logger.debug("Closing original datasets to release file handles...")
+                # Load into memory FIRST while ds is still open, THEN close originals.
+                # Closing before .load() causes a hang: combined still lazily references ds.
+                combined = combined.load()
                 ds.close()
                 warmup_data.close()
-                
-                # ✅ FIX: Load combined data into memory to avoid file lock issues
-                combined = combined.load()
-                
+
                 # ✅ NEW: Save to temporary file first, then replace original
                 import tempfile
                 import shutil
@@ -3522,14 +3520,12 @@ class HARAnalyzer:
                     'elevation_included': 'true' if has_elevation else 'false'
                 })
                 
-                # ✅ CRITICAL FIX: Close datasets BEFORE saving to release file handles
-                self.logger.debug("Closing original datasets to release file handles...")
+                # Load into memory FIRST while ds is still open, THEN close originals.
+                # Closing before .load() causes a hang: combined still lazily references ds.
+                combined = combined.load()
                 ds.close()
                 warmup_data.close()
-                
-                # ✅ FIX: Load combined data into memory to avoid file lock issues
-                combined = combined.load()
-                
+
                 # ✅ NEW: Save to temporary file first, then replace original
                 import shutil
                 
