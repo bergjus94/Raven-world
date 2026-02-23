@@ -5991,17 +5991,28 @@ class HARGridWeightsGenerator:
         
         # ✅ FIX: Create polygons for EACH grid cell (ny * nx cells)
         # Each polygon is centered on the grid point
-        self.logger.info("Creating HAR grid polygons...")
-        
+        self.logger.info("Creating HAR grid polygons (catchment-extent only)...")
+
+        # Pre-compute catchment bounding box for fast filtering
+        hru_minx, hru_miny, hru_maxx, hru_maxy = HRU_wgs84.total_bounds
+        # generous buffer: 2 full cells
+        buf_lat = dlat * 4
+        buf_lon = dlon * 4
+
         polygons = []
         cell_ids = []
-        
+
         for j in range(ny):
             for i in range(nx):
                 # Get center point of this cell
                 center_lat = lat_2d[j, i]
                 center_lon = lon_2d[j, i]
-                
+
+                # Skip cells clearly outside the catchment (+buffer)
+                if (center_lon < hru_minx - buf_lon or center_lon > hru_maxx + buf_lon or
+                        center_lat < hru_miny - buf_lat or center_lat > hru_maxy + buf_lat):
+                    continue
+
                 # Create polygon around the center point
                 corners = [
                     (center_lon - dlon, center_lat - dlat),  # lower-left
@@ -6009,10 +6020,10 @@ class HARGridWeightsGenerator:
                     (center_lon + dlon, center_lat + dlat),  # upper-right
                     (center_lon - dlon, center_lat + dlat),  # upper-left
                 ]
-                
+
                 poly = Polygon(corners)
                 polygons.append(poly)
-                
+
                 # ✅ FIX: Cell ID matches flattened index (row-major order)
                 cell_id = j * nx + i
                 cell_ids.append(str(cell_id))
@@ -6031,29 +6042,38 @@ class HARGridWeightsGenerator:
         if self.debug:
             self.logger.debug("Plotting HAR grid polygons over HRU shapefile")
             fig, ax = plt.subplots(figsize=(12, 10))
-            
-            # Plot HRUs
-            HRU_wgs84.plot(ax=ax, color='lightblue', edgecolor='blue', alpha=0.7, linewidth=1)
-            
+
+            # Simplify HRU geometries for plotting only (avoids slow render with 500+ complex polygons)
+            HRU_plot = HRU_wgs84.copy()
+            HRU_plot['geometry'] = HRU_plot.geometry.simplify(0.001)
+            HRU_plot.plot(ax=ax, color='lightblue', edgecolor='blue', alpha=0.7, linewidth=1)
+
             # Plot HAR grid
             har_grid.plot(ax=ax, facecolor='none', edgecolor='red', alpha=0.5, linewidth=0.5)
-            
-            plt.title(f"HAR Grid Polygons for Catchment {self.gauge_id}\n({len(har_grid)} cells)", 
+
+            plt.title(f"HAR Grid Polygons for Catchment {self.gauge_id}\n({len(har_grid)} cells)",
                     fontsize=14, fontweight='bold')
             plt.xlabel('Longitude')
             plt.ylabel('Latitude')
             plt.grid(True, alpha=0.3)
-            
+
             # Save plot
             plot_path = self.plots_dir / 'har_grid_polygons.png'
-            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.savefig(plot_path, dpi=100, bbox_inches='tight')
             self.logger.info(f"HAR grid polygons plot saved to {plot_path}")
-            plt.show()
             plt.close()
         
+        # Clip HAR grid to catchment bounding box before overlay (major speedup)
+        minx, miny, maxx, maxy = HRU_wgs84.total_bounds
+        buf = max(dlat, dlon) * 2  # two-cell buffer
+        har_grid_clip = har_grid.cx[minx - buf : maxx + buf, miny - buf : maxy + buf]
+        self.logger.info(
+            f"Clipped HAR grid to catchment extent: {len(har_grid)} → {len(har_grid_clip)} cells"
+        )
+
         # Create overlay
         self.logger.info("Creating overlay of HAR grid and HRU shapes...")
-        res_union = HRU_wgs84.overlay(har_grid, how='intersection')
+        res_union = HRU_wgs84.overlay(har_grid_clip, how='intersection')
         
         # Calculate relative areas
         self.logger.info("Calculating relative areas...")

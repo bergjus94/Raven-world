@@ -61,6 +61,9 @@ class HBVProcessor:
         with open(namelist_path, 'r') as f:
             namelist = yaml.safe_load(f)
         
+        # Store full namelist config (for multi-subbasin support)
+        self.config = namelist
+
         # Store basic configuration
         self.gauge_id = str(namelist['gauge_id'])
         self.main_dir = Path(namelist['main_dir'])
@@ -343,26 +346,79 @@ class HBVProcessor:
         
         # Create HRU groups
         hru_groups = self._create_hru_groups(HRU)
-        
-        # Define subbasins
-        subbasins = [
-            ":SubBasins",
-            "  :Attributes,          NAME, DOWNSTREAM_ID,PROFILE,REACH_LENGTH,       GAUGED",
-            "  :Units     ,          none,          none,   none,          km,         none",
-            f"            1,        {self.gauge_id},            -1,   NONE,       _AUTO,     1",
-            ":EndSubBasins"
-        ]
 
-        # Define subbasin properties
-        subbasin_properties = [
-            ":SubBasinProperties",
-            "#                       HBV_T_CONC_MAX_BAS, DERIVED FROM HBV_T_CONC_MAX_BAS,",
-            "#                            MAXBAS,                 MAXBAS/2,",
-            "   :Parameters,           TIME_CONC,             TIME_TO_PEAK,",
-            "   :Units,                        d,                        d,",
-            f"              1,          {self.params['HBV'][param_or_name]['X11']},                  {self.params['HBV'][param_or_name]['HBV_Time_To_Peak']},",
-            ":EndSubBasinProperties"
-        ]
+        # -------------------------------------------------------------------
+        # SubBasins / SubBasinProperties – multi or single basin
+        # -------------------------------------------------------------------
+        subbasins_config = self.config.get('subbasins', None)
+
+        if subbasins_config:
+            # Multi-subbasin: read routing computed by MultiSubbasinProcessor
+            routing_path = self.topo_files_dir / 'subbasin_routing.yaml'
+            if not routing_path.exists():
+                raise FileNotFoundError(
+                    f"subbasin_routing.yaml not found at {routing_path}. "
+                    "Run MultiSubbasinProcessor.process_all_subbasins() first."
+                )
+            with open(routing_path) as _f:
+                routing = yaml.safe_load(_f)  # {id: downstream_id}
+
+            sb_rows = []
+            for sb in subbasins_config:
+                sb_id = sb['id']
+                downstream = routing[sb_id]
+                reach = sb.get('reach_length', '_AUTO')
+                profile = sb.get('profile', 'NONE')
+                gauged = sb.get('gauged', 0)
+                sb_rows.append(
+                    f"  {sb_id:10d}, {sb['name']:20s}, {downstream:12d}, "
+                    f"{profile:>10s}, {str(reach):>12s}, {gauged:>6d}"
+                )
+
+            subbasins = [
+                ":SubBasins",
+                "  :Attributes,          NAME, DOWNSTREAM_ID,   PROFILE, REACH_LENGTH, GAUGED",
+                "  :Units     ,          none,          none,      none,           km,   none",
+                *sb_rows,
+                ":EndSubBasins",
+            ]
+
+            sp_rows = []
+            for sb in subbasins_config:
+                sp_rows.append(
+                    f"  {sb['id']:10d},  {self.params['HBV'][param_or_name]['X11']},"
+                    f"  {self.params['HBV'][param_or_name]['HBV_Time_To_Peak']},"
+                )
+
+            subbasin_properties = [
+                ":SubBasinProperties",
+                "#                       HBV_T_CONC_MAX_BAS, DERIVED FROM HBV_T_CONC_MAX_BAS,",
+                "#                            MAXBAS,                 MAXBAS/2,",
+                "   :Parameters,           TIME_CONC,             TIME_TO_PEAK,",
+                "   :Units,                        d,                        d,",
+                *sp_rows,
+                ":EndSubBasinProperties",
+            ]
+
+        else:
+            # Single-basin: existing behaviour unchanged
+            subbasins = [
+                ":SubBasins",
+                "  :Attributes,          NAME, DOWNSTREAM_ID,PROFILE,REACH_LENGTH,       GAUGED",
+                "  :Units     ,          none,          none,   none,          km,         none",
+                f"            1,        {self.gauge_id},            -1,   NONE,       _AUTO,     1",
+                ":EndSubBasins",
+            ]
+
+            subbasin_properties = [
+                ":SubBasinProperties",
+                "#                       HBV_T_CONC_MAX_BAS, DERIVED FROM HBV_T_CONC_MAX_BAS,",
+                "#                            MAXBAS,                 MAXBAS/2,",
+                "   :Parameters,           TIME_CONC,             TIME_TO_PEAK,",
+                "   :Units,                        d,                        d,",
+                f"              1,          {self.params['HBV'][param_or_name]['X11']},                  {self.params['HBV'][param_or_name]['HBV_Time_To_Peak']},",
+                ":EndSubBasinProperties",
+            ]
 
         # Write the file
         with open(file_path, 'w') as ff:

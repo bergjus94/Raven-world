@@ -22,7 +22,7 @@ from preprocess_meteo import (
     HARAnalyzer,
     HARGridWeightsGenerator
 )
-from preprocess_catchment import CatchmentProcessor, HRUConnectivityCalculator
+from preprocess_catchment import CatchmentProcessor, HRUConnectivityCalculator, MultiSubbasinProcessor
 from preprocess_streamflow import StreamflowProcessor
 from preprocess_glogem import GloGEMProcessor
 
@@ -239,18 +239,26 @@ def main(namelist_path: str, force_reprocess: bool = False):
     # =========================================================================
     print("\n🗺️ STEP 3: Processing catchment and creating HRUs...")
     try:
-        processor_catchment = CatchmentProcessor(namelist_path)
-        
-        if debug:
-            print(f"   📊 Catchment configuration:")
-            print(f"      - Criteria: {processor_catchment.criteria}")
-            print(f"      - Elevation distance: {processor_catchment.elevation_distance} m")
-        
-        hru_table = processor_catchment.process_catchment()
-        
-        print(f"   ✅ Created {len(hru_table)} HRUs")
-        print(f"   📁 Files saved in: {processor_catchment.get_path('')}")
-        
+        if nml.get('subbasins'):
+            # Multi-subbasin path
+            print("   🌐 Multi-subbasin mode detected")
+            multi_processor = MultiSubbasinProcessor(namelist_path)
+            hru_table = multi_processor.process_all_subbasins()
+            print(f"   ✅ Created {len(hru_table)} HRUs across {len(nml['subbasins'])} subbasins")
+        else:
+            # Single-basin path (existing behaviour)
+            processor_catchment = CatchmentProcessor(namelist_path)
+
+            if debug:
+                print(f"   📊 Catchment configuration:")
+                print(f"      - Criteria: {processor_catchment.criteria}")
+                print(f"      - Elevation distance: {processor_catchment.elevation_distance} m")
+
+            hru_table = processor_catchment.process_catchment()
+
+            print(f"   ✅ Created {len(hru_table)} HRUs")
+            print(f"   📁 Files saved in: {processor_catchment.get_path('')}")
+
     except Exception as e:
         print(f"   ❌ Error during catchment processing: {e}")
         traceback.print_exc()
@@ -261,9 +269,13 @@ def main(namelist_path: str, force_reprocess: bool = False):
     # =========================================================================
     print("\n🔗 STEP 4: Calculating HRU connectivity...")
     try:
-        connectivity_calc = HRUConnectivityCalculator(namelist_path)
-        connectivity_df = connectivity_calc.calculate_connectivity()
-        print(f"   ✅ HRU connectivity calculated ({len(connectivity_df)} connections)")
+        if nml.get('subbasins'):
+            # Multi-subbasin: skip connectivity (handled per-subbasin or separately)
+            print("   ℹ️  Multi-subbasin mode: HRU connectivity skipped (run per-subbasin manually if needed)")
+        else:
+            connectivity_calc = HRUConnectivityCalculator(namelist_path)
+            connectivity_df = connectivity_calc.calculate_connectivity()
+            print(f"   ✅ HRU connectivity calculated ({len(connectivity_df)} connections)")
     except Exception as e:
         print(f"   ❌ Error calculating connectivity: {e}")
         traceback.print_exc()
