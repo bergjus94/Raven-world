@@ -2676,9 +2676,10 @@ def plot_glogem_vs_observed_regime(config, plot_dirs, start_date=None, end_date=
     print(f"  - Conversion factor: {conversion_factor:.6f}")
     
     # Merge the two dataframes on date
-    merged_df = pd.merge(glogem_df[['date', 'glacier_melt_normalized']], 
-                         hydro_df[['date', 'obs_Q_mm']], 
-                         on='date', 
+    merged_df = pd.merge(glogem_df[['date', 'glacier_melt_normalized', 'icemelt_normalized',
+                                     'snowmelt_normalized', 'rainfall_normalized']],
+                         hydro_df[['date', 'obs_Q_mm']],
+                         on='date',
                          how='inner')
     
     if len(merged_df) == 0:
@@ -2756,56 +2757,63 @@ def plot_glogem_vs_observed_regime(config, plot_dirs, start_date=None, end_date=
     # Calculate monthly regime (average for each month across valid years only)
     monthly_regime = merged_df_filtered.groupby('month').agg({
         'glacier_melt_normalized': 'mean',
+        'icemelt_normalized': 'mean',
+        'snowmelt_normalized': 'mean',
+        'rainfall_normalized': 'mean',
         'obs_Q_mm': 'mean'
     }).reset_index()
-    
+
     # Calculate annual totals correctly (monthly averages * days per month)
     # Days per month (using average for simplicity)
     days_per_month = [31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     monthly_regime['days'] = monthly_regime['month'].apply(lambda m: days_per_month[m-1])
-    
+
     # Calculate monthly totals (mm/day * days = mm/month)
     monthly_regime['glogem_monthly_total'] = monthly_regime['glacier_melt_normalized'] * monthly_regime['days']
     monthly_regime['obs_monthly_total'] = monthly_regime['obs_Q_mm'] * monthly_regime['days']
-    
+
     # Sum to get annual totals
     glogem_total = monthly_regime['glogem_monthly_total'].sum()
     obs_total = monthly_regime['obs_monthly_total'].sum()
     correlation = merged_df_filtered['glacier_melt_normalized'].corr(merged_df_filtered['obs_Q_mm'])
-    
+
+    # Component annual totals (for stats box)
+    icemelt_annual = (monthly_regime['icemelt_normalized'] * monthly_regime['days']).sum()
+    snowmelt_annual = (monthly_regime['snowmelt_normalized'] * monthly_regime['days']).sum()
+    rain_annual = (monthly_regime['rainfall_normalized'] * monthly_regime['days']).sum()
+
     print(f"\n{'='*80}")
     print(f"STATISTICS (based on {len(valid_years)} complete years)")
     print(f"{'='*80}")
-    print(f"  - Annual total GloGEM melt: {glogem_total:.2f} mm/year")
+    print(f"  - Annual total GloGEM (ice+snow+rain): {glogem_total:.2f} mm/year")
+    print(f"      Ice melt:  {icemelt_annual:.2f} mm/year")
+    print(f"      Snow melt: {snowmelt_annual:.2f} mm/year")
+    print(f"      Rain:      {rain_annual:.2f} mm/year")
     print(f"  - Annual total observed runoff: {obs_total:.2f} mm/year")
     print(f"  - GloGEM / Observed ratio: {glogem_total/obs_total:.2%}")
     print(f"  - Correlation (daily): {correlation:.3f}")
-    
-    # Create the plot
-    fig, ax = plt.subplots(figsize=(7, 6))
-    
-    # Plot bars
+
+    # Create the plot — 2 panels
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+
+    month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     x = monthly_regime['month']
+
+    # --- Panel 1: total GloGEM discharge vs observed runoff ---
     width = 0.35
-    
-    ax.bar(x - width/2, monthly_regime['glacier_melt_normalized'], width, 
-           label='GloGEM Total Melt', color='steelblue', alpha=0.8)
-    ax.bar(x + width/2, monthly_regime['obs_Q_mm'], width, 
-           label='Observed Runoff', color='coral', alpha=0.8)
-    
-    # Formatting
-    ax.set_xlabel('Month', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Water Input [mm/day]', fontsize=12, fontweight='bold')
-    
-    
-    ax.set_xticks(range(1, 13))
-    ax.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
-    
-    ax.legend(loc='upper left', fontsize=10)
-    ax.grid(axis='y', alpha=0.3, linestyle='--')
-    
-    # Add statistics box
+    ax1.bar(x - width/2, monthly_regime['glacier_melt_normalized'], width,
+            label='GloGEM Total (ice+snow+rain)', color='steelblue', alpha=0.8)
+    ax1.bar(x + width/2, monthly_regime['obs_Q_mm'], width,
+            label='Observed Runoff', color='coral', alpha=0.8)
+
+    ax1.set_xlabel('Month', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Water Depth [mm/day]', fontsize=12, fontweight='bold')
+    ax1.set_xticks(range(1, 13))
+    ax1.set_xticklabels(month_labels)
+    ax1.legend(loc='upper left', fontsize=10)
+    ax1.grid(axis='y', alpha=0.3, linestyle='--')
+
     stats_text = (
         f'Annual Total:\n'
         f'  GloGEM: {glogem_total:.1f} mm/yr\n'
@@ -2814,44 +2822,70 @@ def plot_glogem_vs_observed_regime(config, plot_dirs, start_date=None, end_date=
         f'  Correlation: {correlation:.3f}\n'
         f'  Valid years: {len(valid_years)}'
     )
-    
-    ax.text(0.98, 0.97, stats_text, transform=ax.transAxes,
-            fontsize=9, verticalalignment='top', horizontalalignment='right',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
+    ax1.text(0.98, 0.97, stats_text, transform=ax1.transAxes,
+             fontsize=9, verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+    # --- Panel 2: GloGEM component breakdown (stacked bars) ---
+    icemelt_vals = monthly_regime['icemelt_normalized'].values
+    snowmelt_vals = monthly_regime['snowmelt_normalized'].values
+    rain_vals = monthly_regime['rainfall_normalized'].values
+
+    ax2.bar(x, icemelt_vals, label='Ice Melt', color='#4292c6', alpha=0.85)
+    ax2.bar(x, snowmelt_vals, bottom=icemelt_vals,
+            label='Snow Melt', color='#9ecae1', alpha=0.85)
+    ax2.bar(x, rain_vals, bottom=icemelt_vals + snowmelt_vals,
+            label='Rain on Glacier', color='#74c476', alpha=0.85)
+
+    ax2.set_xlabel('Month', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('GloGEM Components [mm/day]', fontsize=12, fontweight='bold')
+    ax2.set_xticks(range(1, 13))
+    ax2.set_xticklabels(month_labels)
+    ax2.legend(loc='upper left', fontsize=10)
+    ax2.grid(axis='y', alpha=0.3, linestyle='--')
+
+    component_text = (
+        f'Annual totals:\n'
+        f'  Ice melt:  {icemelt_annual:.1f} mm/yr\n'
+        f'  Snow melt: {snowmelt_annual:.1f} mm/yr\n'
+        f'  Rain:      {rain_annual:.1f} mm/yr'
+    )
+    ax2.text(0.98, 0.97, component_text, transform=ax2.transAxes,
+             fontsize=9, verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.8))
+
     plt.tight_layout()
-    
+
     # Save the plot
     save_path = plot_dirs['contributions'] / f"{gauge_id}_glogem_vs_observed_regime.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"\n✓ Plot saved: {save_path}")
-    
+
     # Show the plot
     plt.show()
     plt.close()
-    
+
     # Print summary table
-    print(f"\n{'='*80}")
+    print(f"\n{'='*90}")
     print(f"MONTHLY REGIME COMPARISON")
-    print(f"{'='*80}")
-    print(f"{'Month':<10} {'GloGEM [mm/day]':<20} {'Observed [mm/day]':<20} {'Difference [mm/day]':<20}")
-    print(f"{'-'*80}")
-    
+    print(f"{'='*90}")
+    print(f"{'Month':<10} {'GloGEM Total':<16} {'Ice Melt':<14} {'Snow Melt':<14} {'Rain':<14} {'Observed':<16}")
+    print(f"{'-'*90}")
+
     for _, row in monthly_regime.iterrows():
-        month_name = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][int(row['month'])-1]
-        glogem_val = row['glacier_melt_normalized']
-        obs_val = row['obs_Q_mm']
-        diff = glogem_val - obs_val
-        
-        print(f"{month_name:<10} {glogem_val:>18.3f} {obs_val:>18.3f} {diff:>18.3f}")
-    
-    print(f"{'='*80}\n")
-    
+        month_name = month_labels[int(row['month']) - 1]
+        print(f"{month_name:<10} {row['glacier_melt_normalized']:>14.3f} {row['icemelt_normalized']:>12.3f} "
+              f"{row['snowmelt_normalized']:>12.3f} {row['rainfall_normalized']:>12.3f} {row['obs_Q_mm']:>14.3f}")
+
+    print(f"{'='*90}\n")
+
     # Return summary
     return {
         'monthly_regime': monthly_regime,
         'glogem_annual_total': glogem_total,
+        'glogem_icemelt_annual': icemelt_annual,
+        'glogem_snowmelt_annual': snowmelt_annual,
+        'glogem_rain_annual': rain_annual,
         'observed_annual_total': obs_total,
         'ratio': glogem_total / obs_total,
         'correlation': correlation,
