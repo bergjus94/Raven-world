@@ -1849,5 +1849,339 @@ class GloGEMProcessor:
                     self.logger.warning(f"  ❌ Failed to copy {file_path.name}: {e}")
             else:
                 self.logger.warning(f"  ⚠️ File not found: {file_path}")
-        
+
+
+class MultiSubbasinGloGEMProcessor:
+    """
+    GloGEM processor for multi-subbasin configurations.
+
+    Reads per-subbasin glacier_id_mapping.csv files, computes area-weighted melt
+    for large and small glacier HRUs in each subbasin from shared basin-wide NetCDF
+    files, and writes one combined irrigation.nc covering all HRUs.
+    """
+
+    def __init__(self, namelist_path: Union[str, Path]) -> None:
+        self.namelist_path = Path(namelist_path)
+        with open(self.namelist_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+        self.gauge_id = config['gauge_id']
+        self.main_dir = Path(config['main_dir'])
+        self.model_type = config['model_type']
+        self.start_date = config['start_date']
+        self.end_date = config['end_date']
+        self.warm_up_date = config.get('warm_up_date', None)
+        self.glogem_scenario = config.get('glogem_scenario', 'ssp126')
+        self.basin_name = config.get('basin_name', 'Indus')
+        self.debug = config.get('debug', False)
+
+        self.model_dir = self.main_dir / config.get('config_dir')
+        self.glogem_dir = config.get('glogem_dir')
+        if self.glogem_dir:
+            self.glogem_dir = Path(self.main_dir, self.glogem_dir.format(gauge_id=self.gauge_id))
+
+        self.topo_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'topo_files'
+        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+
+        self.subbasin_configs = config.get('subbasins', [])
+
+        logging.basicConfig(
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            level=logging.DEBUG if self.debug else logging.INFO,
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        self.logger = logging.getLogger('MultiSubbasinGloGEMProcessor')
+
+    def _get_netcdf_path(self, component: str) -> Path:
+        """Return path to a GloGEM NetCDF file (same naming convention as GloGEMProcessor)."""
+        filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_scenario}.nc'
+        return self.glogem_dir / filename
+
+    def process_all(self, force_reprocess: bool = False) -> dict:
+        """
+        Process GloGEM data for all subbasins and write a combined irrigation.nc.
+
+        Returns dict with {'skipped': bool, 'n_subbasins': int, ...}.
+        """
+        output_nc = self.shared_data_dir / 'irrigation.nc'
+        output_gw = self.shared_data_dir / 'GridWeights_Irrigation.txt'
+
+        if output_nc.exists() and output_gw.exists() and not force_reprocess:
+            self.logger.info("✅ irrigation.nc + GridWeights already exist — skipping.")
+            return {'skipped': True}
+
+        # --- Load merged HRU shapefile ---
+        hru_shp = self.topo_dir / 'HRU.shp'
+        if not hru_shp.exists():
+            raise FileNotFoundError(f"Merged HRU.shp not found: {hru_shp}")
+
+        hru_gdf = gpd.read_file(hru_shp)
+        hru_gdf = hru_gdf.sort_values(by='HRU_ID').reset_index(drop=True)
+        num_hrus = len(hru_gdf)
+        self.logger.info(f"Loaded {num_hrus} HRUs from {hru_shp}")
+
+        # --- Date ranges ---
+        start_date_for_file = pd.to_datetime(self.warm_up_date if self.warm_up_date else self.start_date)
+        end_date_for_file = pd.to_datetime(self.end_date)
+        simulation_start = pd.to_datetime(self.start_date)
+        self.logger.info(f"Date range: {start_date_for_file.date()} → {end_date_for_file.date()}")
+
+        # --- Load GloGEM Discharge NetCDF ONCE ---
+        nc_path = self._get_netcdf_path('Discharge')
+        if not nc_path.exists():
+            raise FileNotFoundError(f"GloGEM Discharge NetCDF not found: {nc_path}")
+
+        self.logger.info(f"Loading GloGEM Discharge: {nc_path}")
+        ds_glogem = xr.open_dataset(nc_path)
+        all_nc_times = pd.to_datetime(ds_glogem.time.values)
+        all_glacier_ids = ds_glogem.glacier_id.values.astype(str)
+
+        # Select simulation time window from NetCDF
+        time_mask = (all_nc_times >= simulation_start) & (all_nc_times <= end_date_for_file)
+        time_indices = np.where(time_mask)[0]
+        if len(time_indices) == 0:
+            ds_glogem.close()
+            raise ValueError("No NetCDF time steps in simulation range.")
+
+        sim_times = all_nc_times[time_indices]
+        self.logger.info(f"Loaded {len(time_indices)} simulation time steps from NetCDF")
+
+        # Load full discharge array into memory (subset to sim window)
+        full_discharge = ds_glogem['discharge'].values[time_indices, :]   # (n_sim, n_glaciers)
+        ds_glogem.close()
+        full_discharge = np.nan_to_num(full_discharge, nan=0.0).astype(np.float32)
+
+        # --- Pre-allocate result (simulation window only; warm-up prepended later) ---
+        n_sim = len(time_indices)
+        result_sim = np.zeros((n_sim, num_hrus), dtype=np.float32)
+
+        processed_subbasins = []
+
+        # --- Per-subbasin processing ---
+        for sb_config in self.subbasin_configs:
+            sb_id = sb_config['id']
+            self.logger.info(f"Processing subbasin {sb_id} ({sb_config.get('name', '')})")
+
+            mapping_path = self.topo_dir / f'subbasin_{sb_id}' / 'glacier_id_mapping.csv'
+            if not mapping_path.exists():
+                self.logger.warning(f"  ⚠️ glacier_id_mapping.csv not found for subbasin {sb_id} — skipping")
+                continue
+
+            mapping_df = pd.read_csv(mapping_path)
+            if mapping_df.empty:
+                self.logger.warning(f"  ⚠️ Empty mapping for subbasin {sb_id} — skipping")
+                continue
+
+            # Build large/small sets and area map
+            large_glacier_set = set()
+            small_glacier_set = set()
+            area_map = {}
+            rgi_region_code = None
+
+            for _, row in mapping_df.iterrows():
+                numeric_id = str(row['numeric_id']).zfill(5)
+                rgi_id = str(row['RGIId'])
+                area_km2 = float(row['area_km2'])
+                is_large = bool(row['is_large'])
+
+                area_map[numeric_id] = area_km2
+                if is_large:
+                    large_glacier_set.add(numeric_id)
+                else:
+                    small_glacier_set.add(numeric_id)
+
+                if rgi_region_code is None and '.' in rgi_id:
+                    rgi_region_code = rgi_id.rsplit('.', 1)[0]  # e.g. 'RGI60-14'
+
+            all_sb_ids = large_glacier_set | small_glacier_set
+            if not all_sb_ids:
+                self.logger.warning(f"  No glacier IDs for subbasin {sb_id}")
+                continue
+
+            # Match against NetCDF glacier IDs
+            glacier_id_to_ncidx = {gid: i for i, gid in enumerate(all_glacier_ids)}
+            matching_ids = [gid for gid in all_sb_ids if gid in glacier_id_to_ncidx]
+            if not matching_ids:
+                self.logger.warning(f"  No matching glaciers in NetCDF for subbasin {sb_id}")
+                continue
+
+            self.logger.info(f"  Matched {len(matching_ids)}/{len(all_sb_ids)} glaciers in NetCDF")
+
+            # Split into large/small indices and areas
+            large_nc_idx, large_areas = [], []
+            small_nc_idx, small_areas = [], []
+            for gid in matching_ids:
+                nc_idx = glacier_id_to_ncidx[gid]
+                area = area_map.get(gid, 0.0)
+                if gid in large_glacier_set:
+                    large_nc_idx.append(nc_idx)
+                    large_areas.append(area)
+                else:
+                    small_nc_idx.append(nc_idx)
+                    small_areas.append(area)
+
+            # Area-weighted melt timeseries
+            large_weighted = np.zeros(n_sim, dtype=np.float32)
+            small_weighted = np.zeros(n_sim, dtype=np.float32)
+
+            if large_nc_idx:
+                data = full_discharge[:, large_nc_idx]
+                weights = np.array(large_areas, dtype=np.float32)
+                total = weights.sum()
+                if total > 0:
+                    large_weighted = (data * weights).sum(axis=1) / total
+                    self.logger.info(f"  Large glacier mean melt: {large_weighted.mean():.3f} mm/day")
+
+            if small_nc_idx:
+                data = full_discharge[:, small_nc_idx]
+                weights = np.array(small_areas, dtype=np.float32)
+                total = weights.sum()
+                if total > 0:
+                    small_weighted = (data * weights).sum(axis=1) / total
+                    self.logger.info(f"  Small glacier mean melt: {small_weighted.mean():.3f} mm/day")
+
+            # Save per-subbasin intermediate CSV
+            sb_out_dir = self.topo_dir / f'subbasin_{sb_id}'
+            melt_df = pd.DataFrame({
+                'date': pd.to_datetime(sim_times).strftime('%Y-%m-%d'),
+                'large_melt_mm_day': large_weighted,
+                'small_melt_mm_day': small_weighted,
+            })
+            melt_csv = sb_out_dir / 'GloGEM_catchment_melt.csv'
+            melt_df.to_csv(melt_csv, index=False)
+            self.logger.info(f"  Saved per-subbasin melt CSV: {melt_csv}")
+
+            # Find large/small HRU indices in merged HRU.shp via Glacier_Cl field
+            large_hru_idx = None
+            small_hru_idx = None
+
+            glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()]
+            for _, hru_row in glacier_hrus.iterrows():
+                glacier_cl = str(hru_row['Glacier_Cl'])
+                hru_0idx = int(hru_row['HRU_ID']) - 1   # 0-based
+
+                # Parse pipe-separated full RGI IDs → numeric IDs
+                parts = glacier_cl.split('|')
+                numeric_ids = []
+                for full_id in parts:
+                    full_id = full_id.strip()
+                    if rgi_region_code and full_id.startswith(rgi_region_code + '.'):
+                        numeric_ids.append(full_id.replace(rgi_region_code + '.', '').zfill(5))
+                    elif '.' in full_id:
+                        # Fallback: take the part after the last dot
+                        numeric_ids.append(full_id.rsplit('.', 1)[-1].zfill(5))
+
+                if not numeric_ids:
+                    continue
+
+                # Belong to this subbasin's large set?
+                if any(nid in large_glacier_set for nid in numeric_ids):
+                    large_hru_idx = hru_0idx
+                    self.logger.info(f"  → LARGE glacier HRU index {hru_0idx} (HRU_ID {hru_row['HRU_ID']})")
+                elif any(nid in small_glacier_set for nid in numeric_ids):
+                    small_hru_idx = hru_0idx
+                    self.logger.info(f"  → SMALL glacier HRU index {hru_0idx} (HRU_ID {hru_row['HRU_ID']})")
+
+            # Assign melt to result array
+            if large_hru_idx is not None:
+                result_sim[:, large_hru_idx] = large_weighted
+            elif large_nc_idx:
+                self.logger.warning(f"  ⚠️ Could not find LARGE glacier HRU in HRU.shp for subbasin {sb_id}")
+
+            if small_hru_idx is not None:
+                result_sim[:, small_hru_idx] = small_weighted
+            elif small_nc_idx:
+                self.logger.warning(f"  ⚠️ Could not find SMALL glacier HRU in HRU.shp for subbasin {sb_id}")
+
+            processed_subbasins.append(sb_id)
+
+        del full_discharge
+
+        # --- Warm-up period: prepend repeated first year ---
+        if self.warm_up_date:
+            warmup_days = (simulation_start - start_date_for_file).days
+            if warmup_days > 0:
+                first_year_end = simulation_start + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+                sim_times_np = np.array(pd.to_datetime(sim_times))
+                first_year_mask = sim_times_np <= np.datetime64(first_year_end)
+                first_year_indices = np.where(first_year_mask)[0]
+                if len(first_year_indices) == 0:
+                    first_year_indices = np.arange(min(365, n_sim))
+
+                first_year_data = result_sim[first_year_indices, :]
+                n_rep = max(1, int(np.ceil(warmup_days / len(first_year_data))))
+                warmup_data = np.tile(first_year_data, (n_rep, 1))[:warmup_days, :]
+                warmup_times = pd.date_range(start=start_date_for_file, periods=warmup_days, freq='D')
+
+                result_array = np.vstack([warmup_data, result_sim])
+                full_times = warmup_times.append(pd.DatetimeIndex(sim_times))
+                self.logger.info(f"Warm-up prepended: {warmup_days} days")
+            else:
+                result_array = result_sim
+                full_times = pd.DatetimeIndex(sim_times)
+        else:
+            result_array = result_sim
+            full_times = pd.DatetimeIndex(sim_times)
+
+        # Ensure contiguous date range; fill gaps with 0
+        full_date_range = pd.date_range(start=start_date_for_file, end=end_date_for_file, freq='D')
+        if len(full_times) != len(full_date_range):
+            full_times_norm = pd.to_datetime(full_times).normalize()
+            time_to_idx = {t: i for i, t in enumerate(full_times_norm)}
+            final_array = np.zeros((len(full_date_range), num_hrus), dtype=np.float32)
+            for i, date in enumerate(full_date_range):
+                if date in time_to_idx:
+                    final_array[i, :] = result_array[time_to_idx[date], :]
+            result_array = final_array
+
+        # --- Write irrigation.nc ---
+        self.logger.info(f"Writing irrigation.nc ({result_array.shape})...")
+        x_values = np.arange(1, num_hrus + 1)
+        y_values = np.arange(1, 2)
+
+        ds = xr.Dataset(
+            {'data': (['time', 'x', 'y'], result_array.reshape(len(full_date_range), -1, 1))},
+            coords={'time': full_date_range, 'x': x_values, 'y': y_values}
+        )
+
+        if 'Elev_Mean' in hru_gdf.columns:
+            ds['elevation'] = xr.DataArray(
+                hru_gdf['Elev_Mean'].values.reshape(-1, 1),
+                dims=['x', 'y'],
+                coords={'x': ds['x'], 'y': ds['y']}
+            )
+
+        ds.attrs.update({
+            'title': f'Glacier melt irrigation for multi-subbasin catchment {self.gauge_id}',
+            'source': f'GloGEM {self.glogem_scenario}',
+            'n_subbasins': len(processed_subbasins),
+            'n_hrus': num_hrus,
+        })
+        ds.to_netcdf(output_nc)
+        self.logger.info(f"✅ Saved irrigation.nc: {output_nc}")
+
+        # --- Write GridWeights_Irrigation.txt ---
+        with open(output_gw, 'w') as f:
+            f.write('# ---------------------------------------------- \n')
+            f.write('# Raven GridWeights File for Irrigation Forcing\n')
+            f.write('# ---------------------------------------------- \n\n')
+            f.write(':GridWeights\n')
+            f.write(f'   :NumberHRUs       {num_hrus}\n')
+            f.write(f'   :NumberGridCells  {num_hrus}\n')
+            f.write('   # [HRU ID] [Cell #] [w_kl]\n')
+            for hru_id in range(1, num_hrus + 1):
+                f.write(f'   {hru_id}   {hru_id - 1}   1.0\n')
+            f.write(':EndGridWeights\n')
+        self.logger.info(f"✅ Saved GridWeights_Irrigation.txt: {output_gw}")
+
+        glacier_hrus_count = int((result_array != 0).any(axis=0).sum())
+        self.logger.info(f"Summary: {glacier_hrus_count}/{num_hrus} HRUs have non-zero glacier melt")
+
+        return {
+            'skipped': False,
+            'n_subbasins': len(processed_subbasins),
+            'processed_subbasins': processed_subbasins,
+        }
+
         self.logger.info(f"✅ Successfully copied {copied_count}/{len(irrigation_files)} files to {self.model_data_dir.name}/")

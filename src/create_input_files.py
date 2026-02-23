@@ -24,7 +24,7 @@ from preprocess_meteo import (
 )
 from preprocess_catchment import CatchmentProcessor, HRUConnectivityCalculator, MultiSubbasinProcessor
 from preprocess_streamflow import StreamflowProcessor
-from preprocess_glogem import GloGEMProcessor
+from preprocess_glogem import GloGEMProcessor, MultiSubbasinGloGEMProcessor
 
 # Import model-specific processors
 from preprocess_HBV import HBVProcessor
@@ -298,14 +298,21 @@ def main(namelist_path: str, force_reprocess: bool = False):
     if coupled:
         print("\n❄️ STEP 6: Processing GloGEM glacier data...")
         try:
-            glogem_processor = GloGEMProcessor(namelist_path)
+            if nml.get('subbasins'):
+                print("   🌐 Multi-subbasin mode: using MultiSubbasinGloGEMProcessor")
+                glogem_processor = MultiSubbasinGloGEMProcessor(namelist_path)
+            else:
+                glogem_processor = GloGEMProcessor(namelist_path)
             results_glogem = glogem_processor.process_all(force_reprocess=force_reprocess)
-            
+
             if not results_glogem.get('skipped', False):
                 print(f"   ✅ GloGEM processing completed!")
-                print(f"      - GloGEM records: {len(results_glogem['glogem_data'])}")
-                print(f"      - Glaciers matched: {len(results_glogem['validation']['matched'])}")
-                print(f"      - Missing in GloGEM: {len(results_glogem['validation']['missing_in_glogem'])}")
+                if 'n_subbasins' in results_glogem:
+                    print(f"      - Subbasins processed: {results_glogem['n_subbasins']}")
+                else:
+                    print(f"      - GloGEM records: {len(results_glogem['glogem_data'])}")
+                    print(f"      - Glaciers matched: {len(results_glogem['validation']['matched'])}")
+                    print(f"      - Missing in GloGEM: {len(results_glogem['validation']['missing_in_glogem'])}")
             else:
                 print(f"   ⏭️ GloGEM files already exist (skipped)")
                 

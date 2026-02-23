@@ -124,6 +124,10 @@ class CatchmentProcessor:
         # Basin ID for multi-subbasin support (default 1 for single-basin runs)
         self._basin_id = 1
 
+        # Glacier HRU unit IDs (set during discretize_catchment, used in create_hru_table)
+        self._large_glacier_hru_id = None
+        self._small_glacier_hru_id = None
+
         # Initialize data containers
         self.catchment_extent = None
         self.dem_data = None
@@ -1502,8 +1506,9 @@ class CatchmentProcessor:
                         columns[field].append(np.nan)
                     
                     self.logger.info(f"Created LARGE glacier HRU {unit_id} with {len(large_glacier_ids)} glaciers")
+                    self._large_glacier_hru_id = unit_id
                     unit_id += 1
-                
+
                 # Create SMALL glacier HRU (if any small glaciers exist)
                 if np.count_nonzero(small_glacier_mask) > 0:
                     map_unit_ids[small_glacier_mask] = unit_id
@@ -1530,6 +1535,7 @@ class CatchmentProcessor:
                         columns[field].append(np.nan)
                     
                     self.logger.info(f"Created SMALL glacier HRU {unit_id} with {len(small_glacier_ids)} glaciers")
+                    self._small_glacier_hru_id = unit_id
                     unit_id += 1
         
             # Plot initial results if debug mode
@@ -2045,6 +2051,13 @@ class CatchmentProcessor:
              'ASPECT': all_HRUs['ASPECT']
             })
         
+        # Add GLACIER_SIZE column to distinguish large vs small glacier HRUs
+        HRU['GLACIER_SIZE'] = ''
+        if self._large_glacier_hru_id is not None:
+            HRU.loc[HRU[':ATTRIBUTES'] == self._large_glacier_hru_id, 'GLACIER_SIZE'] = 'LARGE'
+        if self._small_glacier_hru_id is not None:
+            HRU.loc[HRU[':ATTRIBUTES'] == self._small_glacier_hru_id, 'GLACIER_SIZE'] = 'SMALL'
+
         # Save HRU table to CSV
         self.logger.debug("Saving HRU table to CSV")
         HRU.to_csv(self.get_path('HRU_table.csv'), index=False)

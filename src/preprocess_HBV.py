@@ -487,9 +487,14 @@ class HBVProcessor:
         
         all_glacier_hrus = hru_df[hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
         
-        # Hard-code based on creation order in preprocess_catchment.py
-        large_glacier_hrus = [hru_id for hru_id in all_glacier_hrus if hru_id == 1]  # First glacier HRU
-        small_glacier_hrus = [hru_id for hru_id in all_glacier_hrus if hru_id == 2]  # Second glacier HRU
+        # Use GLACIER_SIZE column if available (multi-subbasin); fallback to creation-order heuristic
+        if 'GLACIER_SIZE' in hru_df.columns:
+            large_glacier_hrus = hru_df[hru_df['GLACIER_SIZE'] == 'LARGE'][':ATTRIBUTES'].tolist()
+            small_glacier_hrus = hru_df[hru_df['GLACIER_SIZE'] == 'SMALL'][':ATTRIBUTES'].tolist()
+        else:
+            # Backward-compat: first glacier HRU = large, second = small
+            large_glacier_hrus = [all_glacier_hrus[0]] if len(all_glacier_hrus) > 0 else []
+            small_glacier_hrus = [all_glacier_hrus[1]] if len(all_glacier_hrus) > 1 else []
         
         # ✅ ALL_GLACIER group (should have 2 HRUs for aggregated format)
         hru_groups.append(":HRUGroup ALL_GLACIER")
