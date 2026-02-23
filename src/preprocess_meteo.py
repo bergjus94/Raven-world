@@ -3350,10 +3350,17 @@ class HARAnalyzer:
                 self.logger.info(f"⏭️  Skipping {file_path.name} (elevation is time-invariant)")
                 updated_files.append(file_path)
                 continue
-            
+
             try:
                 self.logger.info(f"Processing {file_path.name}...")
-                
+
+                # Skip if warm-up was already added in a previous (possibly interrupted) run
+                with xr.open_dataset(file_path) as _ds_check:
+                    if _ds_check.attrs.get('warmup_included') == 'true':
+                        self.logger.info(f"  ⏭️ Warm-up already present — skipping")
+                        updated_files.append(file_path)
+                        continue
+
                 # Load the file
                 ds = xr.open_dataset(file_path)
                 
@@ -3460,22 +3467,31 @@ class HARAnalyzer:
                     warmup_data = warmup_data.isel(time=slice(None, -1))
                     self.logger.info(f"  Trimmed warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values}")
                 
+                # Cache lengths before closing (used in metadata below)
+                n_warmup_days = len(warmup_data.time)
+                n_sim_days = len(ds.time)
+
                 # ✅ CONCATENATE (both datasets have NO elevation now)
                 combined = xr.concat([warmup_data, ds], dim='time')
-                
-                # ✅ FIX: Sort by time and remove any duplicates
                 combined = combined.sortby('time')
-                
-                # Check for duplicates after concatenation
+
+                # Load into memory immediately — BEFORE any .time.values access and
+                # before closing ds.  On a network FS, lazy evaluation of xr.concat
+                # (which includes a boolean-indexed ds) hangs on the first .values call.
+                combined = combined.load()
+                ds.close()
+                warmup_data.close()
+
+                # Check for duplicates (all in-memory now — fast)
                 combined_times = pd.to_datetime(combined.time.values)
                 duplicates = combined_times.duplicated()
                 if duplicates.any():
                     self.logger.warning(f"⚠️ Found {duplicates.sum()} duplicate timestamps after concatenation - removing them")
                     combined = combined.isel(time=~duplicates)
-                
+
                 self.logger.info(f"  Combined: {combined.time.min().values} to {combined.time.max().values} ({len(combined.time)} days)")
-                
-                # ✅ VERIFICATION: Check for consecutive time steps
+
+                # Check for consecutive time steps
                 time_diffs = np.diff(combined.time.values).astype('timedelta64[D]').astype(int)
                 non_consecutive = np.where(time_diffs != 1)[0]
                 if len(non_consecutive) > 0:
@@ -3484,47 +3500,34 @@ class HARAnalyzer:
                         self.logger.warning(f"   Index {idx}: {combined.time.values[idx]} -> {combined.time.values[idx+1]} (gap: {time_diffs[idx]} days)")
                 else:
                     self.logger.info(f"  ✅ All time steps are consecutive (1-day intervals)")
-                
-                # ✅ NOW: Add elevation AFTER concatenation (as time-invariant 2D array)
+
+                # Re-add elevation after concatenation (time-invariant 2D array)
                 if has_elevation and elevation_data is not None:
                     self.logger.debug("  Re-adding elevation (time-invariant)")
-                    
-                    # Verify elevation is 2D
                     if len(elevation_data.dims) != 2:
                         self.logger.error(f"❌ Elevation is not 2D: {elevation_data.dims}")
                         raise ValueError(f"Elevation must be 2D, got {elevation_data.dims}")
-                    
-                    # Add elevation as a simple 2D variable (no time dimension)
                     combined['elevation'] = elevation_data
-                    
-                    # ✅ VERIFICATION: Check elevation dimensions in combined dataset
                     if 'time' in combined['elevation'].dims:
                         self.logger.error("❌ ELEVATION GAINED TIME DIMENSION AFTER ADDING TO COMBINED!")
-                        self.logger.error(f"   Combined dims: {combined['elevation'].dims}")
                         raise ValueError("Elevation must not have time dimension!")
                     else:
                         self.logger.debug(f"  ✅ Elevation correctly added: shape={combined['elevation'].shape}, dims={combined['elevation'].dims}")
-                
+
                 # Update metadata
                 combined.attrs.update({
                     'warmup_included': 'true',
                     'warmup_start': str(self.warmup_date.date()),
                     'warmup_end': str(warmup_end.date()),
-                    'warmup_days': len(warmup_data.time),
+                    'warmup_days': n_warmup_days,
                     'simulation_start': str(self.start_date.date()),
                     'simulation_end': str(self.end_date.date()),
-                    'simulation_days': len(ds.time),
+                    'simulation_days': n_sim_days,
                     'warmup_method': 'repeat_first_year',
                     'warmup_repetitions': n_repetitions,
                     'total_days': len(combined.time),
                     'elevation_included': 'true' if has_elevation else 'false'
                 })
-                
-                # Load into memory FIRST while ds is still open, THEN close originals.
-                # Closing before .load() causes a hang: combined still lazily references ds.
-                combined = combined.load()
-                ds.close()
-                warmup_data.close()
 
                 # ✅ NEW: Save to temporary file first, then replace original
                 import shutil
