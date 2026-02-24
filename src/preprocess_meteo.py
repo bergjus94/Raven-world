@@ -3408,7 +3408,8 @@ class HARAnalyzer:
                 if original_duplicates.any():
                     self.logger.warning(f"⚠️ Original data has {original_duplicates.sum()} duplicate timestamps - removing them")
                     ds = ds.isel(time=~original_duplicates)
-                
+                    ds = ds.load()  # materialize before concat to avoid slow boolean fancy-index reads
+
                 # Extract first year of simulation data (NOW without elevation)
                 first_year_end = self.start_date + pd.DateOffset(years=1) - pd.Timedelta(days=1)
                 
