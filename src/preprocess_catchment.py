@@ -1305,7 +1305,12 @@ class CatchmentProcessor:
             criteria_dict['aspect'] = ['N', 'E', 'S', 'W']
         
         if 'landuse' in self.criteria:
-            criteria_dict['landuse'] = [1, 2, 3, 4, 5, 6] + ([7] if not self.coupled else [])
+            # 1=Forest, 2=Open, 3=Crop, 4=Built, 5=Rock, 6=Water/Lake
+            # 7=Glacier (only in non-coupled mode; in coupled mode glaciers are
+            #   handled separately via the glacier shapefile)
+            # 9=Bare Open (ICIMOD Bare Soil → class 9; must be included or entire
+            #   high-altitude non-glacier areas are silently dropped)
+            criteria_dict['landuse'] = [1, 2, 3, 4, 5, 6, 9] + ([7] if not self.coupled else [])
         
         # ✅ ADD DEBUG CODE HERE - after criteria setup
         if self.debug:
