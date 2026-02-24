@@ -3468,3 +3468,167 @@ class MultiSubbasinProcessor:
             out_path = self.topo_dir / 'HRU.shp'
             combined_gdf.to_file(out_path, driver='ESRI Shapefile')
             print(f"  Merged HRU shapefile written to {out_path}")
+
+
+#---------------------------------------------------------------------------------
+
+
+class MultiSubbasinConnectivityCalculator:
+    """
+    Calculates lateral HRU connectivity for multi-subbasin configurations.
+
+    Each subbasin is processed independently using its own local-polygon DEM
+    and HRU shapefile (already produced by MultiSubbasinProcessor).  After
+    computing per-subbasin connectivity with local HRU IDs the IDs are shifted
+    to the globally unique values from the merged HRU_table.csv so that all
+    connections reference the same ID space as the rest of the Raven model.
+
+    Per-subbasin intermediate files (local IDs) are saved alongside the merged
+    global file:
+        catchment_{gauge_id}/topo_files/subbasin_{id}/data_obs/connections.rvh
+        catchment_{gauge_id}/topo_files/subbasin_{id}/data_obs/HRU_connectivity.csv
+        catchment_{gauge_id}/data_obs/connections.rvh   ← merged, global IDs
+    """
+
+    def __init__(self, namelist_path: Union[str, Path]):
+        with open(namelist_path, 'r') as f:
+            namelist = yaml.safe_load(f)
+
+        self.gauge_id     = namelist['gauge_id']
+        self.model_type   = namelist.get('model_type', 'HBV')
+        main_dir          = Path(namelist['main_dir'])
+        self.nconnect     = namelist.get('nconnect', 'single')
+        self.min_area_threshold = namelist.get('min_area_threshold', 0.01)
+        self.debug        = namelist.get('debug', False)
+        self.subbasins_config = namelist.get('subbasins', [])
+
+        self.catchment_dir = main_dir / namelist['config_dir'] / f'catchment_{self.gauge_id}'
+        self.topo_dir      = self.catchment_dir / 'topo_files'
+        self.output_dir    = self.catchment_dir / 'data_obs'
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    # ------------------------------------------------------------------
+
+    def _get_hru_id_offsets(self) -> Dict[int, int]:
+        """
+        Read the merged HRU_table.csv and return the per-subbasin HRU ID
+        offset, defined as  ``min_global_id - 1``  so that
+        ``global_id = local_id + offset``.
+        """
+        hru_table_path = self.topo_dir / 'HRU_table.csv'
+        if not hru_table_path.exists():
+            raise FileNotFoundError(
+                f"Merged HRU_table.csv not found: {hru_table_path}\n"
+                "Run MultiSubbasinProcessor.process_all_subbasins() first."
+            )
+
+        merged_df = pd.read_csv(hru_table_path)
+        offsets: Dict[int, int] = {}
+        for sb in self.subbasins_config:
+            sb_id = sb['id']
+            sb_rows = merged_df[merged_df['BASIN_ID'] == sb_id]
+            if len(sb_rows) > 0:
+                offsets[sb_id] = int(sb_rows[':ATTRIBUTES'].min()) - 1
+            else:
+                self.logger.warning(
+                    f"No HRUs found for subbasin {sb_id} in merged HRU_table.csv — offset set to 0"
+                )
+                offsets[sb_id] = 0
+        return offsets
+
+    # ------------------------------------------------------------------
+
+    def _read_connections_rvh(self, filepath: Path, offset: int) -> list:
+        """
+        Parse a ``connections.rvh`` file and return a list of
+        ``(from_global_id, to_global_id, weight)`` tuples with HRU IDs
+        shifted by *offset*.
+        """
+        connections = []
+        if not filepath.exists():
+            self.logger.warning(f"connections.rvh not found: {filepath}")
+            return connections
+
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or line.startswith(':'):
+                    continue
+                parts = line.split()
+                if len(parts) == 3:
+                    try:
+                        from_id = int(parts[0]) + offset
+                        to_id   = int(parts[1]) + offset
+                        weight  = float(parts[2])
+                        connections.append((from_id, to_id, weight))
+                    except ValueError:
+                        pass
+        return connections
+
+    # ------------------------------------------------------------------
+
+    def _write_merged_connections(self, connections: list) -> None:
+        """
+        Write the merged ``connections.rvh`` with global HRU IDs to
+        ``catchment_{gauge_id}/data_obs/connections.rvh``.
+        """
+        output_file = self.output_dir / 'connections.rvh'
+        with open(output_file, 'w') as f:
+            f.write(":LateralConnections  SNOW_REDISTRIBUTE\n")
+            f.write("#HRU_ID\tConnected_HRU_ID\tWeight\n")
+            for from_id, to_id, weight in connections:
+                f.write(f"{from_id}\t{to_id}\t{weight:.6f}\n")
+            f.write(":EndLateralConnections\n")
+        self.logger.info(f"Wrote {len(connections)} merged connections to {output_file}")
+        print(f"   Merged connectivity written to {output_file}")
+
+    # ------------------------------------------------------------------
+
+    def calculate_connectivity(self) -> list:
+        """
+        Run ``HRUConnectivityCalculator`` for each subbasin (using its own
+        local-polygon DEM + HRU shapefile), shift HRU IDs to global values,
+        and write one merged ``connections.rvh``.
+
+        Returns
+        -------
+        list of (from_global_id, to_global_id, weight)
+        """
+        offsets = self._get_hru_id_offsets()
+        all_connections: list = []
+
+        for sb in self.subbasins_config:
+            sb_id       = sb['id']
+            sb_gauge_id = str(sb['gauge_id'])
+            offset      = offsets.get(sb_id, 0)
+
+            sb_model_dir = self.topo_dir / f'subbasin_{sb_id}'
+            self.logger.info(
+                f"Computing connectivity for subbasin {sb_id} "
+                f"(gauge {sb_gauge_id}), HRU ID offset={offset}"
+            )
+
+            calc = HRUConnectivityCalculator({
+                'model_dir':           sb_model_dir,
+                'gauge_id':            sb_gauge_id,
+                'nconnect':            self.nconnect,
+                'min_area_threshold':  self.min_area_threshold,
+                'debug':               self.debug,
+            })
+
+            # Runs full pipeline (respects existing-file skip); writes
+            # per-subbasin connections.rvh with local HRU IDs.
+            calc.calculate_connectivity()
+
+            # Read back from file (handles both fresh + cached paths)
+            sb_connections_file = calc.get_path('connections.rvh')
+            shifted = self._read_connections_rvh(sb_connections_file, offset)
+            self.logger.info(
+                f"  Subbasin {sb_id}: {len(shifted)} connections (local file: {sb_connections_file.name})"
+            )
+            all_connections.extend(shifted)
+
+        self._write_merged_connections(all_connections)
+        return all_connections

@@ -22,7 +22,12 @@ from preprocess_meteo import (
     HARAnalyzer,
     HARGridWeightsGenerator
 )
-from preprocess_catchment import CatchmentProcessor, HRUConnectivityCalculator, MultiSubbasinProcessor
+from preprocess_catchment import (
+    CatchmentProcessor,
+    HRUConnectivityCalculator,
+    MultiSubbasinProcessor,
+    MultiSubbasinConnectivityCalculator,
+)
 from preprocess_streamflow import StreamflowProcessor
 from preprocess_glogem import GloGEMProcessor, MultiSubbasinGloGEMProcessor
 
@@ -290,8 +295,11 @@ def main(namelist_path: str, force_reprocess: bool = False):
     print("\n🔗 STEP 4: Calculating HRU connectivity...")
     try:
         if nml.get('subbasins'):
-            # Multi-subbasin: skip connectivity (handled per-subbasin or separately)
-            print("   ℹ️  Multi-subbasin mode: HRU connectivity skipped (run per-subbasin manually if needed)")
+            # Multi-subbasin: compute per-subbasin connectivity, then merge
+            print("   🌐 Multi-subbasin mode: computing per-subbasin connectivity")
+            multi_conn = MultiSubbasinConnectivityCalculator(namelist_path)
+            connections = multi_conn.calculate_connectivity()
+            print(f"   ✅ HRU connectivity calculated ({len(connections)} total connections across all subbasins)")
         else:
             connectivity_calc = HRUConnectivityCalculator(namelist_path)
             connectivity_df = connectivity_calc.calculate_connectivity()
