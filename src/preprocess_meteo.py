@@ -3402,13 +3402,22 @@ class HARAnalyzer:
                     updated_files.append(file_path)
                     continue
                 
-                # ✅ FIX: Check for existing duplicates in the original data
+                # Load the entire dataset into memory NOW (sequential read = fast).
+                # This must happen BEFORE any boolean isel() dedup, because calling
+                # ds.isel(time=~bool_mask) on a lazy NetCDF dataset creates a fancy-
+                # indexed view that forces per-row seeks when later .load()ed — which
+                # is catastrophically slow on network filesystems.
+                file_size_mb = file_path.stat().st_size / 1e6
+                self.logger.info(f"  Loading {file_path.name} into memory ({file_size_mb:.1f} MB)...")
+                ds = ds.load()
+                self.logger.info(f"  ✅ Loaded into memory")
+
+                # ✅ FIX: Check for existing duplicates in the original data (in-memory, fast)
                 original_times = pd.to_datetime(ds.time.values)
                 original_duplicates = original_times.duplicated()
                 if original_duplicates.any():
                     self.logger.warning(f"⚠️ Original data has {original_duplicates.sum()} duplicate timestamps - removing them")
-                    ds = ds.isel(time=~original_duplicates)
-                    ds = ds.load()  # materialize before concat to avoid slow boolean fancy-index reads
+                    ds = ds.isel(time=~original_duplicates)  # in-memory operation, instant
 
                 # Extract first year of simulation data (NOW without elevation)
                 first_year_end = self.start_date + pd.DateOffset(years=1) - pd.Timedelta(days=1)
