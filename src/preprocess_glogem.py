@@ -1963,9 +1963,15 @@ class MultiSubbasinGloGEMProcessor:
             sb_id = sb_config['id']
             self.logger.info(f"Processing subbasin {sb_id} ({sb_config.get('name', '')})")
 
-            mapping_path = self.topo_dir / f'subbasin_{sb_id}' / 'glacier_id_mapping.csv'
+            # CatchmentProcessor.get_path() appends 'topo_files/' to model_dir, and
+            # each subbasin's model_dir is topo_dir/subbasin_{id}, so the actual
+            # save path is topo_dir/subbasin_{id}/topo_files/glacier_id_mapping.csv
+            mapping_path = self.topo_dir / f'subbasin_{sb_id}' / 'topo_files' / 'glacier_id_mapping.csv'
             if not mapping_path.exists():
-                self.logger.warning(f"  ⚠️ glacier_id_mapping.csv not found for subbasin {sb_id} — skipping")
+                self.logger.warning(
+                    f"  ⚠️ glacier_id_mapping.csv not found for subbasin {sb_id} — skipping\n"
+                    f"      Looked at: {mapping_path}"
+                )
                 continue
 
             mapping_df = pd.read_csv(mapping_path)
@@ -2041,8 +2047,8 @@ class MultiSubbasinGloGEMProcessor:
                     small_weighted = (data * weights).sum(axis=1) / total
                     self.logger.info(f"  Small glacier mean melt: {small_weighted.mean():.3f} mm/day")
 
-            # Save per-subbasin intermediate CSV
-            sb_out_dir = self.topo_dir / f'subbasin_{sb_id}'
+            # Save per-subbasin intermediate CSV (same topo_files subdir as glacier_id_mapping.csv)
+            sb_out_dir = self.topo_dir / f'subbasin_{sb_id}' / 'topo_files'
             melt_df = pd.DataFrame({
                 'date': pd.to_datetime(sim_times).strftime('%Y-%m-%d'),
                 'large_melt_mm_day': large_weighted,
