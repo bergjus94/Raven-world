@@ -2498,6 +2498,62 @@ class ERA5LandAnalyzer:
 
     #---------------------------------------------------------------------------------
 
+    def compute_monthly_averages_for_subbasin(self, sb_gauge_id: str,
+                                               output_dir: Path) -> bool:
+        """
+        Compute monthly temperature and PET averages for a specific subbasin.
+
+        Temporarily overrides self.catchment_extent and self.output_path to point
+        at the subbasin shapefile and output directory, calls the existing
+        calculate_monthly_temperature_averages() and calculate_monthly_pet_averages()
+        methods, then restores the originals.
+
+        Parameters
+        ----------
+        sb_gauge_id : str
+            Gauge ID of the subbasin (used to locate its catchment shapefile).
+        output_dir : Path
+            Directory where the per-subbasin CSV files are written.
+
+        Returns
+        -------
+        bool
+            True if both CSV files were written successfully, False otherwise.
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        shape_template = self.config.get('shape_dir', '')
+        shp_path = self.main_dir / shape_template.format(gauge_id=sb_gauge_id)
+        if not Path(shp_path).exists():
+            self.logger.warning(
+                f"Catchment shapefile not found for subbasin {sb_gauge_id}: {shp_path} — "
+                f"skipping monthly averages"
+            )
+            return False
+
+        original_extent = self.catchment_extent
+        original_output = self.output_path
+        try:
+            self.catchment_extent = gpd.read_file(shp_path)
+            self.output_path = output_dir
+            self.calculate_monthly_temperature_averages()
+            self.calculate_monthly_pet_averages()
+            self.logger.info(
+                f"Per-subbasin monthly averages saved to {output_dir}"
+            )
+            return True
+        except Exception as e:
+            self.logger.error(
+                f"Error computing monthly averages for subbasin {sb_gauge_id}: {e}"
+            )
+            return False
+        finally:
+            self.catchment_extent = original_extent
+            self.output_path = original_output
+
+    #---------------------------------------------------------------------------------
+
     def plot_monthly_pet_climatology(self, monthly_df: pd.DataFrame) -> None:
         """
         Create a plot of monthly PET climatology
@@ -4926,6 +4982,62 @@ class HARAnalyzer:
         except Exception as e:
             self.logger.error(f"Error calculating monthly PET averages: {e}")
             return pd.DataFrame()
+
+    #---------------------------------------------------------------------------------
+
+    def compute_monthly_averages_for_subbasin(self, sb_gauge_id: str,
+                                               output_dir: Path) -> bool:
+        """
+        Compute monthly temperature and PET averages for a specific subbasin.
+
+        Temporarily overrides self.catchment_extent and self.output_path to point
+        at the subbasin shapefile and output directory, calls the existing
+        calculate_monthly_temperature_averages() and calculate_monthly_pet_averages()
+        methods, then restores the originals.
+
+        Parameters
+        ----------
+        sb_gauge_id : str
+            Gauge ID of the subbasin (used to locate its catchment shapefile).
+        output_dir : Path
+            Directory where the per-subbasin CSV files are written.
+
+        Returns
+        -------
+        bool
+            True if both CSV files were written successfully, False otherwise.
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        shape_template = self.config.get('shape_dir', '')
+        shp_path = self.main_dir / shape_template.format(gauge_id=sb_gauge_id)
+        if not Path(shp_path).exists():
+            self.logger.warning(
+                f"Catchment shapefile not found for subbasin {sb_gauge_id}: {shp_path} — "
+                f"skipping monthly averages"
+            )
+            return False
+
+        original_extent = self.catchment_extent
+        original_output = self.output_path
+        try:
+            self.catchment_extent = gpd.read_file(shp_path)
+            self.output_path = output_dir
+            self.calculate_monthly_temperature_averages()
+            self.calculate_monthly_pet_averages()
+            self.logger.info(
+                f"Per-subbasin monthly averages saved to {output_dir}"
+            )
+            return True
+        except Exception as e:
+            self.logger.error(
+                f"Error computing monthly averages for subbasin {sb_gauge_id}: {e}"
+            )
+            return False
+        finally:
+            self.catchment_extent = original_extent
+            self.output_path = original_output
 
     #---------------------------------------------------------------------------------
 

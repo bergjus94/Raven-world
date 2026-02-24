@@ -24,20 +24,29 @@ class StreamflowProcessor:
     A class for preprocessing streamflow data for hydrological modeling with Raven
     """
     
-    def __init__(self, config):
+    def __init__(self, config, basin_id: int = 1, output_filename: str = 'Q_daily.rvt'):
         """
         Initialize the streamflow data preprocessor
-        
+
         Parameters
         ----------
         config : dict or str
             Configuration dictionary with all required parameters or path to YAML config file
+        basin_id : int, optional
+            Raven subbasin ID used in the :ObservationData header (default 1).
+            Override for multi-subbasin runs so each gauged subbasin gets the
+            correct basin_ID.
+        output_filename : str, optional
+            Name of the output RVT file (default 'Q_daily.rvt').
+            Override to 'Q_daily_{gauge_id}.rvt' for multi-subbasin runs.
         """
         # Load config if it's a file path
         if isinstance(config, (str, Path)):
             with open(config, 'r') as f:
                 config = yaml.safe_load(f)
-        
+
+        self.basin_id = basin_id
+
         # Store configuration parameters
         self.main_dir = Path(config.get('main_dir'))
         self.gauge_id = config.get('gauge_id')
@@ -58,7 +67,9 @@ class StreamflowProcessor:
         self.model_dir = self.main_dir / config.get('config_dir')
         
         # Get streamflow file path
-        stream_dir = config.get('stream_dir', '').format(gauge_id=self.gauge_id)
+        # Keep the raw template so callers can override gauge_id after construction
+        self.stream_dir_template = config.get('stream_dir', '')
+        stream_dir = self.stream_dir_template.format(gauge_id=self.gauge_id)
         if not os.path.isabs(stream_dir):
             self.stream_file = self.main_dir / stream_dir
         else:
@@ -73,7 +84,7 @@ class StreamflowProcessor:
         os.makedirs(self.plots_dir, exist_ok=True)
         
         # Define standard output files
-        self.output_file = self.output_path / 'Q_daily.rvt'
+        self.output_file = self.output_path / output_filename
         self.plot_file = self.plots_dir / f'streamflow_timeseries_gauge_{self.gauge_id}.png'
 
     def subset_dataframe_time(self, dataframe):
@@ -104,7 +115,7 @@ class StreamflowProcessor:
             print(f"   📅 RVT file will start at simulation date: {rvt_start_date}")
         
         with open(out_path, 'w') as f:
-            f.write(f":ObservationData\tHYDROGRAPH\t1\tm3/s\n{rvt_start_date}\t{start_time}\t1\t{len(df)}\n")
+            f.write(f":ObservationData\tHYDROGRAPH\t{self.basin_id}\tm3/s\n{rvt_start_date}\t{start_time}\t1\t{len(df)}\n")
             df_as_string = df.to_string(justify="right", header=False, index=False,
                                         columns=['Q_obs'], na_rep="-1.2345")
             f.write(df_as_string)

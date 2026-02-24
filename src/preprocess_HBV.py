@@ -116,6 +116,7 @@ class HBVProcessor:
         self.templates_dir = self.hbv_dir / 'templates'
         self.data_obs_dir = self.hbv_dir / 'data_obs'
         self.topo_files_dir = self.catchment_dir / 'topo_files'
+        self.shared_data_dir = self.catchment_dir / 'data_obs'
         
         # Ensure directories exist
         self._create_directories()
@@ -542,14 +543,72 @@ class HBVProcessor:
 
         return hru_groups
 
+    def _get_subbasin_mean_elevation(self, sb_gauge_id: str) -> Optional[float]:
+        """Return area-weighted mean elevation for a subbasin from the merged HRU table."""
+        try:
+            hru_table_path = self.topo_files_dir / 'HRU_table.csv'
+            if not hru_table_path.exists():
+                return None
+            hru_df = pd.read_csv(hru_table_path)
+            # Find the subbasin id corresponding to this gauge_id
+            sb_match = [sb for sb in self.config.get('subbasins', [])
+                        if str(sb['gauge_id']) == str(sb_gauge_id)]
+            if not sb_match:
+                return None
+            sb_id = sb_match[0]['id']
+            sb_rows = hru_df[hru_df['BASIN_ID'] == sb_id]
+            if sb_rows.empty or 'ELEVATION' not in sb_rows.columns:
+                return None
+            if 'AREA' in sb_rows.columns:
+                total_area = sb_rows['AREA'].sum()
+                if total_area > 0:
+                    return round(float((sb_rows['ELEVATION'] * sb_rows['AREA']).sum() / total_area), 1)
+            return round(float(sb_rows['ELEVATION'].mean()), 1)
+        except Exception:
+            return None
+
+    def _get_subbasin_centroid_location(self, sb_gauge_id: str):
+        """Return (lat, lon, elevation) for a subbasin from its catchment shapefile centroid."""
+        shape_template = self.config.get('shape_dir', '')
+        shp_path = Path(self.config['main_dir']) / shape_template.format(gauge_id=sb_gauge_id)
+        if not shp_path.exists():
+            return None, None, None
+        try:
+            gdf = gpd.read_file(shp_path).to_crs('EPSG:4326')
+            centroid = gdf.geometry.unary_union.centroid
+            elev = self._get_subbasin_mean_elevation(sb_gauge_id)
+            return round(centroid.y, 4), round(centroid.x, 4), elev
+        except Exception as e:
+            print(f"  ⚠️ Could not compute centroid for subbasin {sb_gauge_id}: {e}")
+            return None, None, None
+
+    def _write_rvt_header(self, ff, param_or_name: str):
+        """Write RVT file header + forcing blocks (shared by single and multi-subbasin)."""
+        ff.writelines(f"{line}\n" for line in self._create_header("rvt"))
+        ff.write(f"# Meteorological data source: {self.meteo_source}\n")
+        if self.meteo_source == 'HAR':
+            ff.write("# Using HAR v2 (High Asia Refined Analysis) 10km data\n")
+        else:
+            ff.write("# Using ERA5-Land reanalysis data\n")
+        ff.write("#\n")
+        ff.write("# meteorological forcings\n")
+        forcing_data = self._create_forcing_block(param_or_name, self.coupled)
+        for f in forcing_data.values():
+            for t in f:
+                ff.write(f"{t}\n")
+
     def create_rvt_file(self, template: bool = False):
         """
         Write Raven .rvt file for HBV model.
-        ✅ UPDATED: Includes meteo source information in header
-        
-        Args:
-            template: Whether to create template file
+        ✅ UPDATED: Supports multi-subbasin mode (one :Gauge block per subbasin).
         """
+        if self.config.get('subbasins'):
+            self._create_rvt_file_multi_subbasin(template)
+        else:
+            self._create_rvt_file_single(template)
+
+    def _create_rvt_file_single(self, template: bool = False):
+        """Write .rvt for a single-basin namelist (original behaviour)."""
         file_path, param_or_name = self._get_file_path('rvt', template)
 
         print(f"Extracting gauge location from DEM for gauge {self.gauge_id}...")
@@ -559,62 +618,91 @@ class HBVProcessor:
             print(f"Error: Could not extract gauge location from DEM: {e}")
             return
 
-        # Use namelist values
-        gauge_info = self._create_gauge_info(self.gauge_lat, self.gauge_lon, 
-                                        self.station_elevation, param_or_name)
-        
-        # Create forcing data using namelist coupled setting
-        forcing_data = self._create_forcing_block(param_or_name, self.coupled)
-
-        # Write the file
+        gauge_info = self._create_gauge_info(self.gauge_lat, self.gauge_lon,
+                                              self.station_elevation, param_or_name)
         with open(file_path, 'w') as ff:
-            ff.writelines(f"{line}\n" for line in self._create_header("rvt"))
-            
-            # ✅ NEW: Add meteo source information
-            ff.write(f"# Meteorological data source: {self.meteo_source}\n")
-            if self.meteo_source == 'HAR':
-                ff.write("# Using HAR v2 (High Asia Refined Analysis) 10km data\n")
-            else:
-                ff.write("# Using ERA5-Land reanalysis data\n")
-            ff.write("#\n")
-            
-            ff.write("# meteorological forcings\n")
-            for f in forcing_data.values():
-                for t in f:
-                    ff.write(f"{t}\n")
+            self._write_rvt_header(ff, param_or_name)
             ff.writelines(gauge_info)
             ff.write(f":RedirectToFile data_obs/Q_daily.rvt\n")
-        
+
         print(f"✅ Successfully wrote HBV RVT file to {file_path}")
         print(f"   Meteo source: {self.meteo_source}")
 
-    def _create_gauge_info(self, gauge_lat: float, gauge_lon: float, 
-                            station_elevation: float, param_or_name: str) -> List[str]:
-            """Create gauge information section for RVT file."""
-            gauge_info = [
-                f":Gauge {self.gauge_id}\n",
-                f"  :Latitude    {gauge_lat}\n",
-                f"  :Longitude {gauge_lon}\n",
-                f"  :Elevation  {station_elevation}\n\n"
-            ]
-            
-            # Add monthly data if available
-            monthly_data = self._get_monthly_data()
-            if monthly_data:
-                gauge_info.extend(monthly_data)
-            
-            # Add gauge corrections
-            gauge_info.extend([
-                f":EndGauge\n\n"
-            ])
-            
-            return gauge_info
+    def _create_rvt_file_multi_subbasin(self, template: bool = False):
+        """Write .rvt for a multi-subbasin namelist.
 
-    def _get_monthly_data(self) -> List[str]:
+        One :Gauge block per subbasin (all subbasins, gauged and ungauged).
+        A :RedirectToFile line is added only for subbasins with gauged=1.
+        """
+        file_path, param_or_name = self._get_file_path('rvt', template)
+        subbasins_config = self.config['subbasins']
+
+        with open(file_path, 'w') as ff:
+            self._write_rvt_header(ff, param_or_name)
+
+            for sb in subbasins_config:
+                sb_id    = sb['id']
+                sb_gid   = str(sb['gauge_id'])
+                gauged   = sb.get('gauged', 0)
+
+                # Per-subbasin monthly T/PET directory
+                sb_data_dir = self.shared_data_dir / f'subbasin_{sb_id}'
+
+                # Gauge location from subbasin shapefile centroid
+                lat, lon, elev = self._get_subbasin_centroid_location(sb_gid)
+                print(f"  Subbasin {sb_id} ({sb_gid}): lat={lat}, lon={lon}, elev={elev}")
+
+                gauge_info = self._create_gauge_info(
+                    lat, lon, elev, param_or_name,
+                    gauge_id=sb_gid,
+                    subbasin_data_dir=sb_data_dir
+                )
+                ff.writelines(gauge_info)
+
+                if gauged:
+                    ff.write(f":RedirectToFile data_obs/Q_daily_{sb_gid}.rvt\n\n")
+                    print(f"  → Streamflow redirect: data_obs/Q_daily_{sb_gid}.rvt")
+
+        print(f"✅ Successfully wrote multi-subbasin HBV RVT file to {file_path}")
+        print(f"   Meteo source: {self.meteo_source}")
+
+    def _create_gauge_info(self, gauge_lat: float, gauge_lon: float,
+                            station_elevation: float, param_or_name: str,
+                            gauge_id: str = None,
+                            subbasin_data_dir: Path = None) -> List[str]:
+        """Create gauge information section for RVT file.
+
+        Parameters
+        ----------
+        gauge_id : str, optional
+            Gauge ID to write in the :Gauge header.  Defaults to self.gauge_id.
+        subbasin_data_dir : Path, optional
+            Per-subbasin data_obs directory to search for monthly T/PET CSV files
+            before falling back to the shared directories.
+        """
+        gid = gauge_id if gauge_id is not None else self.gauge_id
+        gauge_info = [
+            f":Gauge {gid}\n",
+            f"  :Latitude    {gauge_lat}\n",
+            f"  :Longitude {gauge_lon}\n",
+            f"  :Elevation  {station_elevation}\n\n"
+        ]
+
+        # Add monthly data if available
+        monthly_data = self._get_monthly_data(subbasin_data_dir=subbasin_data_dir)
+        if monthly_data:
+            gauge_info.extend(monthly_data)
+
+        gauge_info.append(f":EndGauge\n\n")
+
+        return gauge_info
+
+    def _get_monthly_data(self, subbasin_data_dir: Path = None) -> List[str]:
         """
         Read and format monthly temperature and PET data if available.
         ✅ UPDATED: Chooses correct files based on meteo_source (ERA5 or HAR)
         ✅ UPDATED: Also checks shared data_obs directory
+        ✅ UPDATED: Checks per-subbasin directory first when subbasin_data_dir is given
         """
         # ✅ Choose file names based on meteo_source
         if self.meteo_source == 'HAR':
@@ -623,21 +711,34 @@ class HBVProcessor:
         else:  # ERA5 (default)
             temp_filename = 'monthly_temperature_averages.csv'
             pet_filename = 'monthly_pet_averages.csv'
-        
-        # ✅ Check model-specific directory first
-        monthly_temp_file = self.data_obs_dir / temp_filename
-        monthly_pet_file = self.data_obs_dir / pet_filename
-        
+
+        # ✅ Check per-subbasin directory first (multi-subbasin mode)
+        if subbasin_data_dir is not None:
+            sb_temp = Path(subbasin_data_dir) / temp_filename
+            sb_pet  = Path(subbasin_data_dir) / pet_filename
+            if sb_temp.exists() and sb_pet.exists():
+                monthly_temp_file = sb_temp
+                monthly_pet_file  = sb_pet
+                print(f"📂 Using per-subbasin monthly data: {subbasin_data_dir}")
+            else:
+                # Fall through to normal search
+                monthly_temp_file = self.data_obs_dir / temp_filename
+                monthly_pet_file  = self.data_obs_dir / pet_filename
+        else:
+            # ✅ Check model-specific directory first
+            monthly_temp_file = self.data_obs_dir / temp_filename
+            monthly_pet_file = self.data_obs_dir / pet_filename
+
         # ✅ If not found, check shared directory
         if not monthly_temp_file.exists() or not monthly_pet_file.exists():
             shared_data_dir = self.catchment_dir / 'data_obs'
-            
+
             if not monthly_temp_file.exists():
                 shared_temp = shared_data_dir / temp_filename
                 if shared_temp.exists():
                     monthly_temp_file = shared_temp
                     print(f"📂 Found temperature file in shared directory: {shared_temp}")
-            
+
             if not monthly_pet_file.exists():
                 shared_pet = shared_data_dir / pet_filename
                 if shared_pet.exists():

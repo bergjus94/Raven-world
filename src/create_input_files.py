@@ -224,12 +224,32 @@ def main(namelist_path: str, force_reprocess: bool = False):
     # =========================================================================
     print("\n💧 STEP 2: Processing streamflow data...")
     try:
-        processor_stream = StreamflowProcessor(namelist_path)
-        success_stream = processor_stream.process()
-        if success_stream:
-            print("   ✅ Streamflow data processed")
+        if nml.get('subbasins'):
+            # Multi-subbasin: process one RVT file per gauged subbasin
+            for sb in nml['subbasins']:
+                if sb.get('gauged', 0):
+                    sb_gauge_id = str(sb['gauge_id'])
+                    sb_id = sb['id']
+                    print(f"   🏔️ Processing streamflow for subbasin {sb_id} (gauge {sb_gauge_id})...")
+                    proc = StreamflowProcessor(namelist_path,
+                                               basin_id=sb_id,
+                                               output_filename=f"Q_daily_{sb_gauge_id}.rvt")
+                    # Override so processor reads the subbasin's own streamflow file
+                    proc.gauge_id = sb_gauge_id
+                    proc.stream_file = proc.main_dir / proc.stream_dir_template.format(gauge_id=sb_gauge_id)
+                    proc.plot_file = proc.plots_dir / f"streamflow_timeseries_gauge_{sb_gauge_id}.png"
+                    success = proc.process()
+                    if success:
+                        print(f"   ✅ Streamflow processed for subbasin {sb_id} (gauge {sb_gauge_id})")
+                    else:
+                        print(f"   ⚠️ Streamflow processing completed with warnings for subbasin {sb_id}")
         else:
-            print("   ⚠️ Streamflow processing completed with warnings")
+            processor_stream = StreamflowProcessor(namelist_path)
+            success_stream = processor_stream.process()
+            if success_stream:
+                print("   ✅ Streamflow data processed")
+            else:
+                print("   ⚠️ Streamflow processing completed with warnings")
     except Exception as e:
         print(f"   ❌ Error processing streamflow: {e}")
         traceback.print_exc()
@@ -291,6 +311,23 @@ def main(namelist_path: str, force_reprocess: bool = False):
         print(f"   ❌ Error processing meteorological data: {e}")
         traceback.print_exc()
         return False
+
+    # Compute per-subbasin monthly T/PET averages (multi-subbasin only)
+    if nml.get('subbasins'):
+        print("   🌡️ Computing per-subbasin monthly T/PET averages...")
+        try:
+            analyzer = meteo_results['analyzer']
+            main_dir = Path(nml.get('main_dir', ''))
+            config_dir = nml.get('config_dir', '')
+            shared_data_dir = main_dir / config_dir / f"catchment_{gauge_id}" / 'data_obs'
+            for sb in nml['subbasins']:
+                sb_data_dir = shared_data_dir / f"subbasin_{sb['id']}"
+                ok = analyzer.compute_monthly_averages_for_subbasin(str(sb['gauge_id']), sb_data_dir)
+                status = '✅' if ok else '⚠️'
+                print(f"   {status} Monthly T/PET subbasin {sb['id']} (gauge {sb['gauge_id']})")
+        except Exception as e:
+            print(f"   ❌ Error computing per-subbasin monthly averages: {e}")
+            traceback.print_exc()
 
     # =========================================================================
     # STEP 6: Process GloGEM glacier data (only if coupled mode)
