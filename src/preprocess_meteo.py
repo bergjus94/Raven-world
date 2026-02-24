@@ -6098,6 +6098,7 @@ class HARGridWeightsGenerator:
             ny, nx = lat_2d.shape
         
         self.logger.info(f"HAR grid dimensions: {ny} x {nx} = {ny * nx} cells")
+        self.total_grid_cells = ny * nx  # full NetCDF size — Raven requires this in :NumberGridCells
         
         # Get 2D lat/lon coordinates
         lat_2d = ds.coords['lat'].values
@@ -6304,11 +6305,13 @@ class HARGridWeightsGenerator:
         Write HAR grid weights to file
         """
         number_HRUs = len(hru)
-        number_cells = len(grid)
+        # Raven validates that :NumberGridCells equals cols*rows from the NetCDF.
+        # Use the full grid size recorded during generate(), not the catchment-filtered subset.
+        number_cells = getattr(self, 'total_grid_cells', len(grid))
         HRU_list = list(relative_area[hru_id_col])
         cell_id = list(relative_area['cell_id'])
         rel_area = list(relative_area['normalized_relative_area'])
-        
+
         filename = self.out_dir / 'GridWeights_HAR.txt'
         
         self.logger.info(f"Writing HAR grid weights to {filename}")

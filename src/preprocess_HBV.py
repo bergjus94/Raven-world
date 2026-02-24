@@ -927,6 +927,65 @@ class HBVProcessor:
         return forcing_data
 
 
+    def _compute_avg_annual_runoff(self) -> Optional[float]:
+        """
+        Compute average annual runoff from the main gauge streamflow CSV.
+
+        Returns
+        -------
+        float or None
+            Average annual runoff in mm/yr, or None if the data are unavailable.
+        """
+        try:
+            stream_dir = self.config.get('stream_dir', '')
+            stream_path = self.main_dir / stream_dir.format(gauge_id=self.gauge_id)
+
+            if not stream_path.exists():
+                print(f"   ⚠️ Streamflow file not found for AVG_ANNUAL_RUNOFF: {stream_path}")
+                return None
+
+            df = pd.read_csv(stream_path)
+            df['date'] = pd.to_datetime(df['date'])
+
+            # Use simulation period only (exclude warm-up)
+            start = pd.to_datetime(self.start_date)
+            end   = pd.to_datetime(self.end_date)
+            df = df[df['date'].between(start, end)]
+
+            # Drop Raven fill value and any negatives
+            df = df[df['Q_obs'] > 0]
+
+            if len(df) == 0:
+                print("   ⚠️ No valid streamflow data for AVG_ANNUAL_RUNOFF")
+                return None
+
+            mean_q_m3s = df['Q_obs'].mean()
+
+            # Total catchment area from merged HRU table
+            hru_table_path = self.topo_files_dir / 'HRU_table.csv'
+            if not hru_table_path.exists():
+                print(f"   ⚠️ HRU_table.csv not found for AVG_ANNUAL_RUNOFF: {hru_table_path}")
+                return None
+
+            hru_table = pd.read_csv(hru_table_path)
+            total_area_km2 = hru_table['AREA'].sum()
+
+            if total_area_km2 <= 0:
+                return None
+
+            # runoff [mm/yr] = Q [m³/s] × 31557600 [s/yr] / area [m²] × 1000 [mm/m]
+            seconds_per_year = 365.25 * 24 * 3600
+            runoff_mm_yr = mean_q_m3s * seconds_per_year / (total_area_km2 * 1e3)
+
+            print(f"   📊 AVG_ANNUAL_RUNOFF: {runoff_mm_yr:.1f} mm/yr "
+                  f"(mean Q={mean_q_m3s:.2f} m³/s, area={total_area_km2:.1f} km²)")
+            return round(runoff_mm_yr, 1)
+
+        except Exception as e:
+            print(f"   ⚠️ Could not compute AVG_ANNUAL_RUNOFF: {e}")
+            return None
+
+
     def create_rvp_file(self, template: bool = False):
         """
         Write Raven .rvp file for HBV model.
@@ -975,6 +1034,28 @@ class HBVProcessor:
                 ff.writelines(line + '\n' for line in lines)
                 ff.write('\n')
 
+    def _build_global_params(self, param_or_name: str) -> List[str]:
+        """Build the :GlobalParameter lines, including AVG_ANNUAL_RUNOFF."""
+        lines = [
+            f":GlobalParameter RAINSNOW_TEMP       {self.params['HBV'][param_or_name]['X01']}",
+            ":GlobalParameter RAINSNOW_DELTA      1.0 #constant",
+            f":GlobalParameter PRECIP_LAPSE       2.0 # RECIP_LAPSE",
+            f":GlobalParameter ADIABATIC_LAPSE    6.0 # ADIABATIC_LAPSE",
+            f":GlobalParameter SNOW_SWI  {self.params['HBV'][param_or_name]['X04']} #SNOW_SWI",
+        ]
+        avg_runoff = self._compute_avg_annual_runoff()
+        if avg_runoff is not None:
+            lines.append(
+                f":GlobalParameter AVG_ANNUAL_RUNOFF  {avg_runoff}  "
+                f"# avg annual runoff [mm/yr] from gauge {self.gauge_id}"
+            )
+        else:
+            lines.append(
+                "# :GlobalParameter AVG_ANNUAL_RUNOFF  ???  "
+                "# Could not compute — fill manually [mm/yr]"
+            )
+        return lines
+
     def _create_rvp_sections(self, param_or_name: str, 
                         land_use_classes: List[str], vegetation_classes: List[str]) -> Dict[str, List[str]]:
         """Create all sections for RVP file."""
@@ -1012,13 +1093,7 @@ class HBVProcessor:
                 ":EndVegetationParameterList"
             ],
             "#Land Use Classes": land_use_classes,
-            "#Global Parameters": [
-                f":GlobalParameter RAINSNOW_TEMP       {self.params['HBV'][param_or_name]['X01']}",
-                ":GlobalParameter RAINSNOW_DELTA      1.0 #constant",
-                f":GlobalParameter PRECIP_LAPSE       2.0 # RECIP_LAPSE",
-                f":GlobalParameter ADIABATIC_LAPSE    6.0 # ADIABATIC_LAPSE",
-                f":GlobalParameter SNOW_SWI  {self.params['HBV'][param_or_name]['X04']} #SNOW_SWI"
-            ],
+            "#Global Parameters": self._build_global_params(param_or_name),
             "#Land Use Parameters": [
                 ":LandUseParameterList",
                 "  :Parameters,   MELT_FACTOR, MIN_MELT_FACTOR,   HBV_MELT_FOR_CORR, REFREEZE_FACTOR, HBV_MELT_ASP_CORR",
