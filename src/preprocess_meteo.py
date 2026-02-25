@@ -165,10 +165,6 @@ class ERA5LandAnalyzer:
                 if exists:
                     self.processed_files.append(self.output_path / expected_files[file_type])
             
-            # ✅ NEW: Copy existing files to model-specific directory
-            self.logger.info("📋 Copying existing files to model-specific directory...")
-            self._copy_to_model_directory(self.processed_files)
-                    
         elif existing_count > 0 and not force_reprocess:
             self.logger.info(f"📂 Found {existing_count}/{total_expected} existing files")
             self.logger.info("🔄 Will only process missing files. Set force_reprocess=True to reprocess all.")
@@ -1517,11 +1513,8 @@ class ERA5LandAnalyzer:
             self.logger.info("\n🔄 Adding warm-up period to meteorological files...")
             all_daily_files = self._add_warmup_to_files(all_daily_files)
         
-        # Copy to model directory
-        self._copy_to_model_directory(all_daily_files)
-        
         return all_daily_files
-    
+
     #---------------------------------------------------------------------------------
     
     def _convert_units(self, dataset: xr.Dataset, var_name: str) -> xr.Dataset:
@@ -1798,12 +1791,8 @@ class ERA5LandAnalyzer:
                 updated_files.append(file_path)
         
         self.logger.info(f"✅ Warm-up period added to {len(updated_files)} files")
-        
-        # ✅ NEW: Copy updated files to model-specific directory
-        self._copy_to_model_directory(updated_files)
-        
         return updated_files
-    
+
     #---------------------------------------------------------------------------------
     
     def plot_spatial_overview(self, netcdf_file: Path) -> None:
@@ -2991,9 +2980,6 @@ class HARAnalyzer:
                 if exists:
                     self.processed_files.append(self.output_path / expected_files[file_type])
             
-            # Copy existing files to model-specific directory
-            self.logger.info("📋 Copying existing files to model-specific directory...")
-            self._copy_to_model_directory(self.processed_files)
                     
         elif existing_count > 0 and not force_reprocess:
             self.logger.info(f"📂 Found {existing_count}/{total_expected} existing files")
@@ -3621,10 +3607,6 @@ class HARAnalyzer:
                 updated_files.append(file_path)
         
         self.logger.info(f"✅ Warm-up period added to {len(updated_files)} files")
-        
-        # ✅ NEW: Copy updated files to model-specific directory
-        self._copy_to_model_directory(updated_files)
-        
         return updated_files
 
     #---------------------------------------------------------------------------------
@@ -4252,9 +4234,6 @@ class HARAnalyzer:
         if hasattr(self, 'warmup_date') and self.warmup_date is not None:
             self.logger.info("\n🔄 Adding warm-up period to HAR meteorological files...")
             all_files = self._add_warmup_to_files(all_files)
-        
-        # Copy to model-specific directory
-        self._copy_to_model_directory(all_files)
         
         return all_files
 
@@ -5731,12 +5710,9 @@ class GridWeightsGenerator:
             self.logger.info("⏭️  Skipping grid weights generation")
             self.logger.info("💡 Delete the file to regenerate: rm " + str(gridweights_file))
             
-            # ✅ NEW: Copy to model directory even if skipping generation
-            self._copy_gridweights_to_model_directory()
-            
             # Return empty GeoDataFrame since we're skipping
             return gpd.GeoDataFrame()
-        
+
         # ✅ CHECK 2: Check for cached overlay calculation
         cache_file = self.out_dir / 'grid_overlay_cache.pkl'
         
@@ -5755,10 +5731,6 @@ class GridWeightsGenerator:
                 
                 # Jump straight to writing file
                 self.write_gridWeights(HRU, era5_grid_polygons, relative_area)
-                
-                # ✅ NEW: Copy GridWeights.txt to model-specific directory
-                self._copy_gridweights_to_model_directory()
-                
                 return relative_area
                 
             except Exception as e:
@@ -5932,10 +5904,6 @@ class GridWeightsGenerator:
                 self.logger.info(f"✅ Weight sum verification passed")
         
         self.logger.info("ERA5-Land grid weights generation completed successfully")
-        
-        # ✅ NEW: Copy GridWeights.txt to model-specific directory
-        self._copy_gridweights_to_model_directory()
-        
         return relative_area
     
     #---------------------------------------------------------------------------------
@@ -6057,7 +6025,6 @@ class HARGridWeightsGenerator:
         if gridweights_file.exists() and not self.force_reprocess:
             self.logger.info(f"✅ GridWeights_HAR.txt already exists")
             self.logger.info("⏭️ Skipping grid weights generation")
-            self._copy_gridweights_to_model_directory()
             return gpd.GeoDataFrame()
         
         # Find HAR precipitation file (use as grid reference)
@@ -6287,10 +6254,7 @@ class HARGridWeightsGenerator:
         
         # Write grid weights file
         self._write_gridweights(HRU, har_grid, relative_area, hru_id_col)
-        
-        # Copy to model directory
-        self._copy_gridweights_to_model_directory()
-        
+
         ds.close()
         
         self.logger.info("HAR grid weights generation completed!")

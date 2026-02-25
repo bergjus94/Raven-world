@@ -3062,9 +3062,6 @@ class HRUConnectivityCalculator:
             self.logger.info(f"Loading existing connectivity data from {connectivity_csv}")
             existing_connectivity = pd.read_csv(connectivity_csv)
             
-            # ✅ FIX: Copy files to model-specific directory even when loading existing data
-            self._copy_to_model_directory()
-            
             self.logger.info(f"✅ Loaded connectivity for {len(existing_connectivity)} HRUs")
             return existing_connectivity
         
@@ -3111,10 +3108,6 @@ class HRUConnectivityCalculator:
         # Step 11: Save connectivity DataFrame
         self.connectivity_df.to_csv(connectivity_csv, index=False)
         self.logger.debug(f"Saved connectivity DataFrame to {connectivity_csv}")
-        
-        # ✅ NEW: Copy connectivity files to model-specific directory
-        self._copy_to_model_directory()
-        
         self.logger.info("Connectivity calculation complete")
         return self.connectivity_df
 

@@ -340,7 +340,7 @@ class HBVProcessor:
         lateral_connections = [
             "",
             "#:LateralConnections",
-            ":RedirectToFile  data_obs/connections.rvh",
+            ":RedirectToFile  ../data_obs/connections.rvh",
             "#:EndLateralConnections",
             ""
         ]
@@ -623,7 +623,7 @@ class HBVProcessor:
         with open(file_path, 'w') as ff:
             self._write_rvt_header(ff, param_or_name)
             ff.writelines(gauge_info)
-            ff.write(f":RedirectToFile data_obs/Q_daily.rvt\n")
+            ff.write(f":RedirectToFile ../data_obs/Q_daily.rvt\n")
 
         print(f"✅ Successfully wrote HBV RVT file to {file_path}")
         print(f"   Meteo source: {self.meteo_source}")
@@ -660,8 +660,8 @@ class HBVProcessor:
                 ff.writelines(gauge_info)
 
                 if gauged:
-                    ff.write(f":RedirectToFile data_obs/Q_daily_{sb_gid}.rvt\n\n")
-                    print(f"  → Streamflow redirect: data_obs/Q_daily_{sb_gid}.rvt")
+                    ff.write(f":RedirectToFile ../data_obs/Q_daily_{sb_gid}.rvt\n\n")
+                    print(f"  → Streamflow redirect: ../data_obs/Q_daily_{sb_gid}.rvt")
 
         print(f"✅ Successfully wrote multi-subbasin HBV RVT file to {file_path}")
         print(f"   Meteo source: {self.meteo_source}")
@@ -818,7 +818,7 @@ class HBVProcessor:
             temp_mean_file = 'har_temp_mean.nc'
             temp_max_file = 'har_temp_max.nc'
             temp_min_file = 'har_temp_min.nc'
-            grid_weights_file = 'data_obs/GridWeights_HAR.txt'
+            grid_weights_file = '../data_obs/GridWeights_HAR.txt'
             
             # HAR variable names
             precip_var = 'prcp'
@@ -837,7 +837,7 @@ class HBVProcessor:
             temp_mean_file = 'era5_land_temp_mean.nc'
             temp_max_file = 'era5_land_temp_max.nc'
             temp_min_file = 'era5_land_temp_min.nc'
-            grid_weights_file = 'data_obs/GridWeights.txt'
+            grid_weights_file = '../data_obs/GridWeights.txt'
             
             # ERA5-Land variable names
             precip_var = 'tp'
@@ -860,7 +860,7 @@ class HBVProcessor:
         forcing_data['Rainfall'] = [
             f":GriddedForcing           Rainfall",
             f"    :ForcingType          RAINFALL",
-            f"    :FileNameNC           data_obs/{precip_file}",
+            f"    :FileNameNC           ../data_obs/{precip_file}",
             f"    :VarNameNC            {precip_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
@@ -875,7 +875,7 @@ class HBVProcessor:
         forcing_data['Average Temperature'] = [
             f":GriddedForcing           Average Temperature",
             f"    :ForcingType          TEMP_AVE",
-            f"    :FileNameNC           data_obs/{temp_mean_file}",
+            f"    :FileNameNC           ../data_obs/{temp_mean_file}",
             f"    :VarNameNC            {temp_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
@@ -888,7 +888,7 @@ class HBVProcessor:
         forcing_data['Maximum Temperature'] = [
             f":GriddedForcing           Maximum Temperature",
             f"    :ForcingType          TEMP_MAX",
-            f"    :FileNameNC           data_obs/{temp_max_file}",
+            f"    :FileNameNC           ../data_obs/{temp_max_file}",
             f"    :VarNameNC            {temp_max_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
@@ -901,7 +901,7 @@ class HBVProcessor:
         forcing_data['Minimum Temperature'] = [
             f":GriddedForcing           Minimum Temperature",
             f"    :ForcingType          TEMP_MIN",
-            f"    :FileNameNC           data_obs/{temp_min_file}",
+            f"    :FileNameNC           ../data_obs/{temp_min_file}",
             f"    :VarNameNC            {temp_min_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
@@ -915,11 +915,11 @@ class HBVProcessor:
             forcing_data['Irrigation'] = [
                 ":GriddedForcing           Irrigation",
                 "    :ForcingType          IRRIGATION",
-                "    :FileNameNC           data_obs/irrigation.nc",
+                "    :FileNameNC           ../data_obs/irrigation.nc",
                 "    :VarNameNC            data",
                 "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
                 "    :ElevationVarNameNC   elevation",
-                "    :RedirectToFile       data_obs/GridWeights_Irrigation.txt",
+                "    :RedirectToFile       ../data_obs/GridWeights_Irrigation.txt",
                 ":EndGriddedForcing",
                 ''
             ]
