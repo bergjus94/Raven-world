@@ -1230,7 +1230,8 @@ class CatchmentProcessor:
         if self.slope_data is None or self.aspect_data is None:
             self.calculate_slope_and_aspect()
         
-        if self.landuse_data is None and 'landuse' in self.criteria:
+        # Always load land use: needed for glacier class marking regardless of criteria
+        if self.landuse_data is None:
             self.reclassify_landuse()
         
         if self.glacier_data is None and self.coupled:
@@ -1255,7 +1256,6 @@ class CatchmentProcessor:
                 # Check glacier raster specifically
                 glacier_raster = topo_dir / 'glacier_raster.tif'
                 if glacier_raster.exists():
-                    import rasterio
                     with rasterio.open(glacier_raster) as src:
                         data = src.read(1)
                         unique_vals = np.unique(data[~np.isnan(data)])
