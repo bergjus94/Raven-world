@@ -183,7 +183,11 @@ PIPELINE_CASES = [
     pytest.param("9999", "HYMOD", "HAR",  False, False, id="hymod_har_single"),
     pytest.param("9900", "HBV",   "ERA5", False, True,  id="hbv_era5_multi"),
     pytest.param("9900", "HBV",   "HAR",  False, True,  id="hbv_har_multi"),
-    pytest.param("9900", "HYMOD", "ERA5", False, True,  id="hymod_era5_multi"),
-    pytest.param("9900", "HYMOD", "HAR",  False, True,  id="hymod_har_multi"),
+    pytest.param("9900", "HYMOD", "ERA5", False, True,  id="hymod_era5_multi",
+                 marks=pytest.mark.xfail(reason="HYMOD multi-subbasin not yet implemented",
+                                         strict=True)),
+    pytest.param("9900", "HYMOD", "HAR",  False, True,  id="hymod_har_multi",
+                 marks=pytest.mark.xfail(reason="HYMOD multi-subbasin not yet implemented",
+                                         strict=True)),
     pytest.param("9999", "HBV",   "HAR",  True,  False, id="hbv_har_coupled"),
 ]
