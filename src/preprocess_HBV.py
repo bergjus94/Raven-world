@@ -819,18 +819,18 @@ class HBVProcessor:
             temp_max_file = 'har_temp_max.nc'
             temp_min_file = 'har_temp_min.nc'
             grid_weights_file = '../data_obs/GridWeights_HAR.txt'
-            
+
             # HAR variable names
             precip_var = 'prcp'
             temp_var = 't2_mean'
             temp_max_var = 't2_max'
             temp_min_var = 't2_min'
-            
+
             # HAR dimension names (curvilinear grid)
             dim_names = "west_east south_north time"
-            
+
             print(f"📊 Using HAR meteorological data")
-            
+
         else:  # ERA5 (default)
             # ERA5-Land file names and configuration
             precip_file = 'era5_land_precip.nc'
@@ -838,39 +838,51 @@ class HBVProcessor:
             temp_max_file = 'era5_land_temp_max.nc'
             temp_min_file = 'era5_land_temp_min.nc'
             grid_weights_file = '../data_obs/GridWeights.txt'
-            
+
             # ERA5-Land variable names
             precip_var = 'tp'
             temp_var = 't2m'
             temp_max_var = 't2m'
             temp_min_var = 't2m'
-            
+
             # ERA5-Land dimension names
             dim_names = "longitude latitude time"
-            
+
             print(f"📊 Using ERA5-Land meteorological data")
+
+        # Precipitation weights/dims default to the meteo_source values
+        precip_weights_file = grid_weights_file
+        precip_dim_names = dim_names
+
+        # ✅ Override precipitation source if TPHiPr is requested
+        if self.config.get('precip_source', '').upper() == 'TPHIPR':
+            precip_file = 'tphipr_precip.nc'
+            precip_var = 'prcp'
+            precip_weights_file = '../data_obs/GridWeights_TPHiPr.txt'
+            precip_dim_names = 'longitude latitude time'
+            print(f"📊 Overriding precipitation source: TPHiPr")
 
         # Get optional parameters with default values
         rain_corr = self.params['HBV'][param_or_name].get('X20', 1.0)
         snow_corr = self.params['HBV'][param_or_name].get('X21', 1.0)
 
         forcing_data = {}
-        
-        # Rainfall forcing block
+
+        # Rainfall forcing block (uses precip-specific weights and dim names)
         forcing_data['Rainfall'] = [
             f":GriddedForcing           Rainfall",
             f"    :ForcingType          RAINFALL",
             f"    :FileNameNC           ../data_obs/{precip_file}",
             f"    :VarNameNC            {precip_var}",
-            f"    :DimNamesNC           {dim_names}",
+            f"    :DimNamesNC           {precip_dim_names}",
             "    :ElevationVarNameNC   elevation",
             f"#    :RainCorrection       {rain_corr}",
             f"#    :SnowCorrection       {snow_corr}",
-            f"    :RedirectToFile       {grid_weights_file}",
+            f"    :RedirectToFile       {precip_weights_file}",
             ":EndGriddedForcing",
             ''
         ]
-        
+
         # Average Temperature forcing block
         forcing_data['Average Temperature'] = [
             f":GriddedForcing           Average Temperature",
@@ -883,7 +895,7 @@ class HBVProcessor:
             ":EndGriddedForcing",
             ''
         ]
-        
+
         # Maximum Temperature forcing block
         forcing_data['Maximum Temperature'] = [
             f":GriddedForcing           Maximum Temperature",
@@ -896,7 +908,7 @@ class HBVProcessor:
             ":EndGriddedForcing",
             ''
         ]
-        
+
         # Minimum Temperature forcing block
         forcing_data['Minimum Temperature'] = [
             f":GriddedForcing           Minimum Temperature",

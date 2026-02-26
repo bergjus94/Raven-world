@@ -716,8 +716,8 @@ class MOHYSEPreprocessor:
         if self.meteo_source == 'HAR':
             grid_weights_file_path = "../data_obs/GridWeights_HAR.txt"
             dim_names = "west_east south_north time"
-            forcing_types = [
-                ('Rainfall',            'RAINFALL', 'har_precip.nc',    'prcp'),
+            precip_tuple = ('Rainfall', 'RAINFALL', 'har_precip.nc', 'prcp')
+            other_types = [
                 ('Average Temperature', 'TEMP_AVE', 'har_temp_mean.nc', 't2_mean'),
                 ('Maximum Temperature', 'TEMP_MAX', 'har_temp_max.nc',  't2_max'),
                 ('Minimum Temperature', 'TEMP_MIN', 'har_temp_min.nc',  't2_min'),
@@ -725,15 +725,41 @@ class MOHYSEPreprocessor:
         else:  # ERA5 (default)
             grid_weights_file_path = "../data_obs/GridWeights.txt"
             dim_names = "longitude latitude time"
-            forcing_types = [
-                ('Rainfall',            'RAINFALL', 'era5_land_precip.nc',    'tp'),
+            precip_tuple = ('Rainfall', 'RAINFALL', 'era5_land_precip.nc', 'tp')
+            other_types = [
                 ('Average Temperature', 'TEMP_AVE', 'era5_land_temp_mean.nc', 't2m'),
                 ('Maximum Temperature', 'TEMP_MAX', 'era5_land_temp_max.nc',  't2m'),
                 ('Minimum Temperature', 'TEMP_MIN', 'era5_land_temp_min.nc',  't2m'),
             ]
 
+        # Precip weights/dims default to meteo_source values
+        precip_weights_file = grid_weights_file_path
+        precip_dim_names = dim_names
+
+        # ✅ Override precipitation source if TPHiPr is requested
+        if self.config.get('precip_source', '').upper() == 'TPHIPR':
+            precip_tuple = ('Rainfall', 'RAINFALL', 'tphipr_precip.nc', 'prcp')
+            precip_weights_file = "../data_obs/GridWeights_TPHiPr.txt"
+            precip_dim_names = "longitude latitude time"
+
         forcing_data = {}
-        for name, forcing_type, filename, var_name in forcing_types:
+
+        # Rainfall block (potentially different weights/dims than temperature)
+        name, forcing_type, filename, var_name = precip_tuple
+        forcing_data[name] = [
+            f":GriddedForcing           {name}",
+            f"    :ForcingType          {forcing_type}",
+            f"    :FileNameNC           ../data_obs/{filename}",
+            f"    :VarNameNC            {var_name}",
+            f"    :DimNamesNC           {precip_dim_names}",
+            "    :ElevationVarNameNC   elevation",
+            f"    :RedirectToFile       {precip_weights_file}",
+            ":EndGriddedForcing",
+            ''
+        ]
+
+        # Temperature blocks (always from meteo_source)
+        for name, forcing_type, filename, var_name in other_types:
             forcing_data[name] = [
                 f":GriddedForcing           {name}",
                 f"    :ForcingType          {forcing_type}",

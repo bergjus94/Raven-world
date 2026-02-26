@@ -456,6 +456,47 @@ def create_glacier_id_mapping(root: Path, gauge_id: str = "9999") -> None:
     print(f"  ✅ glacier_id_mapping.csv → {path}")
 
 
+# ── TPHiPr NetCDF files ────────────────────────────────────────────────────────
+def create_tphipr_files(root: Path) -> None:
+    """
+    Create synthetic TPHiPr daily precipitation NetCDF files.
+
+    File naming: tpmfd_prcp_{year}.nc
+    Dimensions: (time, latitude, longitude) – time is daily
+    Variable:   prcp (mm.hr-1)
+    Grid:       regular lat/lon (N→S latitudes), 15×15 cells covering test domain
+    """
+    out_dir = root / "01_data" / "meteo" / "TPHiPr"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    TPHIPR_NX, TPHIPR_NY = 15, 15
+    # N→S latitudes, W→E longitudes – same domain as other meteo datasets
+    lats_1d = np.linspace(GRID_MAXY, GRID_MINY, TPHIPR_NY, dtype=np.float64)
+    lons_1d = np.linspace(GRID_MINX, GRID_MAXX, TPHIPR_NX, dtype=np.float64)
+
+    for year in ALL_YEARS:
+        dates = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+        n_days = len(dates)
+        doy = np.array([t.dayofyear for t in dates], dtype=float)
+
+        # Seasonal precipitation in mm.hr-1; ~0.1–0.4 mm/hr = 2.4–9.6 mm/day
+        seasonal = 0.1 + 0.15 * np.sin(2 * np.pi * (doy - 180) / 365)
+        prcp = (
+            seasonal[:, None, None] * np.ones((n_days, TPHIPR_NY, TPHIPR_NX))
+            + RNG.exponential(0.03, (n_days, TPHIPR_NY, TPHIPR_NX))
+        ).astype(np.float32)
+        prcp = np.clip(prcp, 0, None)
+
+        ds = xr.Dataset(
+            {"prcp": (["time", "latitude", "longitude"], prcp,
+                       {"units": "mm.hr-1", "long_name": "precipitation"})},
+            coords={"time": dates, "latitude": lats_1d, "longitude": lons_1d},
+        )
+        ds.to_netcdf(out_dir / f"tpmfd_prcp_{year}.nc")
+
+    print(f"  ✅ TPHiPr NetCDF files ({len(ALL_YEARS)} years) → {out_dir}")
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 def generate_all_fixtures(root: Path) -> None:
     """Generate all synthetic fixtures under *root*."""
@@ -470,6 +511,7 @@ def generate_all_fixtures(root: Path) -> None:
     create_har_files(root)
     create_era5_files(root)
     create_glogem_files(root)
+    create_tphipr_files(root)
     print("\n✅ All fixtures generated.\n")
 
 

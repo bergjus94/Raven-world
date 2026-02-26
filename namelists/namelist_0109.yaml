@@ -30,6 +30,8 @@ glogem_dir: '01_data/GloGEM/Indus/geodetic_mass_balance_Hunza/GloGEM_output_{gau
 swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
 params_dir: 'src/config/default_params.yaml'
 meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
+precip_source: 'TPHiPr'   # optional: override precipitation with TPHiPr (~3 km); omit to use meteo_source precip
+tphipr_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/TPHiPr'
 
 config_dir: '03_model_setups_coupled_geodetic_mass_balance'
 

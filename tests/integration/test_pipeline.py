@@ -182,6 +182,85 @@ def test_raven_runs_without_error(
         )
 
 
+# ── TPHiPr precipitation override tests ───────────────────────────────────────
+
+def _tphipr_namelist(make_namelist, fixture_root):
+    """Return a namelist path with precip_source=TPHiPr (HAR for temperature)."""
+    tphipr_dir = str(fixture_root / "01_data" / "meteo" / "TPHiPr")
+    return make_namelist(
+        gauge_id="9999",
+        model_type="HBV",
+        meteo_source="HAR",
+        extra={"precip_source": "TPHiPr", "tphipr_dir": tphipr_dir},
+    )
+
+
+def test_pipeline_tphipr_precip(make_namelist, fixture_root):
+    """Full pipeline with TPHiPr precip: verify model files + data_obs outputs."""
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+    from create_input_files import main as run_pipeline
+
+    nml_path = _tphipr_namelist(make_namelist, fixture_root)
+    run_pipeline(str(nml_path), force_reprocess=True)
+
+    _assert_model_files_exist(nml_path)
+
+    data_obs = _catchment_dir(nml_path) / "data_obs"
+    assert (data_obs / "GridWeights_HAR.txt").exists(), "HAR weights must exist (for temperature)"
+    assert (data_obs / "GridWeights_TPHiPr.txt").exists(), "TPHiPr grid weights must be generated"
+    assert (data_obs / "tphipr_precip.nc").exists(), "tphipr_precip.nc must be generated"
+
+    # .rvt must reference both TPHiPr (precip) and HAR (temperature)
+    with open(nml_path) as f:
+        nml = yaml.safe_load(f)
+    model_dir = _model_dir(nml_path)
+    rvt_path = (model_dir / f"catchment_{nml['gauge_id']}"
+                / "HBV" / f"{nml['gauge_id']}_HBV.rvt")
+    content = rvt_path.read_text()
+    assert "tphipr_precip.nc" in content
+    assert "GridWeights_TPHiPr.txt" in content
+    assert "GridWeights_HAR.txt" in content
+
+
+@pytest.mark.raven
+@pytest.mark.slow
+def test_raven_tphipr_precip(make_namelist, fixture_root):
+    """Run Raven with TPHiPr precipitation and assert it completes without errors."""
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+    from create_input_files import main as run_pipeline
+
+    nml_path = _tphipr_namelist(make_namelist, fixture_root)
+    run_pipeline(str(nml_path), force_reprocess=True)
+
+    with open(nml_path) as f:
+        nml = yaml.safe_load(f)
+
+    raven_exe = nml.get("raven_executable", "")
+    if not Path(raven_exe).exists():
+        pytest.skip(f"Raven executable not found: {raven_exe}")
+
+    model_type_upper = nml["model_type"].upper()
+    gauge_id = nml["gauge_id"]
+    hbv_dir = _hbv_dir(nml_path)
+    rvi_path = hbv_dir / f"{gauge_id}_{model_type_upper}.rvi"
+
+    result = subprocess.run(
+        [raven_exe, str(rvi_path.stem), "-o", str(hbv_dir)],
+        capture_output=True, text=True, cwd=str(hbv_dir), timeout=300,
+    )
+    log_path = hbv_dir / "raven_run.log"
+    log_path.write_text(result.stdout + "\n" + result.stderr)
+
+    assert result.returncode == 0, (
+        f"Raven exited with code {result.returncode}.\nLog:\n{result.stdout[-3000:]}"
+    )
+    fatal_keywords = ["FATAL", "ERROR:", "ParseMainInputFile"]
+    for kw in fatal_keywords:
+        assert kw not in result.stdout, (
+            f"Raven output contains '{kw}'.\nLog:\n{result.stdout[-3000:]}"
+        )
+
+
 # ── Additional structural checks ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("model_type,meteo_source,prefix", [

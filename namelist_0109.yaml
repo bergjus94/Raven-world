@@ -20,6 +20,8 @@ aspect_slope_threshold: 15.0
 future: false
 debug: true
 meteo_source: 'HAR'
+precip_source: 'TPHiPr'   # optional: override precipitation with TPHiPr (~3 km); omit to use meteo_source precip
+tphipr_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/TPHiPr'
 landuse_source: 'ICIMOD'   # options: 'ESA', 'ICIMOD', or 'auto' (detect based on unique values)
 
 

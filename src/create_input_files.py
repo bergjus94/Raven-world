@@ -17,10 +17,11 @@ matplotlib.use('Agg')  # Prevent plots from showing in image viewer
 import preprocess_general
 import preprocess_meteo
 from preprocess_meteo import (
-    ERA5LandAnalyzer, 
+    ERA5LandAnalyzer,
     GridWeightsGenerator,
     HARAnalyzer,
-    HARGridWeightsGenerator
+    HARGridWeightsGenerator,
+    process_tphipr_precipitation,
 )
 from preprocess_catchment import (
     CatchmentProcessor,
@@ -319,6 +320,16 @@ def main(namelist_path: str, force_reprocess: bool = False):
         print(f"   ❌ Error processing meteorological data: {e}")
         traceback.print_exc()
         return False
+
+    # Optional: TPHiPr precipitation override
+    if nml.get('precip_source', '').upper() == 'TPHIPR':
+        print("\n🌧️ STEP 5b: Processing TPHiPr precipitation data...")
+        try:
+            process_tphipr_precipitation(namelist_path)
+        except Exception as e:
+            print(f"   ❌ Error processing TPHiPr data: {e}")
+            traceback.print_exc()
+            return False
 
     # Compute per-subbasin monthly T/PET averages (multi-subbasin only)
     if nml.get('subbasins'):

@@ -155,3 +155,61 @@ class TestHBVProcessorMultiSubbasin:
             f"Expected exactly 1 Q_daily redirect (gauged only), found {len(redirects)}"
         )
         assert "9900" in redirects[0], "Redirect should reference gauge_id 9900"
+
+
+class TestHBVSingleTPHiPr:
+    """Tests for HBVProcessor with TPHiPr precipitation override (HAR for temperature)."""
+
+    @pytest.fixture()
+    def prepared_tphipr_hbv(self, make_namelist, fixture_root):
+        """Run CatchmentProcessor + HAR (temp/PET) + TPHiPr (precip), then HBVProcessor."""
+        from preprocess_catchment import CatchmentProcessor
+        from preprocess_meteo import (
+            HARAnalyzer,
+            HARGridWeightsGenerator,
+            TPHiPrAnalyzer,
+            TPHiPrGridWeightsGenerator,
+        )
+        from preprocess_HBV import HBVProcessor
+
+        tphipr_dir = str(fixture_root / "01_data" / "meteo" / "TPHiPr")
+        nml_path = make_namelist(
+            gauge_id="9999",
+            model_type="HBV",
+            meteo_source="HAR",
+            extra={"precip_source": "TPHiPr", "tphipr_dir": tphipr_dir},
+        )
+
+        CatchmentProcessor(nml_path).process_catchment()
+        analyzer = HARAnalyzer(nml_path, force_reprocess=True)
+        analyzer.calculate_monthly_temperature_averages()
+        analyzer.calculate_monthly_pet_averages()
+        HARGridWeightsGenerator(nml_path).generate()
+        TPHiPrAnalyzer(nml_path, force_reprocess=True).process()
+        TPHiPrGridWeightsGenerator(nml_path).generate()
+
+        return HBVProcessor(nml_path), nml_path
+
+    def _rvt_content(self, processor, nml_path):
+        processor.create_rvt_file(template=False)
+        with open(nml_path) as f:
+            nml = yaml.safe_load(f)
+        model_dir = Path(nml["main_dir"]) / nml["config_dir"]
+        rvt_path = (model_dir / f"catchment_{nml['gauge_id']}"
+                    / "HBV" / f"{nml['gauge_id']}_HBV.rvt")
+        return rvt_path.read_text()
+
+    def test_rvt_precip_uses_tphipr(self, prepared_tphipr_hbv):
+        """Rainfall block in .rvt must reference tphipr_precip.nc and GridWeights_TPHiPr.txt."""
+        processor, nml_path = prepared_tphipr_hbv
+        content = self._rvt_content(processor, nml_path)
+        assert "tphipr_precip.nc" in content, "RVT must reference tphipr_precip.nc for rainfall"
+        assert "GridWeights_TPHiPr.txt" in content, "RVT must reference GridWeights_TPHiPr.txt"
+
+    def test_rvt_temperature_uses_har(self, prepared_tphipr_hbv):
+        """Temperature block in .rvt must still reference HAR grid weights."""
+        processor, nml_path = prepared_tphipr_hbv
+        content = self._rvt_content(processor, nml_path)
+        assert "GridWeights_HAR.txt" in content, (
+            "RVT must still use GridWeights_HAR.txt for temperature when precip_source=TPHiPr"
+        )
