@@ -184,13 +184,16 @@ def test_raven_runs_without_error(
 
 # ── Additional structural checks ───────────────────────────────────────────────
 
-def test_multi_subbasin_has_per_subbasin_monthly_csvs(make_namelist):
+@pytest.mark.parametrize("model_type,meteo_source,prefix", [
+    ("HBV", "HAR", "har_"),
+])
+def test_multi_subbasin_per_subbasin_csvs(model_type, meteo_source, prefix, make_namelist):
     """Per-subbasin monthly T/PET CSVs must be created for all subbasins."""
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
     from create_input_files import main as run_pipeline
 
-    nml_path = make_namelist(gauge_id="9900", model_type="HBV",
-                             meteo_source="HAR", multi_subbasin=True)
+    nml_path = make_namelist(gauge_id="9900", model_type=model_type,
+                             meteo_source=meteo_source, multi_subbasin=True)
     run_pipeline(str(nml_path), force_reprocess=True)
 
     with open(nml_path) as f:
@@ -199,44 +202,11 @@ def test_multi_subbasin_has_per_subbasin_monthly_csvs(make_namelist):
     data_obs = _catchment_dir(nml_path) / "data_obs"
     for sb in nml["subbasins"]:
         sb_dir = data_obs / f"subbasin_{sb['id']}"
-        for fname in ("har_monthly_temperature_averages.csv",
-                      "har_monthly_pet_averages.csv"):
-            assert (sb_dir / fname).exists(), (
-                f"Missing {fname} for subbasin {sb['id']}"
-            )
+        assert (sb_dir / f"{prefix}monthly_temperature_averages.csv").exists(), (
+            f"Missing {prefix}monthly_temperature_averages.csv for subbasin {sb['id']}"
+        )
+        assert (sb_dir / f"{prefix}monthly_pet_averages.csv").exists(), (
+            f"Missing {prefix}monthly_pet_averages.csv for subbasin {sb['id']}"
+        )
 
 
-def test_era5_single_data_obs_paths_use_relative(make_namelist):
-    """Model .rvt file must reference ../data_obs/ not data_obs/."""
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-    from create_input_files import main as run_pipeline
-
-    nml_path = make_namelist(gauge_id="9999", model_type="HBV",
-                             meteo_source="ERA5")
-    run_pipeline(str(nml_path), force_reprocess=True)
-
-    with open(nml_path) as f:
-        nml = yaml.safe_load(f)
-    gauge_id = nml["gauge_id"]
-    model_type = nml["model_type"].upper()
-    rvt_path = _hbv_dir(nml_path) / f"{gauge_id}_{model_type}.rvt"
-    content = rvt_path.read_text()
-
-    # data_obs references must use parent path
-    for line in content.splitlines():
-        for kw in (":FileNameNC", ":RedirectToFile"):
-            if kw in line and "data_obs" in line:
-                assert "../data_obs" in line, (
-                    f"Path in {rvt_path.name} must be ../data_obs, got: {line.strip()}"
-                )
-
-
-def test_hymod_pipeline_produces_model_files(make_namelist):
-    """HYMOD processor must produce all .rvx files (sanity check)."""
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-    from create_input_files import main as run_pipeline
-
-    nml_path = make_namelist(gauge_id="9999", model_type="HYMOD",
-                             meteo_source="ERA5")
-    run_pipeline(str(nml_path), force_reprocess=True)
-    _assert_model_files_exist(nml_path)

@@ -56,7 +56,10 @@ class HYMODPreprocessor:
         
         with open(namelist_path, 'r') as f:
             namelist = yaml.safe_load(f)
-        
+
+        # Store full namelist config (for multi-subbasin support)
+        self.config = namelist
+
         # Store basic configuration
         self.gauge_id = str(namelist['gauge_id'])
         self.main_dir = Path(namelist['main_dir'])
@@ -67,7 +70,8 @@ class HYMODPreprocessor:
         self.cali_end_date = namelist['cali_end_date']
         self.coupled = namelist.get('coupled', False)
         self.author = namelist.get('author', 'Justine Berg')
-        
+        self.meteo_source = namelist.get('meteo_source', 'ERA5').upper()
+
         # ✅ ADD ONLY THIS - warm_up_date
         if 'warm_up_date' in namelist:
             self.warm_up_date = namelist['warm_up_date']
@@ -104,7 +108,8 @@ class HYMODPreprocessor:
         self.templates_dir = self.hymod_dir / 'templates'
         self.data_obs_dir = self.hymod_dir / 'data_obs'
         self.topo_files_dir = self.catchment_dir / 'topo_files'
-        
+        self.shared_data_dir = self.catchment_dir / 'data_obs'
+
         # Ensure directories exist
         self._create_directories()
         
@@ -333,32 +338,79 @@ class HYMODPreprocessor:
         lateral_connections = [
             "",
             "#:LateralConnections",
-            ":RedirectToFile  data_obs/connections.rvh",
+            ":RedirectToFile  ../data_obs/connections.rvh",
             "#:EndLateralConnections",
             ""
         ]
-        
+
         # Create HRU groups
         hru_groups = self._create_hru_groups(HRU)
-        
-        # Define subbasins
-        subbasins = [
-            ":SubBasins",
-            "  :Attributes,          NAME, DOWNSTREAM_ID,PROFILE,REACH_LENGTH,       GAUGED",
-            "  :Units     ,          none,          none,   none,          km,         none",
-            f"            1,        {self.gauge_id},            -1,   NONE,       _AUTO,     1",
-            ":EndSubBasins"
-        ]
 
-        # Define subbasin properties for HYMOD
-        subbasin_properties = [
-            ":SubBasinProperties",
-            "#                         HYMOD_PARA_1,                  3,",
-            "   :Parameters,           RES_CONSTANT,     NUM_RESERVOIRS,",
-            "   :Units,                         1/d,                  -,",
-            f"              1,          {self.params['HYMOD'][param_or_name]['X01']},                  3,",
-            ":EndSubBasinProperties"
-        ]
+        # Define subbasins (multi or single)
+        subbasins_config = self.config.get('subbasins', None)
+
+        if subbasins_config:
+            routing_path = self.topo_files_dir / 'subbasin_routing.yaml'
+            if not routing_path.exists():
+                raise FileNotFoundError(
+                    f"subbasin_routing.yaml not found at {routing_path}. "
+                    "Run MultiSubbasinProcessor.process_all_subbasins() first."
+                )
+            with open(routing_path) as _f:
+                routing = yaml.safe_load(_f)
+
+            sb_rows = []
+            for sb in subbasins_config:
+                sb_id = sb['id']
+                downstream = routing[sb_id]
+                reach = sb.get('reach_length', '_AUTO')
+                profile = sb.get('profile', 'NONE')
+                gauged = sb.get('gauged', 0)
+                sb_rows.append(
+                    f"  {sb_id:10d}, {sb['name']:20s}, {downstream:12d}, "
+                    f"{profile:>10s}, {str(reach):>12s}, {gauged:>6d}"
+                )
+
+            subbasins = [
+                ":SubBasins",
+                "  :Attributes,          NAME, DOWNSTREAM_ID,   PROFILE, REACH_LENGTH, GAUGED",
+                "  :Units     ,          none,          none,      none,           km,   none",
+                *sb_rows,
+                ":EndSubBasins",
+            ]
+
+            sp_rows = []
+            for sb in subbasins_config:
+                sp_rows.append(
+                    f"  {sb['id']:10d},  {self.params['HYMOD'][param_or_name]['X01']},                  3,"
+                )
+
+            subbasin_properties = [
+                ":SubBasinProperties",
+                "#                         HYMOD_PARA_1,                  3,",
+                "   :Parameters,           RES_CONSTANT,     NUM_RESERVOIRS,",
+                "   :Units,                         1/d,                  -,",
+                *sp_rows,
+                ":EndSubBasinProperties",
+            ]
+
+        else:
+            subbasins = [
+                ":SubBasins",
+                "  :Attributes,          NAME, DOWNSTREAM_ID,PROFILE,REACH_LENGTH,       GAUGED",
+                "  :Units     ,          none,          none,   none,          km,         none",
+                f"            1,        {self.gauge_id},            -1,   NONE,       _AUTO,     1",
+                ":EndSubBasins"
+            ]
+
+            subbasin_properties = [
+                ":SubBasinProperties",
+                "#                         HYMOD_PARA_1,                  3,",
+                "   :Parameters,           RES_CONSTANT,     NUM_RESERVOIRS,",
+                "   :Units,                         1/d,                  -,",
+                f"              1,          {self.params['HYMOD'][param_or_name]['X01']},                  3,",
+                ":EndSubBasinProperties"
+            ]
 
         # Write the file
         with open(file_path, 'w') as ff:
@@ -508,12 +560,14 @@ class HYMODPreprocessor:
         return hru_groups
 
     def create_rvt_file(self, template: bool = False):
-        """
-        Write Raven .rvt file for HYMOD model.
-        
-        Args:
-            template: Whether to create template file
-        """
+        """Write Raven .rvt file for HYMOD model."""
+        if self.config.get('subbasins'):
+            self._create_rvt_file_multi_subbasin(template)
+        else:
+            self._create_rvt_file_single(template)
+
+    def _create_rvt_file_single(self, template: bool = False):
+        """Write .rvt for a single-basin namelist."""
         file_path, param_or_name = self._get_file_path('rvt', template)
 
         print(f"Extracting gauge location from DEM for gauge {self.gauge_id}...")
@@ -523,13 +577,9 @@ class HYMODPreprocessor:
             print(f"Error: Could not extract gauge location from DEM: {e}")
             return
 
-        # Create gauge info
         gauge_info = self._create_gauge_info(gauge_lat, gauge_lon, station_elevation)
-        
-        # Create forcing data (no coupled parameter needed)
         forcing_data = self._create_forcing_block()
 
-        # Write the file
         with open(file_path, 'w') as ff:
             ff.writelines(f"{line}\n" for line in self._create_header("rvt"))
             ff.write("# meteorological forcings\n")
@@ -537,47 +587,105 @@ class HYMODPreprocessor:
                 for t in f:
                     ff.write(f"{t}\n")
             ff.writelines(gauge_info)
-            ff.write(f":RedirectToFile data_obs/Q_daily.rvt\n")
+            ff.write(f":RedirectToFile ../data_obs/Q_daily.rvt\n")
 
-    def _create_gauge_info(self, gauge_lat: float, gauge_lon: float, 
-                        station_elevation: float) -> List[str]:
+    def _create_rvt_file_multi_subbasin(self, template: bool = False):
+        """Write .rvt for a multi-subbasin namelist (one :Gauge block per subbasin)."""
+        file_path, param_or_name = self._get_file_path('rvt', template)
+        subbasins_config = self.config['subbasins']
+        forcing_data = self._create_forcing_block()
+
+        with open(file_path, 'w') as ff:
+            ff.writelines(f"{line}\n" for line in self._create_header("rvt"))
+            ff.write("# meteorological forcings\n")
+            for f in forcing_data.values():
+                for t in f:
+                    ff.write(f"{t}\n")
+
+            for sb in subbasins_config:
+                sb_id = sb['id']
+                sb_gid = str(sb['gauge_id'])
+                gauged = sb.get('gauged', 0)
+
+                sb_data_dir = self.shared_data_dir / f'subbasin_{sb_id}'
+                lat, lon, elev = self._get_subbasin_centroid_location(sb_gid)
+                print(f"  Subbasin {sb_id} ({sb_gid}): lat={lat}, lon={lon}, elev={elev}")
+
+                gauge_info = self._create_gauge_info(lat, lon, elev,
+                                                     gauge_id=sb_gid,
+                                                     subbasin_data_dir=sb_data_dir)
+                ff.writelines(gauge_info)
+
+                if gauged:
+                    ff.write(f":RedirectToFile ../data_obs/Q_daily_{sb_gid}.rvt\n\n")
+
+    def _create_gauge_info(self, gauge_lat: float, gauge_lon: float,
+                           station_elevation: float,
+                           gauge_id: str = None,
+                           subbasin_data_dir=None) -> List[str]:
         """Create gauge information section for RVT file."""
+        gid = gauge_id if gauge_id is not None else self.gauge_id
         gauge_info = [
-            f":Gauge {self.gauge_id}\n",
+            f":Gauge {gid}\n",
             f"  :Latitude    {gauge_lat}\n",
             f"  :Longitude {gauge_lon}\n",
             f"  :Elevation  {station_elevation}\n\n"
         ]
-        
+
         # Add monthly data if available
-        monthly_data = self._get_monthly_data()
+        monthly_data = self._get_monthly_data(subbasin_data_dir=subbasin_data_dir)
         if monthly_data:
             gauge_info.extend(monthly_data)
-        
-        gauge_info.extend([
-            f":EndGauge\n\n"
-        ])
-        
+
+        gauge_info.append(f":EndGauge\n\n")
+
         return gauge_info
 
-    def _get_monthly_data(self) -> List[str]:
+    def _get_monthly_data(self, subbasin_data_dir=None) -> List[str]:
         """Read and format monthly temperature and PET data if available."""
-        monthly_temp_file = self.data_obs_dir / 'monthly_temperature_averages.csv'
-        monthly_pet_file = self.data_obs_dir / 'monthly_pet_averages.csv'
-        
+        if self.meteo_source == 'HAR':
+            temp_filename = 'har_monthly_temperature_averages.csv'
+            pet_filename = 'har_monthly_pet_averages.csv'
+        else:
+            temp_filename = 'monthly_temperature_averages.csv'
+            pet_filename = 'monthly_pet_averages.csv'
+
+        if subbasin_data_dir is not None:
+            sb_temp = Path(subbasin_data_dir) / temp_filename
+            sb_pet = Path(subbasin_data_dir) / pet_filename
+            if sb_temp.exists() and sb_pet.exists():
+                monthly_temp_file, monthly_pet_file = sb_temp, sb_pet
+            else:
+                monthly_temp_file = self.data_obs_dir / temp_filename
+                monthly_pet_file = self.data_obs_dir / pet_filename
+        else:
+            monthly_temp_file = self.data_obs_dir / temp_filename
+            monthly_pet_file = self.data_obs_dir / pet_filename
+
+        if not monthly_temp_file.exists() or not monthly_pet_file.exists():
+            shared = self.catchment_dir / 'data_obs'
+            if not monthly_temp_file.exists():
+                s = shared / temp_filename
+                if s.exists():
+                    monthly_temp_file = s
+            if not monthly_pet_file.exists():
+                s = shared / pet_filename
+                if s.exists():
+                    monthly_pet_file = s
+
         if not (monthly_temp_file.exists() and monthly_pet_file.exists()):
             return []
-        
+
         try:
             temp_df = pd.read_csv(monthly_temp_file)
             pet_df = pd.read_csv(monthly_pet_file)
-            
+
             temp_values = temp_df['Temperature'].values
             temp_str = ", ".join([f"{val:.1f}" for val in temp_values])
-            
+
             pet_values = pet_df['PET_avg_mm_per_day'].values
             pet_str = ", ".join([f"{val:.3f}" for val in pet_values])
-            
+
             return [
                 "#                       Jan    Feb    Mar    Apr    May    Jun    Jul    Aug    Sep    Oct    Nov    Dec \n",
                 f"  :MonthlyAveEvaporation, {pet_str} \n",
@@ -588,32 +696,32 @@ class HYMODPreprocessor:
             return []
 
     def _create_forcing_block(self) -> Dict[str, List[str]]:
-        """Create forcing data configuration for RVT file - ERA5-Land version."""
-        grid_weights_file_path = "data_obs/GridWeights.txt"
-        
-        # ERA5-Land variable names (always the same, no coupled option)
-        var_names = {
-            'rainfall': 'tp',
-            'temp_ave': 't2m',
-            'temp_max': 't2m', 
-            'temp_min': 't2m'
-        }
-        dim_names = "longitude latitude time"
-
-        # ERA5-Land file names
-        forcing_types = [
-            ('Rainfall', 'RAINFALL', 'era5_land_precip.nc', var_names['rainfall']),
-            ('Average Temperature', 'TEMP_AVE', 'era5_land_temp_mean.nc', var_names['temp_ave']),
-            ('Maximum Temperature', 'TEMP_MAX', 'era5_land_temp_max.nc', var_names['temp_max']),
-            ('Minimum Temperature', 'TEMP_MIN', 'era5_land_temp_min.nc', var_names['temp_min'])
-        ]
+        """Create forcing data configuration for RVT file (ERA5-Land or HAR)."""
+        if self.meteo_source == 'HAR':
+            grid_weights_file_path = "../data_obs/GridWeights_HAR.txt"
+            dim_names = "west_east south_north time"
+            forcing_types = [
+                ('Rainfall',            'RAINFALL', 'har_precip.nc',    'prcp'),
+                ('Average Temperature', 'TEMP_AVE', 'har_temp_mean.nc', 't2_mean'),
+                ('Maximum Temperature', 'TEMP_MAX', 'har_temp_max.nc',  't2_max'),
+                ('Minimum Temperature', 'TEMP_MIN', 'har_temp_min.nc',  't2_min'),
+            ]
+        else:  # ERA5 (default)
+            grid_weights_file_path = "../data_obs/GridWeights.txt"
+            dim_names = "longitude latitude time"
+            forcing_types = [
+                ('Rainfall',            'RAINFALL', 'era5_land_precip.nc',    'tp'),
+                ('Average Temperature', 'TEMP_AVE', 'era5_land_temp_mean.nc', 't2m'),
+                ('Maximum Temperature', 'TEMP_MAX', 'era5_land_temp_max.nc',  't2m'),
+                ('Minimum Temperature', 'TEMP_MIN', 'era5_land_temp_min.nc',  't2m'),
+            ]
 
         forcing_data = {}
         for name, forcing_type, filename, var_name in forcing_types:
             forcing_data[name] = [
                 f":GriddedForcing           {name}",
                 f"    :ForcingType          {forcing_type}",
-                f"    :FileNameNC           data_obs/{filename}",
+                f"    :FileNameNC           ../data_obs/{filename}",
                 f"    :VarNameNC            {var_name}",
                 f"    :DimNamesNC           {dim_names}",
                 "    :ElevationVarNameNC   elevation",
@@ -621,16 +729,16 @@ class HYMODPreprocessor:
                 ":EndGriddedForcing",
                 ''
             ]
-        
-        # Add Irrigation forcing block
+
+        # Irrigation is always ERA5-based (independent of meteo_source)
         forcing_data['Irrigation'] = [
             ":GriddedForcing           Irrigation",
             "    :ForcingType          IRRIGATION",
-            "    :FileNameNC           data_obs/irrigation.nc",
+            "    :FileNameNC           ../data_obs/irrigation.nc",
             "    :VarNameNC            data",
             "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
             "    :ElevationVarNameNC   elevation",
-            "    :RedirectToFile       data_obs/GridWeights_Irrigation.txt",
+            "    :RedirectToFile       ../data_obs/GridWeights_Irrigation.txt",
             ":EndGriddedForcing",
             ''
         ]
@@ -870,10 +978,48 @@ class HYMODPreprocessor:
                 ff.writelines(line + '\n' for line in lines)
                 ff.write('\n')
 
+    def _get_subbasin_mean_elevation(self, sb_gauge_id: str):
+        """Return area-weighted mean elevation for a subbasin from the merged HRU table."""
+        try:
+            hru_table_path = self.topo_files_dir / 'HRU_table.csv'
+            if not hru_table_path.exists():
+                return None
+            hru_df = pd.read_csv(hru_table_path)
+            sb_match = [sb for sb in self.config.get('subbasins', [])
+                        if str(sb['gauge_id']) == str(sb_gauge_id)]
+            if not sb_match:
+                return None
+            sb_id = sb_match[0]['id']
+            sb_rows = hru_df[hru_df['BASIN_ID'] == sb_id]
+            if sb_rows.empty or 'ELEVATION' not in sb_rows.columns:
+                return None
+            if 'AREA' in sb_rows.columns:
+                total_area = sb_rows['AREA'].sum()
+                if total_area > 0:
+                    return round(float((sb_rows['ELEVATION'] * sb_rows['AREA']).sum() / total_area), 1)
+            return round(float(sb_rows['ELEVATION'].mean()), 1)
+        except Exception:
+            return None
+
+    def _get_subbasin_centroid_location(self, sb_gauge_id: str):
+        """Return (lat, lon, elevation) for a subbasin from its catchment shapefile centroid."""
+        shape_template = self.config.get('shape_dir', '')
+        shp_path = Path(self.config['main_dir']) / shape_template.format(gauge_id=sb_gauge_id)
+        if not shp_path.exists():
+            return None, None, None
+        try:
+            gdf = gpd.read_file(shp_path).to_crs('EPSG:4326')
+            centroid = gdf.geometry.unary_union.centroid
+            elev = self._get_subbasin_mean_elevation(sb_gauge_id)
+            return round(centroid.y, 4), round(centroid.x, 4), elev
+        except Exception as e:
+            print(f"  Could not compute centroid for subbasin {sb_gauge_id}: {e}")
+            return None, None, None
+
     def create_all_files(self, template: bool = False):
         """
         Create all Raven input files for HYMOD model using namelist configuration.
-        
+
         Args:
             template: Whether to create template files
         """
