@@ -331,6 +331,18 @@ def main(namelist_path: str, force_reprocess: bool = False):
             traceback.print_exc()
             return False
 
+    # Optional: CORDEX climate projection downscaling (future=True)
+    if nml.get('future', False) and nml.get('cordex_models'):
+        print("\n🌍 STEP 5c: Downscaling CORDEX climate projections (QDM)...")
+        try:
+            from preprocess_climate import process_cordex_climate
+            process_cordex_climate(namelist_path, force_reprocess=force_reprocess)
+            print("   ✅ CORDEX downscaling completed!")
+        except Exception as e:
+            print(f"   ❌ Error in CORDEX downscaling: {e}")
+            traceback.print_exc()
+            return False
+
     # Compute per-subbasin monthly T/PET averages (multi-subbasin only)
     if nml.get('subbasins'):
         print("   🌡️ Computing per-subbasin monthly T/PET averages...")

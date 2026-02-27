@@ -19,6 +19,16 @@ criteria:
 # Set to 0 to disable (all cells get directional aspect).
 aspect_slope_threshold: 15.0
 future: false
+# Set future: true and provide cordex_* keys to enable CORDEX downscaling.
+# cordex_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/CORDEX'
+# cordex_models:
+#   - SMHI-RCA_MPIESM
+# cordex_scenarios:
+#   - historical
+#   - rcp45
+#   - rcp85
+# cordex_train_start: '1980-01-01'   # default: 1980-01-01
+# cordex_train_end:   '2005-12-31'   # default: 2005-12-31
 debug: true
 meteo_source: 'HAR'
 landuse_source: 'ICIMOD'   # options: 'ESA', 'ICIMOD', or 'auto' (detect based on unique values)

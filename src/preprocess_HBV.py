@@ -854,6 +854,30 @@ class HBVProcessor:
         precip_weights_file = grid_weights_file
         precip_dim_names = dim_names
 
+        # Override all forcing files when running CORDEX climate projections.
+        # CORDEX downscaled files use identical variable names and grid to
+        # ERA5-Land, so only the filenames need to change.
+        if self.config.get('future', False) and self.config.get('cordex_models'):
+            models    = self.config['cordex_models']
+            scenarios = self.config.get('cordex_scenarios', ['rcp45'])
+            model_id  = models[0].replace('/', '_').replace(' ', '_')
+            scenario  = scenarios[0]   # first scenario used for .rvt generation
+
+            precip_file    = f'cordex_{model_id}_{scenario}_precip.nc'
+            temp_mean_file = f'cordex_{model_id}_{scenario}_temp_mean.nc'
+            temp_max_file  = f'cordex_{model_id}_{scenario}_temp_max.nc'
+            temp_min_file  = f'cordex_{model_id}_{scenario}_temp_min.nc'
+            # CORDEX downscaled files are on the ERA5-Land grid
+            precip_var    = 'tp'
+            temp_var      = 't2m'
+            temp_max_var  = 't2m'
+            temp_min_var  = 't2m'
+            grid_weights_file = '../data_obs/GridWeights.txt'
+            precip_weights_file = grid_weights_file
+            dim_names       = "longitude latitude time"
+            precip_dim_names = dim_names
+            print(f"📊 Using CORDEX downscaled forcing: {model_id} / {scenario}")
+
         # ✅ Override precipitation source if TPHiPr is requested
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_file = 'tphipr_precip.nc'

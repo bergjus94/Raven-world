@@ -712,6 +712,30 @@ class HMETSPreprocessor:
         precip_weights_file = grid_weights_file_path
         precip_dim_names = dim_names
 
+        # Override all forcing files when running CORDEX climate projections.
+        if self.config.get('future', False) and self.config.get('cordex_models'):
+            models    = self.config['cordex_models']
+            scenarios = self.config.get('cordex_scenarios', ['rcp45'])
+            model_id  = models[0].replace('/', '_').replace(' ', '_')
+            scenario  = scenarios[0]
+            precip_tuple = (
+                'Rainfall', 'RAINFALL',
+                f'cordex_{model_id}_{scenario}_precip.nc', 'tp',
+            )
+            other_types = [
+                ('Average Temperature', 'TEMP_AVE',
+                 f'cordex_{model_id}_{scenario}_temp_mean.nc', 't2m'),
+                ('Maximum Temperature', 'TEMP_MAX',
+                 f'cordex_{model_id}_{scenario}_temp_max.nc',  't2m'),
+                ('Minimum Temperature', 'TEMP_MIN',
+                 f'cordex_{model_id}_{scenario}_temp_min.nc',  't2m'),
+                ('PET', 'PET', 'era5_land_pet.nc', 'pev'),  # PET stays ERA5
+            ]
+            grid_weights_file_path = "../data_obs/GridWeights.txt"
+            precip_weights_file    = grid_weights_file_path
+            dim_names        = "longitude latitude time"
+            precip_dim_names = dim_names
+
         # ✅ Override precipitation source if TPHiPr is requested
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_tuple = ('Rainfall', 'RAINFALL', 'tphipr_precip.nc', 'prcp')
