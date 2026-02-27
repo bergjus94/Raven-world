@@ -266,8 +266,12 @@ def _save_clipped(ds: xr.Dataset, out_path: Path,
     """Write a clipped dataset to NetCDF with compression."""
     encoding = {}
     for var in ds.data_vars:
-        encoding[var] = {"zlib": True, "complevel": compress_level,
-                         "dtype": "float32"}
+        # Only compress/cast numeric variables; skip string/character types
+        # (e.g. 'rotated_pole', which stores grid metadata as attributes).
+        dtype = getattr(ds[var].dtype, "kind", None)
+        if dtype in ("f", "i", "u"):   # float, int, unsigned int
+            encoding[var] = {"zlib": True, "complevel": compress_level,
+                             "dtype": "float32"}
     for coord in ds.coords:
         encoding[coord] = {"_FillValue": None}
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -375,17 +379,22 @@ def download_variable(model_id: str, experiment: str,
 
         print(f"   🗂️  {len(nc_files)} chunk(s) extracted; clipping to bbox…")
         try:
+            # Open and concatenate all chunks; keep sources open until after write
+            # so that lazy-loaded data can still be accessed by to_netcdf().
             datasets = [xr.open_dataset(p) for p in nc_files]
             merged   = xr.concat(datasets, dim="time").sortby("time")
-            for ds in datasets:
-                ds.close()
             ds_clipped = clip_to_bbox(merged, **bbox)
             _save_clipped(ds_clipped, out_path)
-            merged.close()
         except Exception as e:
             print(f"   ❌ Clip/merge failed: {e}")
             traceback.print_exc()
             return False
+        finally:
+            for ds in datasets:
+                try:
+                    ds.close()
+                except Exception:
+                    pass
 
     size_mb = out_path.stat().st_size / 1e6
     print(f"   ✅ Saved: {out_path}  ({size_mb:.1f} MB)")
