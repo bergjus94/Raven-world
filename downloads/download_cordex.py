@@ -295,11 +295,15 @@ def _cds_client():
 def download_variable(model_id: str, experiment: str,
                       variable: str, out_dir: Path,
                       bbox: dict,
-                      force: bool = False) -> bool:
+                      force: bool = False,
+                      historical_start: int = 1980) -> bool:
     """
     Download, clip and save one variable for one model / experiment via CDS.
 
     Output file: {out_dir}/{model_id}/{experiment}/{variable}.nc
+
+    historical_start : only keep data on or after this year for the
+        historical experiment (avoids downloading decades of unused data).
 
     Returns True on success, False on failure.
     """
@@ -319,17 +323,24 @@ def download_variable(model_id: str, experiment: str,
     # Valid CDS year chunks (boundaries confirmed from dataset constraints).
     # Historical: 1951-1955, 1956-1960, …, 2001-2005
     # RCP:        2006-2010, 2011-2015, …, 2096-2100
-    exp_chunk_starts = {
+    all_chunk_starts = {
         "historical": list(range(1951, 2006, 5)),   # 1951, 1956, …, 2001
         "rcp26":      list(range(2006, 2101, 5)),   # 2006, 2011, …, 2096
         "rcp45":      list(range(2006, 2101, 5)),
         "rcp85":      list(range(2006, 2101, 5)),
     }
-    if experiment not in exp_chunk_starts:
+    if experiment not in all_chunk_starts:
         print(f"   ❌ Unknown experiment '{experiment}'")
         return False
 
-    chunk_starts = exp_chunk_starts[experiment]
+    chunk_starts = all_chunk_starts[experiment]
+
+    # For historical, skip chunks that end before historical_start so we
+    # don't download decades of data that the bias-correction never uses.
+    # (Each chunk spans 5 years: chunk_start … chunk_start+4.)
+    if experiment == "historical" and historical_start is not None:
+        chunk_starts = [s for s in chunk_starts if s + 4 >= historical_start]
+
     start_years  = [str(y) for y in chunk_starts]
     end_years    = [str(y + 4) for y in chunk_starts]
 
@@ -387,6 +398,11 @@ def download_variable(model_id: str, experiment: str,
                 clipped_chunks.append(clip_to_bbox(ds, **bbox).load())
                 ds.close()
             merged = xr.concat(clipped_chunks, dim="time").sortby("time")
+
+            # Trim time axis so the file starts exactly at historical_start.
+            if experiment == "historical" and historical_start is not None:
+                merged = merged.sel(time=slice(f"{historical_start}-01-01", None))
+
             _save_clipped(merged, out_path)
         except Exception as e:
             print(f"   ❌ Clip/merge failed: {e}")
@@ -514,7 +530,8 @@ def verify_availability(model_id: str,
 def download_model(model_id: str, experiments: list[str],
                    variables: list[str], out_dir: Path,
                    bbox: dict, force: bool = False,
-                   include_orog: bool = True) -> dict:
+                   include_orog: bool = True,
+                   historical_start: int = 1980) -> dict:
     """
     Download all requested variables and experiments for one model via CDS.
 
@@ -550,7 +567,8 @@ def download_model(model_id: str, experiments: list[str],
             print(f"  {model_id}  |  {exp}  |  {var}")
             print(f"{'='*60}")
             results[key] = download_variable(
-                model_id, exp, var, out_dir, bbox, force=force
+                model_id, exp, var, out_dir, bbox,
+                force=force, historical_start=historical_start,
             )
 
     return results
@@ -625,6 +643,15 @@ def main():
         "--list-models", action="store_true",
         help="Print available model IDs and exit",
     )
+    parser.add_argument(
+        "--historical-start", type=int, default=1980,
+        metavar="YEAR",
+        help=(
+            "First year to keep from the historical experiment. "
+            "Chunks that end before this year are skipped, and the "
+            "time axis is trimmed to YEAR-01-01. Default: 1980"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -643,11 +670,12 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  CORDEX WAS-44 downloader  (source: Copernicus CDS)")
-    print(f"  Models      : {args.models}")
-    print(f"  Experiments : {args.experiments}")
-    print(f"  Variables   : {args.variables}")
-    print(f"  Bbox        : {bbox}")
-    print(f"  Output dir  : {args.output_dir}")
+    print(f"  Models        : {args.models}")
+    print(f"  Experiments   : {args.experiments}")
+    print(f"  Variables     : {args.variables}")
+    print(f"  Bbox          : {bbox}")
+    print(f"  Output dir    : {args.output_dir}")
+    print(f"  Hist. start   : {args.historical_start}")
     print(f"{'='*60}\n")
 
     if args.verify_only:
@@ -668,13 +696,14 @@ def main():
             print(f"   Run with --list-models to see available options.")
             continue
         results = download_model(
-            model_id     = model_id,
-            experiments  = args.experiments,
-            variables    = args.variables,
-            out_dir      = args.output_dir,
-            bbox         = bbox,
-            force        = args.force,
-            include_orog = not args.no_orog,
+            model_id         = model_id,
+            experiments      = args.experiments,
+            variables        = args.variables,
+            out_dir          = args.output_dir,
+            bbox             = bbox,
+            force            = args.force,
+            include_orog     = not args.no_orog,
+            historical_start = args.historical_start,
         )
         all_results[model_id] = results
 
