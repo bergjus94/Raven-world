@@ -312,19 +312,22 @@ def download_variable(model_id: str, experiment: str,
         print(f"   ❌ No CDS variable name for '{variable}'")
         return False
 
-    exp_ranges = {
-        "historical": (1950, 2005),
-        "rcp26":      (2006, 2100),
-        "rcp45":      (2006, 2100),
-        "rcp85":      (2006, 2100),
+    # Valid CDS year chunks (boundaries confirmed from dataset constraints).
+    # Historical: 1951-1955, 1956-1960, …, 2001-2005
+    # RCP:        2006-2010, 2011-2015, …, 2096-2100
+    exp_chunk_starts = {
+        "historical": list(range(1951, 2006, 5)),   # 1951, 1956, …, 2001
+        "rcp26":      list(range(2006, 2101, 5)),   # 2006, 2011, …, 2096
+        "rcp45":      list(range(2006, 2101, 5)),
+        "rcp85":      list(range(2006, 2101, 5)),
     }
-    if experiment not in exp_ranges:
+    if experiment not in exp_chunk_starts:
         print(f"   ❌ Unknown experiment '{experiment}'")
         return False
 
-    exp_start, exp_end = exp_ranges[experiment]
-    start_years = [str(y) for y in range(exp_start, exp_end + 1, 5)]
-    end_years   = [str(min(y + 4, exp_end)) for y in range(exp_start, exp_end + 1, 5)]
+    chunk_starts = exp_chunk_starts[experiment]
+    start_years  = [str(y) for y in chunk_starts]
+    end_years    = [str(y + 4) for y in chunk_starts]
 
     with tempfile.TemporaryDirectory(prefix="cordex_cds_") as tmp_str:
         tmp_dir  = Path(tmp_str)
@@ -338,7 +341,6 @@ def download_variable(model_id: str, experiment: str,
                 "projections-cordex-domains-single-levels",
                 {
                     "download_format":       "zip",
-                    "data_format":           "netcdf_legacy",
                     "domain":                "south_asia",
                     "experiment":            _EXP_TO_CDS[experiment],
                     "horizontal_resolution": "0_44_degree_x_0_44_degree",
@@ -416,7 +418,6 @@ def download_orography(model_id: str, out_dir: Path,
                 "projections-cordex-domains-single-levels",
                 {
                     "download_format":       "zip",
-                    "data_format":           "netcdf_legacy",
                     "domain":                "south_asia",
                     "experiment":            "historical",   # orog is the same for all
                     "horizontal_resolution": "0_44_degree_x_0_44_degree",
@@ -424,7 +425,7 @@ def download_orography(model_id: str, out_dir: Path,
                     "variable":              "orography",
                     "gcm_model":             info["cds_gcm"],
                     "rcm_model":             info["cds_rcm"],
-                    "ensemble_member":       info["cds_ensemble"],
+                    "ensemble_member":       "r0i0p0",       # fixed vars always use r0i0p0
                 },
                 str(zip_path),
             )
