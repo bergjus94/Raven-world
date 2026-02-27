@@ -379,22 +379,19 @@ def download_variable(model_id: str, experiment: str,
 
         print(f"   🗂️  {len(nc_files)} chunk(s) extracted; clipping to bbox…")
         try:
-            # Open and concatenate all chunks; keep sources open until after write
-            # so that lazy-loaded data can still be accessed by to_netcdf().
-            datasets = [xr.open_dataset(p) for p in nc_files]
-            merged   = xr.concat(datasets, dim="time").sortby("time")
-            ds_clipped = clip_to_bbox(merged, **bbox)
-            _save_clipped(ds_clipped, out_path)
+            # Clip each 5-year chunk to bbox BEFORE concatenating to avoid
+            # loading the full WAS-44 domain (~550 MB) into memory at once.
+            clipped_chunks = []
+            for p in nc_files:
+                ds = xr.open_dataset(p)
+                clipped_chunks.append(clip_to_bbox(ds, **bbox).load())
+                ds.close()
+            merged = xr.concat(clipped_chunks, dim="time").sortby("time")
+            _save_clipped(merged, out_path)
         except Exception as e:
             print(f"   ❌ Clip/merge failed: {e}")
             traceback.print_exc()
             return False
-        finally:
-            for ds in datasets:
-                try:
-                    ds.close()
-                except Exception:
-                    pass
 
     size_mb = out_path.stat().st_size / 1e6
     print(f"   ✅ Saved: {out_path}  ({size_mb:.1f} MB)")
