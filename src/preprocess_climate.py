@@ -62,14 +62,32 @@ except ImportError:
 try:
     # xsdba is the standalone package split from xclim >= 0.60
     from xsdba import QuantileDeltaMapping
+    from xsdba.processing import jitter_under_thresh as _jitter_under_thresh
     _XCLIM_AVAILABLE = True
 except ImportError:
     try:
         from xclim.sdba import QuantileDeltaMapping
+        from xclim.sdba.processing import jitter_under_thresh as _jitter_under_thresh
         _XCLIM_AVAILABLE = True
     except ImportError:
         QuantileDeltaMapping = None
+        _jitter_under_thresh = None
         _XCLIM_AVAILABLE = False
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as _plt
+    import matplotlib.gridspec as _gridspec
+    _MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    _plt = None
+    _gridspec = None
+    _MATPLOTLIB_AVAILABLE = False
+
+# Precipitation jitter threshold: values below this are perturbed to avoid
+# multiplicative QDM division-by-zero when CORDEX has many dry days.
+_PRECIP_JITTER_THRESH = "0.1 mm d-1"
 
 
 # ===========================================================================
@@ -276,6 +294,25 @@ class CORDEXDownscaler:
                 )
                 return None
 
+        # The elevation file may cover a larger domain or use a different grid
+        # than the catchment-clipped ERA5 files. Interpolate it to the target
+        # ERA5 grid so that coordinate alignment works correctly.
+        tgt = self._get_era5_target_grid()
+        lat_dim = "latitude" if "latitude" in da.dims else "lat"
+        lon_dim = "longitude" if "longitude" in da.dims else "lon"
+        da = da.interp(
+            {lat_dim: tgt["lat"].values, lon_dim: tgt["lon"].values},
+            method="linear",
+        )
+        # Rename to standard (latitude, longitude) after interp
+        rename = {}
+        if "lat" in da.dims and "lat" != "latitude":
+            rename["lat"] = "latitude"
+        if "lon" in da.dims and "lon" != "longitude":
+            rename["lon"] = "longitude"
+        if rename:
+            da = da.rename(rename)
+
         self._era5_elev = da
         return da
 
@@ -324,7 +361,10 @@ class CORDEXDownscaler:
         # CORDEX clipped files store geographic lat/lon as 2-D auxiliary
         # coordinates; xesmf picks them up automatically when they are
         # present as data variables named 'lat' and 'lon'.
-        one_step = da_sample.isel(time=0).drop_vars("time", errors="ignore")
+        if "time" in da_sample.dims:
+            one_step = da_sample.isel(time=0).drop_vars("time", errors="ignore")
+        else:
+            one_step = da_sample
         src_ds = one_step.to_dataset(name="_v")
         if "lat" not in src_ds and "lat" in one_step.coords:
             src_ds["lat"] = one_step.coords["lat"]
@@ -384,10 +424,9 @@ class CORDEXDownscaler:
             if units in ("kg m-2 s-1", "kg m**-2 s**-1", "kgm-2s-1",
                          "kg/m2/s", "kg/(m2*s)"):
                 da = da * 86400.0
-                da.attrs["units"] = "mm/day"
                 da = da.clip(min=0)
-            elif units in ("mm/day", "mm day-1", "mm d-1"):
-                da.attrs["units"] = "mm/day"
+            # Normalise all precip unit strings to 'mm d-1' (CF-recognised rate unit)
+            da.attrs["units"] = "mm d-1"
 
         return da
 
@@ -463,14 +502,14 @@ class CORDEXDownscaler:
                 end.strftime("%Y-%m-%d")   if end   else None,
             ))
 
-        # CF attributes for xclim
+        # CF attributes for xclim — always override to ensure consistent units
         if variable_type == "precip":
-            da.attrs.setdefault("units", "mm/day")
-            da.attrs.setdefault("cell_methods", "time: sum within days")
+            da.attrs["units"]        = "mm d-1"   # ERA5 file stores 'mm'; normalise to rate
+            da.attrs["cell_methods"] = "time: sum within days"
             da.attrs["standard_name"] = "precipitation_flux"
         else:
-            da.attrs.setdefault("units", "degC")
-            da.attrs.setdefault("cell_methods", "time: mean within days")
+            da.attrs["units"]        = "degC"
+            da.attrs["cell_methods"] = "time: mean within days"
             da.attrs["standard_name"] = "air_temperature"
 
         da.name = era5_var
@@ -503,6 +542,14 @@ class CORDEXDownscaler:
         ds = xr.open_dataset(nc_path, chunks={"time": _TIME_CHUNK})
         da = ds[cordex_var]
 
+        # Normalise CORDEX timestamps to midnight (CORDEX often stores noon T12:00:00,
+        # ERA5-Land uses midnight T00:00:00 — they must match for xsdba alignment)
+        try:
+            midnight_times = da.indexes["time"].normalize()
+            da = da.assign_coords(time=midnight_times)
+        except AttributeError:
+            pass  # cftime index — handle below if needed
+
         if start or end:
             da = da.sel(time=slice(
                 start.strftime("%Y-%m-%d") if start else None,
@@ -520,11 +567,11 @@ class CORDEXDownscaler:
         if variable_type != "precip":
             da = self._lapse_rate_correct(da)
 
-        # CF attributes for xclim
+        # CF attributes for xclim — always override to ensure consistent units
         era5_var = _ERA5_OUTPUT_VAR[variable_type]
         da.name  = era5_var
         if variable_type == "precip":
-            da.attrs["units"]        = "mm/day"
+            da.attrs["units"]        = "mm d-1"
             da.attrs["cell_methods"] = "time: sum within days"
             da.attrs["standard_name"] = "precipitation_flux"
         else:
@@ -548,6 +595,9 @@ class CORDEXDownscaler:
             f"  Training QDM (kind='{kind}', nq={_QDM_NQUANTILES}, "
             f"group=time.month, period={self.train_start.year}–{self.train_end.year})"
         )
+        # xsdba requires a single chunk along the adjustment dimension (time)
+        ref  = ref.chunk({"time": -1})
+        hist = hist.chunk({"time": -1})
         qdm = QuantileDeltaMapping.train(
             ref        = ref,
             hist       = hist,
@@ -612,6 +662,266 @@ class CORDEXDownscaler:
         ds.to_netcdf(out_path, encoding=encoding)
         size_mb = out_path.stat().st_size / 1e6
         self.logger.info(f"  ✅ Saved: {out_path.name}  ({size_mb:.1f} MB)")
+
+    # ── Diagnostic plots ──────────────────────────────────────────────────────
+
+    def _save_diagnostic_plots(
+        self,
+        variable_type: str,
+        scenario: str,
+        era5_train: xr.DataArray,
+        cordex_raw_train: xr.DataArray,
+        corrected_full: xr.DataArray,
+    ) -> Optional[Path]:
+        """
+        Save a multi-panel diagnostic figure for one variable / scenario.
+
+        Layout (3 rows × 3 cols, 16 × 12 in)
+        ─────────────────────────────────────
+        Row 0  Monthly climatology [cols 0-1] │ QQ plot            [col 2]
+        Row 1  Daily time series 2-yr zoom    │ Wet-day / bias     [col 2]
+               [cols 0-1]                     │
+        Row 2  Spatial mean maps: ERA5 | CORDEX raw | corrected
+               [col 0]            [col 1]     │ [col 2]
+
+        Parameters
+        ----------
+        era5_train, cordex_raw_train
+            Training-period DataArrays (pre-jitter), dims (time, latitude, longitude).
+        corrected_full
+            Full-period QDM-corrected DataArray — sliced to training period internally
+            for the climatology / QQ / spatial panels.
+        """
+        if not _MATPLOTLIB_AVAILABLE:
+            self.logger.warning(
+                "matplotlib not available — diagnostic plots skipped."
+            )
+            return None
+
+        self.logger.info(
+            f"  Generating diagnostic plots ({variable_type} / {scenario})…"
+        )
+
+        model_safe = self.model_id.replace("/", "_").replace(" ", "_")
+        plot_dir   = self.shared_data_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_path  = plot_dir / f"cordex_{model_safe}_{scenario}_{variable_type}.png"
+
+        unit_label = "mm/day" if variable_type == "precip" else "°C"
+        var_title  = {
+            "temp_mean": "Mean Temperature",
+            "temp_min":  "Min Temperature",
+            "temp_max":  "Max Temperature",
+            "precip":    "Precipitation",
+        }[variable_type]
+
+        # ── Compute spatial means (lazy → numpy) ─────────────────────────────
+        sp_dims = [d for d in ("latitude", "longitude") if d in era5_train.dims]
+        era5_sm = era5_train.mean(dim=sp_dims).compute()
+        raw_sm  = cordex_raw_train.mean(dim=sp_dims).compute()
+
+        # Slice corrected to training period
+        t0 = pd.Timestamp(era5_train.time.values[0]).strftime("%Y-%m-%d")
+        t1 = pd.Timestamp(era5_train.time.values[-1]).strftime("%Y-%m-%d")
+        try:
+            corr_sm = (
+                corrected_full
+                .sel(time=slice(t0, t1))
+                .mean(dim=sp_dims)
+                .compute()
+            )
+        except Exception:
+            corr_sm = corrected_full.mean(dim=sp_dims).compute()
+
+        # ── Spatial time-mean maps ────────────────────────────────────────────
+        era5_map = era5_train.mean(dim="time").compute()
+        raw_map  = cordex_raw_train.mean(dim="time").compute()
+        try:
+            corr_map = (
+                corrected_full
+                .sel(time=slice(t0, t1))
+                .mean(dim="time")
+                .compute()
+            )
+        except Exception:
+            corr_map = corrected_full.mean(dim="time").compute()
+
+        lat = era5_train.latitude.values
+        lon = era5_train.longitude.values
+
+        # ── Monthly climatology ───────────────────────────────────────────────
+        month_labels = ["J","F","M","A","M","J","J","A","S","O","N","D"]
+        months     = np.arange(1, 13)
+        era5_clim  = era5_sm.groupby("time.month").mean().values
+        raw_clim   = raw_sm.groupby("time.month").mean().values
+        corr_clim  = corr_sm.groupby("time.month").mean().values
+
+        # ── QQ plot (daily spatial-mean values) ───────────────────────────────
+        era5_sorted = np.sort(era5_sm.values.ravel())
+        raw_sorted  = np.sort(raw_sm.values.ravel())
+        corr_sorted = np.sort(corr_sm.values.ravel())
+        n = min(len(era5_sorted), len(raw_sorted), len(corr_sorted))
+        step = max(1, n // 2000)   # subsample for plot clarity
+        era5_qq = era5_sorted[:n:step]
+        raw_qq  = raw_sorted[:n:step]
+        corr_qq = corr_sorted[:n:step]
+
+        # ── Daily time series (first 2 years) ────────────────────────────────
+        ts_end = (
+            pd.Timestamp(era5_sm.time.values[0]) + pd.DateOffset(years=2)
+        ).strftime("%Y-%m-%d")
+        era5_ts = era5_sm.sel(time=slice(None, ts_end))
+        raw_ts  = raw_sm.sel(time=slice(None, ts_end))
+        corr_ts = corr_sm.sel(time=slice(None, ts_end))
+
+        def _to_datetime_index(da):
+            try:
+                return pd.DatetimeIndex(da.time.values)
+            except Exception:
+                return np.arange(len(da.time))
+
+        t_era5 = _to_datetime_index(era5_ts)
+        t_raw  = _to_datetime_index(raw_ts)
+        t_corr = _to_datetime_index(corr_ts)
+
+        # ── Wet-day fraction (precip) or monthly bias (temperature) ──────────
+        if variable_type == "precip":
+            thresh = 1.0
+            def _wet_frac(da):
+                return (da > thresh).astype(float).groupby("time.month").mean().values
+            era5_wet = _wet_frac(era5_sm)
+            raw_wet  = _wet_frac(raw_sm)
+            corr_wet = _wet_frac(corr_sm)
+        else:
+            raw_bias  = raw_clim  - era5_clim
+            corr_bias = corr_clim - era5_clim
+
+        # ── Build figure ──────────────────────────────────────────────────────
+        fig = _plt.figure(figsize=(16, 12))
+        gs  = _gridspec.GridSpec(3, 3, figure=fig, hspace=0.42, wspace=0.35)
+
+        ax_monthly = fig.add_subplot(gs[0, :2])
+        ax_qq      = fig.add_subplot(gs[0, 2])
+        ax_ts      = fig.add_subplot(gs[1, :2])
+        ax_extra   = fig.add_subplot(gs[1, 2])
+        ax_m1      = fig.add_subplot(gs[2, 0])
+        ax_m2      = fig.add_subplot(gs[2, 1])
+        ax_m3      = fig.add_subplot(gs[2, 2])
+
+        fig.suptitle(
+            f"CORDEX QDM — {var_title}  |  {model_safe}  |  {scenario}"
+            f"  |  catchment {self.gauge_id}",
+            fontsize=12, y=1.005,
+        )
+
+        col_era5 = "black"
+        col_raw  = "tab:red"
+        col_corr = "tab:blue"
+
+        # Panel A — monthly climatology
+        ax_monthly.plot(months, era5_clim, "o-",  color=col_era5, lw=2,   ms=5,
+                        label="ERA5-Land")
+        ax_monthly.plot(months, raw_clim,  "^--", color=col_raw,  lw=1.5, ms=5,
+                        label="CORDEX raw")
+        ax_monthly.plot(months, corr_clim, "s-",  color=col_corr, lw=1.5, ms=5,
+                        label="CORDEX corrected")
+        ax_monthly.set_xticks(months)
+        ax_monthly.set_xticklabels(month_labels)
+        ax_monthly.set_ylabel(unit_label)
+        ax_monthly.set_title("Monthly climatology (training period)")
+        ax_monthly.legend(fontsize=9)
+        ax_monthly.grid(True, alpha=0.3)
+
+        # Panel B — QQ plot
+        ax_qq.scatter(era5_qq, raw_qq,  s=5, c=col_raw,  alpha=0.5,
+                      label="CORDEX raw", rasterized=True)
+        ax_qq.scatter(era5_qq, corr_qq, s=5, c=col_corr, alpha=0.5,
+                      label="CORDEX corrected", rasterized=True)
+        _diag = [min(era5_qq.min(), raw_qq.min(), corr_qq.min()),
+                 max(era5_qq.max(), raw_qq.max(), corr_qq.max())]
+        ax_qq.plot(_diag, _diag, "k--", lw=1, label="1:1")
+        ax_qq.set_xlabel(f"ERA5-Land  ({unit_label})")
+        ax_qq.set_ylabel(f"CORDEX  ({unit_label})")
+        ax_qq.set_title("QQ plot (spatial mean, training)")
+        ax_qq.legend(fontsize=8)
+        ax_qq.grid(True, alpha=0.3)
+
+        # Panel C — daily time series
+        ax_ts.plot(t_era5, era5_ts.values, color=col_era5, lw=1.2,
+                   label="ERA5-Land", alpha=0.85)
+        ax_ts.plot(t_raw,  raw_ts.values,  color=col_raw,  lw=0.8,
+                   label="CORDEX raw", alpha=0.6)
+        ax_ts.plot(t_corr, corr_ts.values, color=col_corr, lw=0.9,
+                   label="CORDEX corrected", alpha=0.75)
+        ax_ts.set_ylabel(unit_label)
+        ax_ts.set_title("Daily spatial-mean time series (first 2 yr of training)")
+        ax_ts.legend(fontsize=9)
+        ax_ts.grid(True, alpha=0.3)
+
+        # Panel D — wet-day fraction or monthly bias
+        x = np.arange(12)
+        if variable_type == "precip":
+            w = 0.25
+            ax_extra.bar(x - w, era5_wet, w, color=col_era5, alpha=0.75, label="ERA5")
+            ax_extra.bar(x,     raw_wet,  w, color=col_raw,  alpha=0.75, label="CORDEX raw")
+            ax_extra.bar(x + w, corr_wet, w, color=col_corr, alpha=0.75, label="Corrected")
+            ax_extra.set_xticks(x)
+            ax_extra.set_xticklabels(month_labels, fontsize=8)
+            ax_extra.set_ylabel("Wet-day fraction  (> 1 mm/d)")
+            ax_extra.set_title("Wet-day statistics")
+            ax_extra.legend(fontsize=8)
+            ax_extra.grid(True, axis="y", alpha=0.3)
+        else:
+            w = 0.35
+            ax_extra.bar(x - w/2, raw_bias,  w, color=col_raw,  alpha=0.8,
+                         label="CORDEX raw bias")
+            ax_extra.bar(x + w/2, corr_bias, w, color=col_corr, alpha=0.8,
+                         label="Corrected bias")
+            ax_extra.axhline(0, color="k", lw=1)
+            ax_extra.set_xticks(x)
+            ax_extra.set_xticklabels(month_labels, fontsize=8)
+            ax_extra.set_ylabel(f"Bias vs ERA5  ({unit_label})")
+            ax_extra.set_title("Monthly bias")
+            ax_extra.legend(fontsize=8)
+            ax_extra.grid(True, axis="y", alpha=0.3)
+
+        # Panels E-G — spatial mean maps
+        cmap = "YlOrRd" if variable_type == "precip" else "RdBu_r"
+        all_vals = np.concatenate([
+            era5_map.values.ravel(),
+            raw_map.values.ravel(),
+            corr_map.values.ravel(),
+        ])
+        all_vals = all_vals[np.isfinite(all_vals)]
+        vmin, vmax = (
+            (np.percentile(all_vals, 2), np.percentile(all_vals, 98))
+            if len(all_vals) > 0 else (0, 1)
+        )
+
+        def _map_panel(ax, data_da, title):
+            _lat = data_da.latitude.values if "latitude" in data_da.coords else lat
+            _lon = data_da.longitude.values if "longitude" in data_da.coords else lon
+            im = ax.pcolormesh(
+                _lon, _lat, data_da.values,
+                cmap=cmap, vmin=vmin, vmax=vmax, shading="auto",
+            )
+            ax.set_title(title, fontsize=9)
+            ax.set_xlabel("Lon", fontsize=8)
+            ax.set_ylabel("Lat", fontsize=8)
+            ax.tick_params(labelsize=7)
+            return im
+
+        _map_panel(ax_m1, era5_map,  f"ERA5 mean ({unit_label})")
+        _map_panel(ax_m2, raw_map,   f"CORDEX raw mean ({unit_label})")
+        im3 = _map_panel(ax_m3, corr_map, f"Corrected mean ({unit_label})")
+        _plt.colorbar(im3, ax=[ax_m1, ax_m2, ax_m3], shrink=0.65,
+                      label=unit_label, pad=0.02)
+
+        # ── Save ──────────────────────────────────────────────────────────────
+        fig.savefig(plot_path, dpi=120, bbox_inches="tight")
+        _plt.close(fig)
+        self.logger.info(f"  📊 Diagnostic plot saved: {plot_path}")
+        return plot_path
 
     # ── High-level entry points ───────────────────────────────────────────────
 
@@ -681,20 +991,46 @@ class CORDEXDownscaler:
         )
 
         # 4: Train QDM
+        # Save pre-jitter copies for diagnostic plots (jitter modifies the arrays).
+        era5_train_orig  = era5_train
+        cordex_train_orig = cordex_train
+
+        # For precipitation, apply jitter to near-zero values before multiplicative
+        # QDM to avoid division-by-zero when CORDEX has more dry days than ERA5.
+        if variable_type == "precip" and _jitter_under_thresh is not None:
+            self.logger.info(
+                f"  Applying jitter (thresh={_PRECIP_JITTER_THRESH}) for precip QDM…"
+            )
+            era5_train    = _jitter_under_thresh(era5_train,    _PRECIP_JITTER_THRESH)
+            cordex_train  = _jitter_under_thresh(cordex_train,  _PRECIP_JITTER_THRESH)
+
         qdm = self._train_qdm(era5_train, cordex_train, variable_type)
 
         # 5: Load scenario data (full period)
         self.logger.info(f"  Loading CORDEX {scenario} (full period)…")
         cordex_sim = self._load_cordex(variable_type, scenario)
 
-        # 6: Apply QDM
+        # 6: Apply QDM — xsdba requires a single chunk along the time dimension
         self.logger.info(f"  Applying QDM…")
+        cordex_sim = cordex_sim.chunk({"time": -1})
+        if variable_type == "precip" and _jitter_under_thresh is not None:
+            cordex_sim = _jitter_under_thresh(cordex_sim, _PRECIP_JITTER_THRESH)
         corrected = qdm.adjust(cordex_sim)
         if variable_type == "precip":
             corrected = corrected.clip(min=0)
 
         # 7: Save
         self._save_output(corrected, out_path, variable_type)
+
+        # 8: Diagnostic plots (non-fatal — never break the pipeline)
+        try:
+            self._save_diagnostic_plots(
+                variable_type, scenario,
+                era5_train_orig, cordex_train_orig, corrected,
+            )
+        except Exception as _plot_exc:
+            self.logger.warning(f"  Diagnostic plots skipped: {_plot_exc}")
+
         return out_path
 
     def process_all(
