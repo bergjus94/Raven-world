@@ -1,0 +1,71 @@
+gauge_id: '0122'
+start_date: '1980-01-01'
+end_date: '1997-12-31'
+cali_end_date: '1989-12-31'
+warm_up_date: '1978-01-01'
+model_type: 'HBV'
+template: true
+main_dir: '/home/jberg/OneDrive/Raven_worldwide'
+coupled: true
+# lateral connections: 'multiple': HRU connects to multiple HRUs downstream, 'single': each HRU has one lateral connection
+nconnect: 'multiple'
+# possible discretization options: 'elevation', 'landuse', 'aspect', 'slope'
+criteria:
+  - elevation
+  - landuse
+future: true
+# Set future: true and provide cordex_* keys to enable CORDEX downscaling.
+cordex_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/CORDEX'
+cordex_models:
+  - SMHI-RCA_MPIESM
+cordex_scenarios:
+  - historical
+cordex_train_start: '1980-01-01'   # default: 1980-01-01
+cordex_train_end:   '2005-12-31'   # default: 2005-12-31
+debug: true
+meteo_source: 'HAR'
+landuse_source: 'ICIMOD'   # options: 'ESA', 'ICIMOD', or 'auto' (detect based on unique values)
+
+# Paths (relative to main_dir or absolute)
+#meteo_dir: '/run/user/1001/gvfs/smb-share:server=fileserv02.giub.unibe.ch,share=userdata/jberg/Meteo_data/Era5_worldwide/gauge_{gauge_id}'
+meteo_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/Indus-Era5'
+meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
+shape_dir: '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp'
+raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
+stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
+landuse_dir: '01_data/topo/catchment_landuse/hkh_lc-2021.tif'
+#glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_15.rgi60.SouthAsiaEast/15_rgi60_SouthAsiaEast.shp'
+glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
+#glogem_dir: '01_data/GloGEM/Ganges/GloGEM_output_{gauge_id}.dat'
+glogem_dir: '01_data/GloGEM/Indus/GMB'
+swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
+params_dir: 'src/config/default_params.yaml'
+
+config_dir: '03_model_setups_coupled_test'
+
+
+# Forcing files (can be empty or filled as needed)
+forcing_files:
+  - 'era5_land_2m_temperature_2000-2000_daily_max_combined.nc'
+  - 'era5_land_2m_temperature_2000-2000_daily_min_combined.nc'
+  - 'era5_land_2m_temperature_2000-2000_daily_mean_combined.nc'
+  - 'era5_land_total_precipitation_2000-2000_daily_combined.nc'
+
+# Forcing files (can be empty or filled as needed)
+forcing_files_har:
+  - 'har_land_2m_temperature_2000-2000_daily_max_combined.nc'
+  - 'har_land_2m_temperature_2000-2000_daily_min_combined.nc'
+  - 'har_land_2m_temperature_2000-2000_daily_mean_combined.nc'
+  - 'har_land_total_precipitation_2000-2000_daily_combined.nc'
+
+
+calibration:
+   metrics:
+     primary: 'KGE'           # Primary metric for optimization
+     secondary: ['NSE', 'PBIAS', 'RMSE']  # Secondary metrics to report
+   iterations: 2000       # Number of iterations for calibration
+   ngs: 8
+   cali_end_date: '1989-12-31'
+   vali_end_date: '1997-12-31'
+
+raven_executable: '/home/jberg/RavenHydroFramework/build/Raven'

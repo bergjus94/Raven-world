@@ -162,8 +162,8 @@ class TestHARAnalyzer:
         precip_nc = analyzer.output_path / "har_precip.nc"
         assert precip_nc.exists(), f"Expected har_precip.nc at {precip_nc}"
         ds = xr.open_dataset(precip_nc)
-        ny = ds.dims["south_north"]
-        nx = ds.dims["west_east"]
+        ny = ds.sizes["south_north"]
+        nx = ds.sizes["west_east"]
         expected_cells = ny * nx
         ds.close()
 
