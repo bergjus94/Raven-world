@@ -303,25 +303,28 @@ class GloGEMProcessor:
                 # ✅ FIX: Process in chunks to avoid memory overflow
                 chunk_size = 365  # Process one year at a time
                 n_time_chunks = int(np.ceil(len(time_indices) / chunk_size))
-                
+
                 self.logger.info(f"  Processing in {n_time_chunks} chunks of ~{chunk_size} days...")
-                
+
+                # Pre-select only the needed glacier columns using xarray lazy indexing
+                # This avoids loading the full 3+ GB array into memory
+                da_subset = ds[var_name][:, glacier_indices]
+                chunk_glacier_ids = all_glacier_ids[glacier_indices]
+
                 # Open output CSV for writing
                 first_chunk = True
-                
+
                 for chunk_idx in range(n_time_chunks):
                     start_idx = chunk_idx * chunk_size
                     end_idx = min((chunk_idx + 1) * chunk_size, len(time_indices))
-                    
+
                     chunk_time_indices = time_indices[start_idx:end_idx]
-                    
+
                     self.logger.info(f"    Chunk {chunk_idx+1}/{n_time_chunks}: processing {len(chunk_time_indices)} days...")
-                    
-                    # Load chunk of data from NetCDF
-                    full_data = ds[var_name].values  # Shape: (all_times, all_glaciers)
-                    chunk_data = full_data[np.ix_(chunk_time_indices, glacier_indices)]
+
+                    # Load only this time chunk for the pre-selected glaciers
+                    chunk_data = da_subset[chunk_time_indices, :].values
                     chunk_times = all_times[chunk_time_indices]
-                    chunk_glacier_ids = all_glacier_ids[glacier_indices]
                     
                     # ✅ FIX: Create DataFrame directly (more memory efficient than list of dicts)
                     # Create multi-index for dates and glacier IDs

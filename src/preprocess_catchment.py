@@ -627,9 +627,10 @@ class CatchmentProcessor:
         if detected != declared:
             self.logger.warning(
                 f"⚠️  landuse_source in namelist is '{declared}' but auto-detection "
-                f"says '{detected}'.  Using declared value '{declared}'.  "
-                f"Double-check your landuse_dir path!"
+                f"says '{detected}'.  Overriding to '{detected}' to avoid all-NaN reclassification.  "
+                f"Double-check your landuse_dir path or set landuse_source: 'auto'."
             )
+            return detected
 
         return declared
 

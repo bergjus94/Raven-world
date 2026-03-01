@@ -6,18 +6,13 @@ warm_up_date: '1978-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'
-coupled: false
+coupled: true
 # lateral connections: 'multiple': HRU connects to multiple HRUs downstream, 'single': each HRU has one lateral connection
 nconnect: 'multiple'
 # possible discretization options: 'elevation', 'landuse', 'aspect', 'slope'
 criteria:
   - elevation
   - landuse
-  - aspect
-# Minimum slope (degrees) for aspect-based HRU splitting.
-# Cells with slope < this value get a single 'FLAT' aspect class instead of N/E/S/W.
-# Set to 0 to disable (all cells get directional aspect).
-aspect_slope_threshold: 15.0
 future: true
 # Set future: true and provide cordex_* keys to enable CORDEX downscaling.
 cordex_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/CORDEX'
@@ -25,8 +20,8 @@ cordex_models:
   - SMHI-RCA_MPIESM
 cordex_scenarios:
   - historical
-# cordex_train_start: '1980-01-01'   # default: 1980-01-01
-# cordex_train_end:   '2005-12-31'   # default: 2005-12-31
+cordex_train_start: '1980-01-01'   # default: 1980-01-01
+cordex_train_end:   '2005-12-31'   # default: 2005-12-31
 debug: true
 meteo_source: 'ERA5'
 landuse_source: 'ICIMOD'   # options: 'ESA', 'ICIMOD', or 'auto' (detect based on unique values)

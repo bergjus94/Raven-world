@@ -890,7 +890,7 @@ class ERA5LandAnalyzer:
                 'long_name': 'Surface elevation above sea level',
                 'standard_name': 'surface_altitude',
                 'source': 'ERA5-Land geopotential converted to elevation',
-                'conversion_factor': f'Divided by standard gravity ({standard_gravity} m/s²)',
+                'conversion_factor': f'Divided by standard gravity ({standard_gravity} m/s^2)',
                 'description': 'Average elevation for each ERA5-Land grid cell',
                 'processing_date': pd.Timestamp.now().isoformat(),
                 'grid_mapping': 'WGS84'

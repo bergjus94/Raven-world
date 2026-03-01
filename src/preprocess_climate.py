@@ -634,18 +634,55 @@ class CORDEXDownscaler:
             da = da.rename(rename)
 
         long_names = {
-            "temp_mean": "2 metre temperature (daily mean) — CORDEX QDM-corrected",
-            "temp_min":  "2 metre temperature (daily minimum) — CORDEX QDM-corrected",
-            "temp_max":  "2 metre temperature (daily maximum) — CORDEX QDM-corrected",
-            "precip":    "Total precipitation — CORDEX QDM-corrected",
+            "temp_mean": "2 metre temperature (daily mean) - CORDEX QDM-corrected",
+            "temp_min":  "2 metre temperature (daily minimum) - CORDEX QDM-corrected",
+            "temp_max":  "2 metre temperature (daily maximum) - CORDEX QDM-corrected",
+            "precip":    "Total precipitation - CORDEX QDM-corrected",
         }
         da.attrs["long_name"] = long_names[variable_type]
         da.attrs["source"]    = (
             f"CORDEX WAS-44 {self.model_id}, bias-corrected with xclim QDM "
-            f"(ref: ERA5-Land {self.train_start.year}–{self.train_end.year})"
+            f"(ref: ERA5-Land {self.train_start.year}-{self.train_end.year})"
         )
 
+        # Drop stray non-spatial scalar coordinates (e.g. 'number' from ERA5)
+        keep = {"time", "latitude", "longitude", "lat", "lon"}
+        extra = [c for c in da.coords if c not in keep]
+        if extra:
+            da = da.drop_vars(extra, errors="ignore")
+
+        # Also remove 'coordinates' attr if it references a now-dropped variable
+        # (e.g. ERA5 sets coordinates='number' on tp/t2m; Raven fails if the
+        # referenced variable is absent from the output file).
+        da.attrs.pop("coordinates", None)
+
+        # Ensure standard dimension order (time, latitude, longitude) to match
+        # the ERA5-Land files that Raven expects.
+        target_dims = [d for d in ("time", "latitude", "longitude") if d in da.dims]
+        if list(da.dims) != target_dims:
+            da = da.transpose(*target_dims)
+
         ds = da.to_dataset()
+
+        # Add ERA5-Land elevation to the output file so that Raven can apply
+        # its internal lapse-rate correction from the grid-cell elevation to
+        # individual HRU elevations (required by :ElevationVarNameNC elevation
+        # in the .rvt file).
+        era5_elev = self._load_era5_elevation()
+        if era5_elev is not None:
+            # Drop any non-spatial coords (e.g. 'number') before merging
+            elev_clean = era5_elev.drop_vars(
+                [c for c in era5_elev.coords
+                 if c not in ("latitude", "longitude")],
+                errors="ignore",
+            )
+            ds["elevation"] = elev_clean
+        else:
+            self.logger.warning(
+                "ERA5-Land elevation not available — "
+                "elevation variable omitted from CORDEX output file."
+            )
+
         encoding: dict = {
             era5_var: {
                 "zlib":     True,
@@ -653,9 +690,30 @@ class CORDEXDownscaler:
                 "dtype":    "float32",
             },
         }
+        if "elevation" in ds:
+            encoding["elevation"] = {"zlib": True, "complevel": 4,
+                                     "dtype": "float32", "_FillValue": None}
         for coord in ("latitude", "longitude"):
             if coord in ds:
                 encoding[coord] = {"_FillValue": None}
+
+        # Final scrub before writing:
+        # 1. Remove 'coordinates' attr — xarray may regenerate it from encoding
+        #    even after da.attrs.pop(), causing Raven to look up 'number' which
+        #    doesn't exist in the CORDEX output file.
+        # 2. Replace non-ASCII characters in all string attributes — unicode chars
+        #    (em-dash, superscript 2, etc.) force NetCDF4 to use NC_STRING type
+        #    instead of NC_CHAR, which Raven's libnetcdf cannot handle.
+        def _ascii_safe(s: str) -> str:
+            return s.encode("ascii", errors="replace").decode("ascii")
+
+        for var in list(ds.data_vars) + list(ds.coords):
+            obj = ds[var]
+            obj.attrs.pop("coordinates", None)
+            obj.encoding.pop("coordinates", None)
+            for k, v in list(obj.attrs.items()):
+                if isinstance(v, str) and not v.isascii():
+                    obj.attrs[k] = _ascii_safe(v)
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"  Saving {out_path.name} …")
@@ -703,7 +761,8 @@ class CORDEXDownscaler:
         )
 
         model_safe = self.model_id.replace("/", "_").replace(" ", "_")
-        plot_dir   = self.shared_data_dir / "plots"
+        catchment_dir = self.model_dir / f"catchment_{self.gauge_id}"
+        plot_dir = catchment_dir / "plots" / "future_climate"
         plot_dir.mkdir(parents=True, exist_ok=True)
         plot_path  = plot_dir / f"cordex_{model_safe}_{scenario}_{variable_type}.png"
 
@@ -1018,6 +1077,38 @@ class CORDEXDownscaler:
         corrected = qdm.adjust(cordex_sim)
         if variable_type == "precip":
             corrected = corrected.clip(min=0)
+
+        # 6b: Prepend ERA5-Land warmup data if ERA5 starts before CORDEX.
+        # This fills the gap so Raven can initialise model storages (snowpack,
+        # soil moisture, groundwater) before the CORDEX projection period begins.
+        # ERA5 and QDM-corrected CORDEX share the same statistical distribution,
+        # so the concatenation at the CORDEX start date is seamless.
+        era5_full = self._load_era5_ref(variable_type)
+        era5_full_start  = pd.Timestamp(era5_full.time.values[0])
+        cordex_data_start = pd.Timestamp(corrected.time.values[0])
+
+        if era5_full_start < cordex_data_start:
+            warmup_end = (
+                cordex_data_start - pd.Timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+            era5_warmup = era5_full.sel(time=slice(None, warmup_end))
+
+            # Drop any scalar coords that would block concatenation (e.g. 'number')
+            keep_coords = {"time", "latitude", "longitude", "lat", "lon"}
+            extra = [c for c in era5_warmup.coords if c not in keep_coords]
+            if extra:
+                era5_warmup = era5_warmup.drop_vars(extra, errors="ignore")
+
+            n_warmup = len(era5_warmup.time)
+            self.logger.info(
+                f"  Prepending ERA5 warmup: {era5_full_start.date()} → "
+                f"{warmup_end}  ({n_warmup} days)"
+            )
+            corrected = xr.concat(
+                [era5_warmup.chunk({"time": -1}),
+                 corrected.chunk({"time": -1})],
+                dim="time",
+            )
 
         # 7: Save
         self._save_output(corrected, out_path, variable_type)

@@ -1138,12 +1138,17 @@ class HBVProcessor:
                 f"    [DEFAULT],  {self.params['HBV'][param_or_name]['X02']},             2.2,        {self.params['HBV'][param_or_name]['X18']},    {self.params['HBV'][param_or_name]['X03']},              0.48",
                 ":EndLandUseParameterList",
                 "",
-                "#:LandUseParameterList",
-                "# :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG",
-                "# :Units     ,                  none,                1/d,                1/d,           1/mm",
-                "#   #                       CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT,",
-                f"#   [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05",
-                "#:EndLandUseParameterList"
+                # Glacier land use parameters: active when coupled, commented when uncoupled
+                (":LandUseParameterList" if self.coupled else "#:LandUseParameterList"),
+                ("  :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG" if self.coupled else
+                 "# :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG"),
+                ("  :Units     ,                  none,                1/d,                1/d,           1/mm" if self.coupled else
+                 "# :Units     ,                  none,                1/d,                1/d,           1/mm"),
+                ("  #                        CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT," if self.coupled else
+                 "#   #                       CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT,"),
+                (f"    [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05" if self.coupled else
+                 f"#   [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05"),
+                (":EndLandUseParameterList" if self.coupled else "#:EndLandUseParameterList")
             ],
             "#Soil Parameters": [
                 f"#For Ostrich:HBV_Alpha= {self.params['HBV'][param_or_name]['X15']}",
@@ -1263,10 +1268,15 @@ class HBVProcessor:
                 "   :CanopySnowEvap    CANEVP_ALL         CANOPY_SNOW     ATMOSPHERE",
                 "   :SnowBalance       SNOBAL_SIMPLE_MELT SNOW            SNOW_LIQ",
                 "       :-->Overflow     RAVEN_DEFAULT      SNOW_LIQ        PONDED_WATER",
-                "#   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER",
-                "#       :-->Conditional HRU_TYPE IS GLACIER",
-                "#   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER",
-                "#   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER",
+                # Glacier processes: active when coupled (GloGEM provides melt), commented when uncoupled
+                ("   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER" if self.coupled else
+                 "#   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER"),
+                ("       :-->Conditional HRU_TYPE IS GLACIER" if self.coupled else
+                 "#       :-->Conditional HRU_TYPE IS GLACIER"),
+                ("   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER" if self.coupled else
+                 "#   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER"),
+                ("   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER" if self.coupled else
+                 "#   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER"),
                 "   :Infiltration      INF_HBV            PONDED_WATER    MULTIPLE",
                 "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
                 "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
