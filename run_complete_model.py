@@ -32,7 +32,7 @@ script_dir = Path(__file__).parent.absolute()
 src_dir = script_dir / 'src'
 sys.path.insert(0, str(src_dir))
 
-import postprocessing_single
+import postprocessing
 
 def setup_logging(debug=False, log_file=None):
     """Setup logging configuration."""
@@ -95,7 +95,7 @@ def run_input_creation(namelist_path, verbose=False):
     logger.info("="*60)
     
     # Construct command
-    create_input_script = src_dir / 'create_input_Raven.py'
+    create_input_script = src_dir / 'create_input_files.py'
     cmd = [sys.executable, str(create_input_script), str(namelist_path)]
     
     if verbose:
@@ -104,43 +104,33 @@ def run_input_creation(namelist_path, verbose=False):
     logger.info(f"Running command: {' '.join(cmd)}")
     
     try:
-        # Run the input creation script
         start_time = time.time()
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
-            check=True,
-            capture_output=True,
-            text=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
         )
-        
-        end_time = time.time()
-        duration = end_time - start_time
-        
-        # Log output
-        if result.stdout:
-            logger.info("Input creation output:")
-            for line in result.stdout.split('\n'):
-                if line.strip():
-                    logger.info(f"  {line}")
-        
-        if result.stderr:
-            logger.warning("Input creation warnings/errors:")
-            for line in result.stderr.split('\n'):
-                if line.strip():
-                    logger.warning(f"  {line}")
-        
-        logger.info(f"Input file creation completed successfully in {duration:.1f} seconds")
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Input file creation failed with return code {e.returncode}")
-        if e.stdout:
-            logger.error("STDOUT:")
-            logger.error(e.stdout)
-        if e.stderr:
-            logger.error("STDERR:")
-            logger.error(e.stderr)
-        return False
+
+        while True:
+            output = process.stdout.readline()
+            if output == '' and process.poll() is not None:
+                break
+            if output:
+                logger.info(f"  {output.rstrip()}")
+
+        return_code = process.poll()
+        duration = time.time() - start_time
+
+        if return_code == 0:
+            logger.info(f"Input file creation completed successfully in {duration:.1f} seconds")
+            return True
+        else:
+            logger.error(f"Input file creation failed with return code {return_code}")
+            return False
+
     except Exception as e:
         logger.error(f"Error running input creation: {e}")
         return False
@@ -267,7 +257,7 @@ def run_postprocessing(namelist_path, validation_start=None, validation_end=None
         logging.info(f"  Raven executable: {config['raven_executable']}")
         
         # Run complete postprocessing
-        results = postprocessing_single.run_complete_postprocessing(
+        results = postprocessing.run_complete_postprocessing(
             config=config,
             validation_start=validation_start,
             validation_end=validation_end
@@ -278,15 +268,17 @@ def run_postprocessing(namelist_path, validation_start=None, validation_end=None
             return None
         
         # Check if postprocessing was successful
-        success_count = sum(1 for success in results['success'].values() if success is True)
-        total_analyses = len([k for k, v in results['success'].items() if v is not None])
-        
+        analysis_results = results.get('results', {})
+        success_count = sum(1 for r in analysis_results.values() if r is not None)
+        total_analyses = len(analysis_results)
+
         logging.info(f"Postprocessing completed: {success_count}/{total_analyses} analyses successful")
-        
-        if results.get('errors'):
-            logging.warning(f"Postprocessing encountered {len(results['errors'])} errors:")
-            for analysis, error in results['errors'].items():
-                logging.warning(f"  - {analysis}: {error}")
+
+        errors = results.get('errors', [])
+        if errors:
+            logging.warning(f"Postprocessing encountered {len(errors)} errors:")
+            for err in errors:
+                logging.warning(f"  - {err.get('function', 'unknown')}: {err.get('error', 'unknown')}")
         
         return results
         
@@ -397,11 +389,6 @@ Examples:
         '--skip-input-creation',
         action='store_true',
         help='Skip input file creation (assume files already exist)'
-    )
-    parser.add_argument(
-        '--skip-diagnostics',
-        action='store_true',
-        help='Skip final diagnostics generation'
     )
     parser.add_argument(
         '--log-file',

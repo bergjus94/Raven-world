@@ -3345,8 +3345,8 @@ def load_snowmelt_mass_loadings(config, validation_start=None, validation_end=No
         if 'date' not in df.columns:
             print(f"ERROR: 'date' column not found in mass loadings file")
             return None
-        df['date'] = pd.to_datetime(df['date'])
-        
+        df['date'] = pd.to_datetime(df['date'], format='mixed')
+
         # Find the gauge column
         gauge_col = f"{gauge_id} m3/s"
         
@@ -4038,8 +4038,8 @@ def load_glacier_melt_mass_loadings(config, validation_start=None, validation_en
                 results[glacier_type] = None
                 continue
             
-            df['date'] = pd.to_datetime(df['date'])
-            
+            df['date'] = pd.to_datetime(df['date'], format='mixed')
+
             # Find the gauge column
             gauge_col = f"{gauge_id} m3/s"
             
@@ -7299,7 +7299,7 @@ def run_complete_postprocessing(config, validation_start=None, validation_end=No
             print(f"Validation period: {validation_start} to {validation_end}")
         print("\n" + "="*80 + "\n")
     
-    plot_dirs = setup_plot_directories(config)
+    plot_dirs = setup_output_directories(config)
     
     # Helper function to run a function with error handling
     def run_function(func_name, func, *args, **kwargs):
@@ -7520,11 +7520,39 @@ def run_complete_postprocessing(config, validation_start=None, validation_end=No
     )
     
     # ========================================================================
-    # 9. SWE ANALYSIS
+    # 9. PARAMETER ANALYSIS
     # ========================================================================
     if verbose:
         print("\n" + "#"*80)
-        print("# 9. SNOW WATER EQUIVALENT (SWE) ANALYSIS")
+        print("# 9. PARAMETER ANALYSIS")
+        print("#"*80)
+
+    results['parameter_boxplots'] = run_function(
+        'plot_parameter_boxplots',
+        plot_parameter_boxplots,
+        config, plot_dirs
+    )
+
+    # ========================================================================
+    # 10. STORAGE ANALYSIS
+    # ========================================================================
+    if verbose:
+        print("\n" + "#"*80)
+        print("# 10. STORAGE ANALYSIS")
+        print("#"*80)
+
+    results['storage_timeseries'] = run_function(
+        'plot_storage_timeseries',
+        plot_storage_timeseries,
+        config, plot_dirs, validation_start, validation_end
+    )
+
+    # ========================================================================
+    # 11. SWE ANALYSIS
+    # ========================================================================
+    if verbose:
+        print("\n" + "#"*80)
+        print("# 11. SNOW WATER EQUIVALENT (SWE) ANALYSIS")
         print("#"*80)
     
     results['area_weighted_swe_timeseries'] = run_function(
