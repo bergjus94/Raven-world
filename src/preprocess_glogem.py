@@ -8,6 +8,7 @@ import numpy as np
 from typing import Dict, List, Union, Optional, Any, Tuple
 import yaml
 from datetime import datetime, timedelta
+import traceback
 
 
 class GloGEMProcessor:
@@ -51,10 +52,8 @@ class GloGEMProcessor:
         # ✅ Load warm-up date if specified
         if 'warm_up_date' in config:
             self.warm_up_date = config['warm_up_date']
-            print(f"Warm-up period configured: {self.warm_up_date} to {self.start_date}")
         else:
             self.warm_up_date = None
-            print("No warm-up period configured")
         
         self.debug = config.get('debug', False)
         self.model_dir = self.main_dir / config.get('config_dir')
@@ -64,23 +63,16 @@ class GloGEMProcessor:
         if self.glogem_dir:
             self.glogem_dir = Path(self.main_dir, self.glogem_dir.format(gauge_id=self.gauge_id))
         
-        # ✅ Define SHARED catchment-level directory (primary storage)
+        # Shared catchment-level directory (canonical location for irrigation files)
         self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
-        
-        # ✅ Define MODEL-SPECIFIC directory (for backward compatibility)
-        self.model_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
-        
-        # Create directories
         self.shared_data_dir.mkdir(parents=True, exist_ok=True)
-        self.model_data_dir.mkdir(parents=True, exist_ok=True)
         
         # Setup logger
         self.logger = self._setup_logger()
         
         self.logger.info(f"GloGEM Processor initialized for gauge {self.gauge_id}")
         self.logger.info(f"📁 GloGEM NetCDF directory: {self.glogem_dir}")
-        self.logger.info(f"📁 Shared irrigation files: {self.shared_data_dir}")
-        self.logger.info(f"📋 Files will be copied to: {self.model_data_dir}")
+        self.logger.info(f"📁 Irrigation files: {self.shared_data_dir}")
         self.logger.info(f"🌡️  Scenario: {self.glogem_scenario}")
         
         if self.warm_up_date:
@@ -192,8 +184,16 @@ class GloGEMProcessor:
             self.logger.debug(f"   Sample glacier IDs: {sample_ids}")
         
         return glacier_ids_needed, rgi_region_code, glacier_categories
-    
-    # ...existing code...
+
+    def _load_area_map(self) -> Dict[str, float]:
+        """Load glacier area mapping (padded numeric_id → area_km2) from glacier_id_mapping.csv."""
+        mapping_path = (
+            Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
+        )
+        if not mapping_path.exists():
+            raise FileNotFoundError(f"Glacier ID mapping not found: {mapping_path}")
+        df = pd.read_csv(mapping_path)
+        return dict(zip(df['numeric_id'].astype(str).str.zfill(5), df['area_km2']))
 
     def process_glogem_files(self) -> pd.DataFrame:
         """
@@ -365,7 +365,6 @@ class GloGEMProcessor:
                 
             except Exception as e:
                 self.logger.error(f"Error processing {nc_path}: {e}")
-                import traceback
                 self.logger.error(traceback.format_exc())
                 continue
         
@@ -420,21 +419,7 @@ class GloGEMProcessor:
         # Get glacier IDs by category
         glacier_ids_needed, rgi_region_code, glacier_categories = self._get_glacier_ids_from_catchment()
         
-        # ✅ NEW: Load glacier areas from mapping CSV instead of shapefile
-        mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
-        
-        if not mapping_path.exists():
-            raise FileNotFoundError(f"Glacier ID mapping not found: {mapping_path}")
-        
-        mapping_df = pd.read_csv(mapping_path)
-        
-        # Create area mapping: numeric ID (with padding) -> area
-        area_map = {}
-        for _, row in mapping_df.iterrows():
-            numeric_id = str(row['numeric_id']).zfill(5)  # Ensure 5-digit format
-            area_km2 = row['area_km2']
-            area_map[numeric_id] = area_km2
-        
+        area_map = self._load_area_map()
         self.logger.info(f"Loaded {len(area_map)} glacier areas from mapping CSV")
         
         # Calculate total areas by category
@@ -641,18 +626,7 @@ class GloGEMProcessor:
             self.logger.warning("No glaciers in catchment - creating empty irrigation file")
             return self._create_empty_irrigation_netcdf(hru_gdf, output_path)
         
-        # ✅ NEW: Load glacier areas from mapping CSV instead of shapefile
-        mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
-        if not mapping_path.exists():
-            raise FileNotFoundError(f"Glacier ID mapping not found: {mapping_path}")
-        
-        mapping_df = pd.read_csv(mapping_path)
-        area_map = {}
-        for _, row in mapping_df.iterrows():
-            numeric_id = str(row['numeric_id']).zfill(5)  # Ensure 5-digit format
-            area_km2 = row['area_km2']
-            area_map[numeric_id] = area_km2
-        
+        area_map = self._load_area_map()
         self.logger.info(f"Loaded {len(area_map)} glacier areas from mapping CSV")
         
         # ✅ Load Discharge (total melt) from NetCDF directly
@@ -711,17 +685,17 @@ class GloGEMProcessor:
             ds_glogem.close()
             raise ValueError("No time steps found in the specified date range")
         
-        # ✅ Load and subset discharge data
+        # ✅ Load and subset discharge data — select glaciers lazily first to avoid
+        # loading the full ~3 GB array before subsetting.
         self.logger.info("Loading discharge data from NetCDF...")
-        full_discharge = ds_glogem['discharge'].values
-        discharge_data = full_discharge[np.ix_(time_indices, glacier_indices)]
-        
+        da = ds_glogem['discharge'][:, glacier_indices]       # lazy glacier selection
+        discharge_data = da[time_indices, :].values            # materialise only needed slice
+
         sim_times = all_nc_times[time_indices]
         sim_glacier_ids = all_glacier_ids[glacier_indices]
-        
+
         self.logger.info(f"Subset data shape: {discharge_data.shape}")
-        
-        del full_discharge
+
         ds_glogem.close()
         
         # Replace NaN with 0
@@ -1151,7 +1125,6 @@ class GloGEMProcessor:
             
         except Exception as e:
             self.logger.error(f"Error validating glacier IDs: {e}")
-            import traceback
             self.logger.error(traceback.format_exc())
             return results
     
@@ -1271,7 +1244,6 @@ class GloGEMProcessor:
             
         except Exception as e:
             self.logger.error(f"Error creating validation map: {e}")
-            import traceback
             self.logger.error(traceback.format_exc())
 
     def plot_glacier_runoff_vs_observed(self) -> None:
@@ -1719,7 +1691,6 @@ class GloGEMProcessor:
             
         except Exception as e:
             self.logger.error(f"Error creating glacier runoff comparison plots: {e}")
-            import traceback
             self.logger.error(traceback.format_exc())
 
         
@@ -1758,10 +1729,7 @@ class GloGEMProcessor:
             self.logger.info(f"   rm {irrigation_nc}")
             self.logger.info(f"   rm {irrigation_gridweights}")
             self.logger.info("   OR call process_all(force_reprocess=True)")
-            
-            # Copy to model directory before returning
-            self._copy_to_model_directory()
-            
+
             # Return empty results dict
             return {
                 'glogem_data': pd.DataFrame(),
@@ -1803,10 +1771,6 @@ class GloGEMProcessor:
         self.logger.info("\n6. Creating glacier runoff vs observed streamflow plots...")
         self.plot_glacier_runoff_vs_observed()
         
-        # 7. Copy irrigation files to model-specific directory
-        self.logger.info("\n7. Copying files to model-specific directory...")
-        self._copy_to_model_directory()
-        
         self.logger.info("\n" + "="*60)
         self.logger.info("GloGEM PROCESSING COMPLETE")
         self.logger.info("="*60)
@@ -1823,37 +1787,6 @@ class GloGEMProcessor:
         
         return results
     
-    def _copy_to_model_directory(self) -> None:
-        """
-        Copy irrigation files from shared data_obs to model-specific data_obs.
-        This maintains backward compatibility while using shared storage.
-        """
-        import shutil
-        
-        # Files to copy
-        irrigation_files = [
-            self.shared_data_dir / 'irrigation.nc',
-            self.shared_data_dir / 'GridWeights_Irrigation.txt'
-        ]
-        
-        self.logger.info(f"📋 Copying irrigation files from shared to model-specific directory...")
-        self.logger.debug(f"  Source: {self.shared_data_dir}")
-        self.logger.debug(f"  Destination: {self.model_data_dir}")
-        
-        copied_count = 0
-        for file_path in irrigation_files:
-            if file_path.exists():
-                dest = self.model_data_dir / file_path.name
-                try:
-                    shutil.copy2(file_path, dest)
-                    self.logger.debug(f"  ✅ Copied: {file_path.name}")
-                    copied_count += 1
-                except Exception as e:
-                    self.logger.warning(f"  ❌ Failed to copy {file_path.name}: {e}")
-            else:
-                self.logger.warning(f"  ⚠️ File not found: {file_path}")
-
-
 class MultiSubbasinGloGEMProcessor:
     """
     GloGEM processor for multi-subbasin configurations.
@@ -1950,8 +1883,9 @@ class MultiSubbasinGloGEMProcessor:
         sim_times = all_nc_times[time_indices]
         self.logger.info(f"Loaded {len(time_indices)} simulation time steps from NetCDF")
 
-        # Load full discharge array into memory (subset to sim window)
-        full_discharge = ds_glogem['discharge'].values[time_indices, :]   # (n_sim, n_glaciers)
+        # Load discharge — select sim-window time steps lazily before materialising.
+        # All glacier columns are kept here since different subbasins use different subsets.
+        full_discharge = ds_glogem['discharge'][time_indices, :].values   # (n_sim, n_glaciers)
         ds_glogem.close()
         full_discharge = np.nan_to_num(full_discharge, nan=0.0).astype(np.float32)
 
@@ -2192,5 +2126,3 @@ class MultiSubbasinGloGEMProcessor:
             'n_subbasins': len(processed_subbasins),
             'processed_subbasins': processed_subbasins,
         }
-
-        self.logger.info(f"✅ Successfully copied {copied_count}/{len(irrigation_files)} files to {self.model_data_dir.name}/")
