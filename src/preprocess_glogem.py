@@ -11,6 +11,25 @@ from datetime import datetime, timedelta
 import traceback
 
 
+# Maps namelist irrigation_variable value → topo_files CSV filename
+_GLOGEM_CSV = {
+    'discharge': 'GloGEM_melt.csv',   # historical naming kept for compat
+    'icemelt':   'GloGEM_icemelt.csv',
+    'snowmelt':  'GloGEM_snowmelt.csv',
+    'rain':      'GloGEM_rain.csv',
+}
+
+# Human-readable label used in plot titles / axis labels
+_GLOGEM_LABEL = {
+    'discharge': 'Glacier Runoff (discharge)',
+    'icemelt':   'Ice Melt',
+    'snowmelt':  'Snow Melt',
+    'rain':      'Glacier Rain',
+}
+
+_VALID_IRRIGATION_VARS = {'discharge', 'icemelt', 'snowmelt', 'rain'}
+
+
 class GloGEMProcessor:
     """
     Streamlined processor for GloGEM glacier melt data.
@@ -56,8 +75,16 @@ class GloGEMProcessor:
             self.warm_up_date = None
         
         self.debug = config.get('debug', False)
+
+        self.irrigation_variable = config.get('irrigation_variable', 'discharge').lower()
+        if self.irrigation_variable not in _VALID_IRRIGATION_VARS:
+            raise ValueError(
+                f"irrigation_variable must be one of {_VALID_IRRIGATION_VARS}, "
+                f"got '{self.irrigation_variable}'"
+            )
+
         self.model_dir = self.main_dir / config.get('config_dir')
-        
+
         # ✅ UPDATED: GloGEM directory now contains NetCDF files
         self.glogem_dir = config.get('glogem_dir')
         if self.glogem_dir:
@@ -629,14 +656,14 @@ class GloGEMProcessor:
         area_map = self._load_area_map()
         self.logger.info(f"Loaded {len(area_map)} glacier areas from mapping CSV")
         
-        # ✅ Load Discharge (total melt) from NetCDF directly
-        nc_path = self._get_netcdf_path('Discharge')
-        
+        # ✅ Load the configured irrigation variable from NetCDF
+        nc_path = self._get_netcdf_path(self.irrigation_variable.capitalize())
+
         if not nc_path.exists():
-            self.logger.error(f"GloGEM Discharge NetCDF not found: {nc_path}")
-            raise FileNotFoundError(f"GloGEM Discharge NetCDF not found: {nc_path}")
-        
-        self.logger.info(f"Loading GloGEM Discharge from: {nc_path}")
+            self.logger.error(f"GloGEM {self.irrigation_variable} NetCDF not found: {nc_path}")
+            raise FileNotFoundError(f"GloGEM {self.irrigation_variable} NetCDF not found: {nc_path}")
+
+        self.logger.info(f"Loading GloGEM {self.irrigation_variable} from: {nc_path}")
         ds_glogem = xr.open_dataset(nc_path)
         
         # Get all time and glacier info from NetCDF
@@ -685,10 +712,10 @@ class GloGEMProcessor:
             ds_glogem.close()
             raise ValueError("No time steps found in the specified date range")
         
-        # ✅ Load and subset discharge data — select glaciers lazily first to avoid
+        # ✅ Load and subset data — select glaciers lazily first to avoid
         # loading the full ~3 GB array before subsetting.
-        self.logger.info("Loading discharge data from NetCDF...")
-        da = ds_glogem['discharge'][:, glacier_indices]       # lazy glacier selection
+        self.logger.info(f"Loading {self.irrigation_variable} data from NetCDF...")
+        da = ds_glogem[self.irrigation_variable][:, glacier_indices]   # lazy glacier selection
         discharge_data = da[time_indices, :].values            # materialise only needed slice
 
         sim_times = all_nc_times[time_indices]
@@ -901,7 +928,7 @@ class GloGEMProcessor:
         # Add metadata
         ds.attrs.update({
             'title': f'Glacier melt irrigation for catchment {self.gauge_id}',
-            'source': f'GloGEM {self.glogem_scenario}',
+            'source': f'GloGEM {self.irrigation_variable}',
             'n_glaciers': len(matching_glaciers),
             'n_hrus': num_hrus,
         })
@@ -1265,55 +1292,56 @@ class GloGEMProcessor:
             plots_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'plots')
             plots_dir.mkdir(parents=True, exist_ok=True)
             
-            # --- 1. Load GloGEM melt data ---
+            # --- 1. Load GloGEM data ---
             # Try CSV first (from .dat files), then fall back to NetCDF
-            glogem_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'GloGEM_melt.csv')
-            
+            csv_filename = _GLOGEM_CSV[self.irrigation_variable]
+            glogem_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', csv_filename)
+
             if glogem_path.exists():
-                self.logger.info(f"Loading GloGEM melt from CSV: {glogem_path}")
+                self.logger.info(f"Loading GloGEM {self.irrigation_variable} from CSV: {glogem_path}")
                 glogem_df = pd.read_csv(glogem_path, dtype={'id': str})
                 glogem_df['date'] = pd.to_datetime(glogem_df['date'])
                 glogem_df['q'] = pd.to_numeric(glogem_df['q'], errors='coerce')
             else:
                 # Try to load from NetCDF
                 self.logger.info("CSV not found, loading from NetCDF...")
-                nc_path = self._get_netcdf_path('Discharge')
-                
+                nc_path = self._get_netcdf_path(self.irrigation_variable.capitalize())
+
                 if not nc_path.exists():
                     self.logger.warning(f"Neither CSV nor NetCDF found. Skipping plots.")
                     return
-                
+
                 # Get glacier IDs from catchment
                 glacier_ids_needed, rgi_region_code, glacier_categories = self._get_glacier_ids_from_catchment()
-                
+
                 ds = xr.open_dataset(nc_path)
-                
+
                 # Filter time range
                 start = pd.to_datetime(self.start_date)
                 end = pd.to_datetime(self.end_date)
-                
+
                 all_nc_times = pd.to_datetime(ds.time.values)
                 all_glacier_ids = ds.glacier_id.values.astype(str)
-                
+
                 time_mask = (all_nc_times >= start) & (all_nc_times <= end)
                 glacier_mask = np.isin(all_glacier_ids, list(glacier_ids_needed))
-                
+
                 time_indices = np.where(time_mask)[0]
                 glacier_indices = np.where(glacier_mask)[0]
-                
+
                 if len(time_indices) == 0 or len(glacier_indices) == 0:
                     self.logger.warning("No matching data in NetCDF. Skipping plots.")
                     ds.close()
                     return
-                
+
                 # Load and subset data
-                full_discharge = ds['discharge'].values
-                discharge_data = full_discharge[np.ix_(time_indices, glacier_indices)]
+                full_data = ds[self.irrigation_variable].values
+                discharge_data = full_data[np.ix_(time_indices, glacier_indices)]
                 sim_times = all_nc_times[time_indices]
                 sim_glacier_ids = all_glacier_ids[glacier_indices]
-                
+
                 ds.close()
-                
+
                 # Convert to DataFrame format
                 records = []
                 for t_idx, date in enumerate(sim_times):
@@ -1323,10 +1351,10 @@ class GloGEMProcessor:
                             'date': date,
                             'q': discharge_data[t_idx, g_idx]
                         })
-                
+
                 glogem_df = pd.DataFrame(records)
                 glogem_df['q'] = pd.to_numeric(glogem_df['q'], errors='coerce').fillna(0)
-                
+
                 self.logger.info(f"Loaded {len(glogem_df)} records from NetCDF")
             
             # ✅ DEBUG: Check data
@@ -1563,37 +1591,38 @@ class GloGEMProcessor:
             self.logger.info(f"Plot dataframe head:\n{plot_df.head()}")
             
             # --- 6. Create time series plot (mm/day) ---
+            var_label = _GLOGEM_LABEL[self.irrigation_variable]
             fig, ax = plt.subplots(figsize=(14, 6))
-            
+
             # ✅ Convert dates to datetime for proper plotting
             plot_dates = pd.to_datetime(plot_df['date'])
-            
+
             # ✅ NEW: Plot all 3 glacier categories (catchment-normalized)
-            ax.plot(plot_dates, plot_df['glacier_runoff_all'].values, 
-                label=f'All Glaciers ({glacier_fraction_all*100:.1f}% of catchment)', 
+            ax.plot(plot_dates, plot_df['glacier_runoff_all'].values,
+                label=f'All Glaciers — {var_label} ({glacier_fraction_all*100:.1f}% of catchment)',
                 color='blue', alpha=0.8, linewidth=1.5)
-            
-            ax.plot(plot_dates, plot_df['glacier_runoff_large'].values, 
-                label=f'Large Glaciers ≥2 km² ({glacier_fraction_large*100:.1f}% of catchment)', 
+
+            ax.plot(plot_dates, plot_df['glacier_runoff_large'].values,
+                label=f'Large Glaciers >=2 km2 — {var_label} ({glacier_fraction_large*100:.1f}% of catchment)',
                 color='darkblue', alpha=0.7, linewidth=1, linestyle='--')
-            
-            ax.plot(plot_dates, plot_df['glacier_runoff_small'].values, 
-                label=f'Small Glaciers <2 km² ({glacier_fraction_small*100:.1f}% of catchment)', 
+
+            ax.plot(plot_dates, plot_df['glacier_runoff_small'].values,
+                label=f'Small Glaciers <2 km2 — {var_label} ({glacier_fraction_small*100:.1f}% of catchment)',
                 color='cyan', alpha=0.7, linewidth=1, linestyle=':')
-            
+
             # Plot observed streamflow if available
             if 'observed_streamflow_mm' in plot_df.columns:
                 valid_mask = plot_df['observed_streamflow_mm'].notna()
                 if valid_mask.any():
-                    ax.plot(plot_dates[valid_mask], plot_df.loc[valid_mask, 'observed_streamflow_mm'].values, 
-                        label='Observed Streamflow', 
+                    ax.plot(plot_dates[valid_mask], plot_df.loc[valid_mask, 'observed_streamflow_mm'].values,
+                        label='Observed Streamflow',
                         color='black', linewidth=1)
                     self.logger.info(f"Plotted {valid_mask.sum()} days of observed data")
-            
-            ax.set_title(f'Glacier Runoff vs Observed Streamflow (Catchment-Normalized) - Gauge {self.gauge_id}', 
+
+            ax.set_title(f'{var_label} vs Observed Streamflow (Catchment-Normalized) - Gauge {self.gauge_id}',
                         fontsize=14, fontweight='bold')
             ax.set_xlabel('Date')
-            ax.set_ylabel('Discharge (mm/day over catchment area)')
+            ax.set_ylabel(f'{var_label} (mm/day over catchment area)')
             ax.legend(loc='best', fontsize=10)
             ax.grid(True, linestyle='--', alpha=0.7)
             
@@ -1644,10 +1673,10 @@ class GloGEMProcessor:
                     ax.plot(x, monthly_obs.values, 'ko-', linewidth=2, markersize=8, 
                         label='Observed Streamflow')
             
-            ax.set_title(f'Monthly Regime: Glacier Runoff (Catchment-Normalized) vs Observed\nGauge {self.gauge_id}', 
+            ax.set_title(f'Monthly Regime: {var_label} (Catchment-Normalized) vs Observed\nGauge {self.gauge_id}',
                         fontsize=14, fontweight='bold')
             ax.set_xlabel('Month')
-            ax.set_ylabel('Mean Discharge (mm/day over catchment area)')
+            ax.set_ylabel(f'Mean {var_label} (mm/day over catchment area)')
             ax.set_xticks(x)
             ax.set_xticklabels(month_names)
             ax.legend(loc='best', fontsize=10)
@@ -1811,6 +1840,13 @@ class MultiSubbasinGloGEMProcessor:
         self.basin_name = config.get('basin_name', 'Indus')
         self.debug = config.get('debug', False)
 
+        self.irrigation_variable = config.get('irrigation_variable', 'discharge').lower()
+        if self.irrigation_variable not in _VALID_IRRIGATION_VARS:
+            raise ValueError(
+                f"irrigation_variable must be one of {_VALID_IRRIGATION_VARS}, "
+                f"got '{self.irrigation_variable}'"
+            )
+
         self.model_dir = self.main_dir / config.get('config_dir')
         self.glogem_dir = config.get('glogem_dir')
         if self.glogem_dir:
@@ -1863,12 +1899,12 @@ class MultiSubbasinGloGEMProcessor:
         simulation_start = pd.to_datetime(self.start_date)
         self.logger.info(f"Date range: {start_date_for_file.date()} → {end_date_for_file.date()}")
 
-        # --- Load GloGEM Discharge NetCDF ONCE ---
-        nc_path = self._get_netcdf_path('Discharge')
+        # --- Load GloGEM NetCDF ONCE for configured irrigation variable ---
+        nc_path = self._get_netcdf_path(self.irrigation_variable.capitalize())
         if not nc_path.exists():
-            raise FileNotFoundError(f"GloGEM Discharge NetCDF not found: {nc_path}")
+            raise FileNotFoundError(f"GloGEM {self.irrigation_variable} NetCDF not found: {nc_path}")
 
-        self.logger.info(f"Loading GloGEM Discharge: {nc_path}")
+        self.logger.info(f"Loading GloGEM {self.irrigation_variable}: {nc_path}")
         ds_glogem = xr.open_dataset(nc_path)
         all_nc_times = pd.to_datetime(ds_glogem.time.values)
         all_glacier_ids = ds_glogem.glacier_id.values.astype(str)
@@ -1883,9 +1919,9 @@ class MultiSubbasinGloGEMProcessor:
         sim_times = all_nc_times[time_indices]
         self.logger.info(f"Loaded {len(time_indices)} simulation time steps from NetCDF")
 
-        # Load discharge — select sim-window time steps lazily before materialising.
+        # Load the configured variable — select sim-window time steps lazily before materialising.
         # All glacier columns are kept here since different subbasins use different subsets.
-        full_discharge = ds_glogem['discharge'][time_indices, :].values   # (n_sim, n_glaciers)
+        full_discharge = ds_glogem[self.irrigation_variable][time_indices, :].values   # (n_sim, n_glaciers)
         ds_glogem.close()
         full_discharge = np.nan_to_num(full_discharge, nan=0.0).astype(np.float32)
 
@@ -2097,7 +2133,7 @@ class MultiSubbasinGloGEMProcessor:
 
         ds.attrs.update({
             'title': f'Glacier melt irrigation for multi-subbasin catchment {self.gauge_id}',
-            'source': f'GloGEM {self.glogem_scenario}',
+            'source': f'GloGEM {self.irrigation_variable}',
             'n_subbasins': len(processed_subbasins),
             'n_hrus': num_hrus,
         })
