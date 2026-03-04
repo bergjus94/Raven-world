@@ -989,13 +989,10 @@ class ERA5LandAnalyzer(MeteoBase):
                 # 🔧 FIX: Convert boolean to string for NetCDF compatibility
                 elevation_status = "true" if elevation_added else "false"
                 
-                # ✅ UPDATED: Metadata to reflect warm-up inclusion
-                if hasattr(self, 'warmup_date') and self.warmup_date is not None:
-                    warmup_status = "true"
-                    time_range_str = f"{self.warmup_date.date()} to {self.end_date.date()} (includes warm-up)"
-                else:
-                    warmup_status = "false"
-                    time_range_str = f"{self.start_date.date()} to {self.end_date.date()}"
+                # Warm-up data is added later by _add_warmup_to_files;
+                # mark as "false" here so that method knows it still needs to run.
+                warmup_status = "false"
+                time_range_str = f"{self.start_date.date()} to {self.end_date.date()}"
 
                 # Add metadata with proper data types
                 dataset_corrected.attrs.update({
