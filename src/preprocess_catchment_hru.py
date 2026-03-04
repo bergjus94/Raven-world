@@ -1244,7 +1244,7 @@ class CatchmentProcessor:
         if self.landuse_data is None:
             self.reclassify_landuse()
         
-        if self.glacier_data is None and self.coupled:
+        if self.glacier_data is None and self.glacier_dir is not None:
             self.rasterize_glacier_shapefile()
 
         # Debug info after data loading but before processing
@@ -1275,12 +1275,6 @@ class CatchmentProcessor:
             if hasattr(self, 'glacier_id_mapping'):
                 self.logger.debug(f"Glacier ID mapping: {self.glacier_id_mapping}")
         
-        # If not coupled, treat glaciers as landuse class 7
-        if not self.coupled:
-            glacier_mask = ~np.isnan(self.glacier_data)
-            self.landuse_data.values[glacier_mask] = 7
-            self.logger.info(f"Marked {np.count_nonzero(glacier_mask)} glacier cells as landuse class 7")
-        
         # Create criteria dictionary
         criteria_dict = {}
         
@@ -1305,11 +1299,10 @@ class CatchmentProcessor:
         
         if 'landuse' in self.criteria:
             # 1=Forest, 2=Open, 3=Crop, 4=Built, 5=Rock, 6=Water/Lake
-            # 7=Glacier (only in non-coupled mode; in coupled mode glaciers are
-            #   handled separately via the glacier shapefile)
             # 9=Bare Open (ICIMOD Bare Soil → class 9; must be included or entire
             #   high-altitude non-glacier areas are silently dropped)
-            criteria_dict['landuse'] = [1, 2, 3, 4, 5, 6, 9] + ([7] if not self.coupled else [])
+            # Glacier HRUs always come from RGI shapefile, never from landuse reclassification
+            criteria_dict['landuse'] = [1, 2, 3, 4, 5, 6, 9]
         
         if self.debug:
             self.logger.debug(f"Criteria dictionary: {criteria_dict}")
@@ -1337,9 +1330,8 @@ class CatchmentProcessor:
             'W': ((self.aspect_data >= 225) & (self.aspect_data < 315))
         }
         
-        # Handle glaciers if coupled mode is active
-        # ✅ NEW: Create 2 aggregated glacier HRUs (small and large) instead of per-glacier HRUs
-        if self.coupled and self.glacier_data is not None:
+        # Handle glaciers: always create aggregated glacier HRUs from RGI when glacier data available
+        if self.glacier_data is not None:
             glacier_data_np = self.glacier_data
             # Get unique glacier IDs, filtering out NaN and infinite values
             valid_glacier_data = glacier_data_np[~np.isnan(glacier_data_np)]
@@ -1397,12 +1389,14 @@ class CatchmentProcessor:
                     columns['Latitude'].append(lat)
                     columns['Longitude'].append(lon)
                     
-                    # Fill other fields with NaN
-                    for field in ['Elevation', 'Elevation Min', 'Elevation Max', 
-                                'Slope', 'Slope Min', 'Slope Max', 
-                                'Aspect Class', 'Land Use Class']:
+                    # Fill other fields with NaN (except Land Use Class)
+                    for field in ['Elevation', 'Elevation Min', 'Elevation Max',
+                                'Slope', 'Slope Min', 'Slope Max',
+                                'Aspect Class']:
                         columns[field].append(np.nan)
-                    
+                    # MASKED_GLACIER (8) when coupled (GloGEM external), GLACIER (7) when not
+                    columns['Land Use Class'].append(8 if self.coupled else 7)
+
                     self.logger.info(f"Created aggregated glacier HRU {unit_id} with {len(rgi_ids)} glaciers")
                     unit_id += 1
                     
@@ -1478,12 +1472,14 @@ class CatchmentProcessor:
                     columns['Latitude'].append(lat)
                     columns['Longitude'].append(lon)
                     
-                    # Fill other fields with NaN
-                    for field in ['Elevation', 'Elevation Min', 'Elevation Max', 
-                                'Slope', 'Slope Min', 'Slope Max', 
-                                'Aspect Class', 'Land Use Class']:
+                    # Fill other fields with NaN (except Land Use Class)
+                    for field in ['Elevation', 'Elevation Min', 'Elevation Max',
+                                'Slope', 'Slope Min', 'Slope Max',
+                                'Aspect Class']:
                         columns[field].append(np.nan)
-                    
+                    # MASKED_GLACIER (8) when coupled (GloGEM external), GLACIER (7) when not
+                    columns['Land Use Class'].append(8 if self.coupled else 7)
+
                     self.logger.info(f"Created LARGE glacier HRU {unit_id} with {len(large_glacier_ids)} glaciers")
                     self._large_glacier_hru_id = unit_id
                     unit_id += 1
@@ -1506,12 +1502,14 @@ class CatchmentProcessor:
                     columns['Latitude'].append(lat)
                     columns['Longitude'].append(lon)
                     
-                    # Fill other fields with NaN
-                    for field in ['Elevation', 'Elevation Min', 'Elevation Max', 
-                                'Slope', 'Slope Min', 'Slope Max', 
-                                'Aspect Class', 'Land Use Class']:
+                    # Fill other fields with NaN (except Land Use Class)
+                    for field in ['Elevation', 'Elevation Min', 'Elevation Max',
+                                'Slope', 'Slope Min', 'Slope Max',
+                                'Aspect Class']:
                         columns[field].append(np.nan)
-                    
+                    # MASKED_GLACIER (8) when coupled (GloGEM external), GLACIER (7) when not
+                    columns['Land Use Class'].append(8 if self.coupled else 7)
+
                     self.logger.info(f"Created SMALL glacier HRU {unit_id} with {len(small_glacier_ids)} glaciers")
                     self._small_glacier_hru_id = unit_id
                     unit_id += 1
@@ -1563,8 +1561,8 @@ class CatchmentProcessor:
                 elif criterion_name == 'landuse':
                     mask_unit &= (landuse_np == criterion)
             
-            # If coupled mode, exclude glacier cells
-            if self.coupled and self.glacier_data is not None:
+            # Exclude glacier cells (already assigned to glacier HRUs)
+            if self.glacier_data is not None:
                 mask_unit &= (map_unit_ids == 0)
                 
             # Skip empty HRUs

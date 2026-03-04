@@ -878,6 +878,29 @@ class HBVProcessor:
             precip_dim_names = dim_names
             print(f"📊 Using CORDEX downscaled forcing: {model_id} / {scenario}")
 
+        # Override all forcing files when running CMIP6 climate projections.
+        # CMIP6 downscaled output uses the same ERA5-Land variable names/grid.
+        if self.config.get('future', False) and self.config.get('cmip6_models'):
+            models    = self.config['cmip6_models']
+            scenarios = self.config.get('cmip6_scenarios', ['ssp126'])
+            model_id  = models[0].replace('/', '_').replace(' ', '_')
+            future_scens = [s for s in scenarios if s != 'historical']
+            scenario  = future_scens[0] if future_scens else scenarios[0]
+
+            precip_file    = f'cmip6_{model_id}_{scenario}_precip.nc'
+            temp_mean_file = f'cmip6_{model_id}_{scenario}_temp_mean.nc'
+            temp_max_file  = f'cmip6_{model_id}_{scenario}_temp_max.nc'
+            temp_min_file  = f'cmip6_{model_id}_{scenario}_temp_min.nc'
+            precip_var    = 'tp'
+            temp_var      = 't2m'
+            temp_max_var  = 't2m'
+            temp_min_var  = 't2m'
+            grid_weights_file = '../data_obs/GridWeights.txt'
+            precip_weights_file = grid_weights_file
+            dim_names       = "longitude latitude time"
+            precip_dim_names = dim_names
+            print(f"Using CMIP6 forcing: {model_id} / {scenario}")
+
         # ✅ Override precipitation source if TPHiPr is requested
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_file = 'tphipr_precip.nc'
@@ -1138,17 +1161,18 @@ class HBVProcessor:
                 f"    [DEFAULT],  {self.params['HBV'][param_or_name]['X02']},             2.2,        {self.params['HBV'][param_or_name]['X18']},    {self.params['HBV'][param_or_name]['X03']},              0.48",
                 ":EndLandUseParameterList",
                 "",
-                # Glacier land use parameters: active when coupled, commented when uncoupled
-                (":LandUseParameterList" if self.coupled else "#:LandUseParameterList"),
-                ("  :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG" if self.coupled else
+                # Glacier land use parameters: active when NOT coupled (Raven handles glacier melt),
+                # commented when coupled (GloGEM handles glacier melt externally)
+                (":LandUseParameterList" if not self.coupled else "#:LandUseParameterList"),
+                ("  :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG" if not self.coupled else
                  "# :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG"),
-                ("  :Units     ,                  none,                1/d,                1/d,           1/mm" if self.coupled else
+                ("  :Units     ,                  none,                1/d,                1/d,           1/mm" if not self.coupled else
                  "# :Units     ,                  none,                1/d,                1/d,           1/mm"),
-                ("  #                        CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT," if self.coupled else
+                ("  #                        CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT," if not self.coupled else
                  "#   #                       CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT,"),
-                (f"    [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05" if self.coupled else
+                (f"    [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05" if not self.coupled else
                  f"#   [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05"),
-                (":EndLandUseParameterList" if self.coupled else "#:EndLandUseParameterList")
+                (":EndLandUseParameterList" if not self.coupled else "#:EndLandUseParameterList")
             ],
             "#Soil Parameters": [
                 f"#For Ostrich:HBV_Alpha= {self.params['HBV'][param_or_name]['X15']}",
@@ -1268,14 +1292,15 @@ class HBVProcessor:
                 "   :CanopySnowEvap    CANEVP_ALL         CANOPY_SNOW     ATMOSPHERE",
                 "   :SnowBalance       SNOBAL_SIMPLE_MELT SNOW            SNOW_LIQ",
                 "       :-->Overflow     RAVEN_DEFAULT      SNOW_LIQ        PONDED_WATER",
-                # Glacier processes: active when coupled (GloGEM provides melt), commented when uncoupled
-                ("   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER" if self.coupled else
+                # Glacier processes: active when NOT coupled (Raven handles glacier melt),
+                # commented when coupled (GloGEM handles glacier melt externally)
+                ("   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER" if not self.coupled else
                  "#   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER"),
-                ("       :-->Conditional HRU_TYPE IS GLACIER" if self.coupled else
+                ("       :-->Conditional HRU_TYPE IS GLACIER" if not self.coupled else
                  "#       :-->Conditional HRU_TYPE IS GLACIER"),
-                ("   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER" if self.coupled else
+                ("   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER" if not self.coupled else
                  "#   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER"),
-                ("   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER" if self.coupled else
+                ("   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER" if not self.coupled else
                  "#   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER"),
                 "   :Infiltration      INF_HBV            PONDED_WATER    MULTIPLE",
                 "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
