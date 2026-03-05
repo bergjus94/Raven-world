@@ -1,5 +1,5 @@
 # =============================================================================
-# Namelist for gauge 0102
+# Namelist for gauge 0102 (coupled mode)
 # =============================================================================
 
 gauge_id: '0102'
@@ -12,7 +12,7 @@ warm_up_date: '1978-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'
-config_dir: 'test_march/03_model_setups'
+config_dir: 'test_march/03_model_setups_coupled'
 debug: true
 
 # --- Glacier coupling ---
@@ -21,7 +21,7 @@ debug: true
 #                   Raven glacier processes INACTIVE (requires glogem_dir)
 # coupled: false → Raven handles glacier melt internally; HRUs = GLACIER (class 7),
 #                   Raven glacier processes ACTIVE
-coupled: false
+coupled: true
 
 # --- HRU discretization ---
 # Lateral connections: 'multiple' (HRU connects to multiple HRUs downstream) or 'single'
@@ -124,7 +124,7 @@ calibration:
    metrics:
      primary: 'KGE'           # Primary metric: 'KGE', 'NSE', 'PBIAS', 'RMSE'
      secondary: ['NSE', 'PBIAS', 'RMSE']
-   iterations: 10              # Number of SCE-UA iterations
+   iterations: 2              # Number of SCE-UA iterations
    ngs: 2                     # Number of complexes in SCE-UA
    cali_end_date: '1999-12-31'
    vali_end_date: '2014-12-31'

@@ -343,6 +343,18 @@ def main(namelist_path: str, force_reprocess: bool = False):
             traceback.print_exc()
             return False
 
+    # Optional: CMIP6 climate projection downscaling (future=True)
+    if nml.get('future', False) and nml.get('cmip6_models'):
+        print("\n🌍 STEP 5d: Downscaling CMIP6 climate projections (QDM)...")
+        try:
+            from preprocess_climate import process_cmip6_climate
+            process_cmip6_climate(namelist_path, force_reprocess=force_reprocess)
+            print("   ✅ CMIP6 downscaling completed!")
+        except Exception as e:
+            print(f"   ❌ Error in CMIP6 downscaling: {e}")
+            traceback.print_exc()
+            return False
+
     # Compute per-subbasin monthly T/PET averages (multi-subbasin only)
     if nml.get('subbasins'):
         print("   🌡️ Computing per-subbasin monthly T/PET averages...")

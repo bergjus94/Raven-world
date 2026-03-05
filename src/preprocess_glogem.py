@@ -1530,7 +1530,10 @@ class GloGEMProcessor:
             self.logger.info(f"  Small glaciers: {daily_glacier['glacier_runoff_small'].mean():.3f} mm/day")
             
             # --- 4. Load observed streamflow from Q_daily.rvt ---
-            q_file = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs', 'Q_daily.rvt')
+            # Check shared data_obs first, then model-specific dir
+            q_file = self.shared_data_dir / 'Q_daily.rvt'
+            if not q_file.exists():
+                q_file = Path(self.model_dir, f'catchment_{self.gauge_id}', self.model_type, 'data_obs', 'Q_daily.rvt')
             
             obs_series_mm = None
             if not q_file.exists():

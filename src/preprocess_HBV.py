@@ -845,8 +845,8 @@ class HBVProcessor:
             temp_max_var = 't2m'
             temp_min_var = 't2m'
 
-            # ERA5-Land dimension names
-            dim_names = "longitude latitude time"
+            # ERA5-Land dimension names (normalized to lon/lat by preprocess_meteo)
+            dim_names = "lon lat time"
 
             print(f"📊 Using ERA5-Land meteorological data")
 
@@ -874,7 +874,7 @@ class HBVProcessor:
             temp_min_var  = 't2m'
             grid_weights_file = '../data_obs/GridWeights.txt'
             precip_weights_file = grid_weights_file
-            dim_names       = "longitude latitude time"
+            dim_names       = "lon lat time"
             precip_dim_names = dim_names
             print(f"📊 Using CORDEX downscaled forcing: {model_id} / {scenario}")
 
@@ -897,7 +897,7 @@ class HBVProcessor:
             temp_min_var  = 't2m'
             grid_weights_file = '../data_obs/GridWeights.txt'
             precip_weights_file = grid_weights_file
-            dim_names       = "longitude latitude time"
+            dim_names       = "lon lat time"
             precip_dim_names = dim_names
             print(f"Using CMIP6 forcing: {model_id} / {scenario}")
 
@@ -1102,6 +1102,9 @@ class HBVProcessor:
             f":GlobalParameter ADIABATIC_LAPSE    6.0 # ADIABATIC_LAPSE",
             f":GlobalParameter SNOW_SWI  {self.params['HBV'][param_or_name]['X04']} #SNOW_SWI",
         ]
+        # DeltaH glacier method requires SNOW_TO_ICE_DATE (day of year for annual snow-to-ice conversion)
+        if not self.coupled and self.config.get('glacier_method') == 'DeltaH':
+            lines.append(":GlobalParameter SNOW_TO_ICE_DATE    274   # Oct 1 (day of year)")
         avg_runoff = self._compute_avg_annual_runoff()
         if avg_runoff is not None:
             lines.append(
@@ -1270,6 +1273,7 @@ class HBVProcessor:
                 ":CloudCoverMethod    	    CLOUDCOV_NONE",
                 ":PrecipIceptFract    	    PRECIP_ICEPT_USER",
                 ":MonthlyInterpolationMethod MONTHINT_LINEAR_21",
+                *([f":SubdailyMethod          {self.config.get('subdaily_method')}"] if self.config.get('subdaily_method') else []),
                 ":SoilModel                  SOIL_MULTILAYER 3",
                 f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",  # ✅ Still use simulation dates
                 f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}"      # ✅ Still use simulation dates
@@ -1302,6 +1306,10 @@ class HBVProcessor:
                  "#   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER"),
                 ("   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER" if not self.coupled else
                  "#   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER"),
+                # DeltaH glacier geometry update (only when glacier_method: 'DeltaH' and not coupled)
+                *(["   :SnowToIce         ANNUAL             SNOW            GLACIER_ICE",
+                   "   :GlacierDeltaH     HUSS               GLACIER_ICE     GLACIER_ICE"]
+                  if not self.coupled and self.config.get('glacier_method') == 'DeltaH' else []),
                 "   :Infiltration      INF_HBV            PONDED_WATER    MULTIPLE",
                 "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
                 "       :-->Conditional HRU_TYPE IS_NOT GLACIER",

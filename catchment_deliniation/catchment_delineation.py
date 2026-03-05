@@ -1241,13 +1241,13 @@ class CatchmentDelineator:
 def main():
     """Main function"""
     
-    base_dir = "/home/jberg@giub.local/Catchment_delineation"
-    stations_file_pakistan = "/home/jberg@giub.local/Catchment_delineation/gauging_stations/Pakistan_stations.shp"
-    constraint_shapefile = "/home/jberg@giub.local/Catchment_delineation/gauging_stations/constraint_catchment_Indus.shp"
+    base_dir = "/home/jberg@giub.local/Raven-world/Catchment_delineation"
+    stations_file_pakistan = "/home/jberg@giub.local/Raven_world/01_data/topo/gauging_stations/Indus_stations.shp"
+    constraint_shapefile = "/home/jberg@giub.local/Raven_world/01_data/topo/gauging_stations/constraint_catchment_Indus.shp"
     
     # Upper Indus Basin bounding box
     upper_indus_bbox = (
-        69.5,  # West
+        67.5,  # West
         30.0,  # South
         82.0,  # East
         37.5   # North

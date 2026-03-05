@@ -365,6 +365,14 @@ class ERA5LandAnalyzer(MeteoBase):
                         # Normalize coordinates: latitude→lat, flip if decreasing
                         ds = normalize_coords(ds)
 
+                        # Snap coordinates to nearest 0.1° — different ERA5 downloads
+                        # (pre-2021 vs post-2021) have slightly offset grids that cause
+                        # duplicate coordinates when concatenated.
+                        if 'lat' in ds.coords:
+                            ds['lat'] = np.round(ds['lat'].values, 1)
+                        if 'lon' in ds.coords:
+                            ds['lon'] = np.round(ds['lon'].values, 1)
+
                         # ✅ ONLY CLIP - DON'T AGGREGATE YET
                         if clip_bounds is not None and 'lat' in ds.coords:
                             lat_slice = slice(clip_bounds['lat_min'], clip_bounds['lat_max'])
@@ -372,7 +380,7 @@ class ERA5LandAnalyzer(MeteoBase):
                             ds = ds.sel(lat=lat_slice, lon=lon_slice)
 
                         batch_datasets.append(ds)
-                    
+
                     # Concatenate batch
                     if batch_datasets:
                         batch_combined = xr.concat(batch_datasets, dim='time', combine_attrs='drop_conflicts')
@@ -416,6 +424,12 @@ class ERA5LandAnalyzer(MeteoBase):
                     # Normalize coordinates: latitude→lat, flip if decreasing
                     ds = normalize_coords(ds)
 
+                    # Snap coordinates to nearest 0.1° (see batch path comment)
+                    if 'lat' in ds.coords:
+                        ds['lat'] = np.round(ds['lat'].values, 1)
+                    if 'lon' in ds.coords:
+                        ds['lon'] = np.round(ds['lon'].values, 1)
+
                     # ✅ ONLY CLIP - DON'T AGGREGATE YET
                     if clip_bounds is not None and 'lat' in ds.coords:
                         lat_slice = slice(clip_bounds['lat_min'], clip_bounds['lat_max'])
@@ -423,7 +437,7 @@ class ERA5LandAnalyzer(MeteoBase):
                         ds = ds.sel(lat=lat_slice, lon=lon_slice)
 
                     datasets.append(ds)
-                
+
                 # Concatenate
                 ds = xr.concat(datasets, dim='time', combine_attrs='drop_conflicts')
                 

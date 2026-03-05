@@ -1425,6 +1425,9 @@ def parse_arguments():
             # Load params_dir from namelist if not provided
             if not params_dir and 'params_dir' in namelist:
                 params_dir = namelist['params_dir']
+                # Resolve relative paths relative to the namelist file (consistent with preprocess_HBV.py)
+                if not Path(params_dir).is_absolute():
+                    params_dir = str(Path(args.namelist).parent / params_dir)
                 print(f"Using params_dir from namelist: {params_dir}")
             
             # ✅ NEW: Load raven_executable from namelist if not provided

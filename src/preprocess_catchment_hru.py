@@ -586,6 +586,9 @@ class CatchmentProcessor:
             return 'ESA'
 
         unique_vals = set(np.unique(valid).astype(int))
+        # Exclude known nodata values that survived reprojection (e.g. ICIMOD nodata=15)
+        unique_vals.discard(0)
+        unique_vals.discard(15)
 
         overlap_esa    = len(unique_vals & self._ESA_SIGNATURE)
         overlap_icimod = len(unique_vals & self._ICIMOD_SIGNATURE)
@@ -631,15 +634,14 @@ class CatchmentProcessor:
                 f"Use 'ESA', 'ICIMOD', or 'auto'."
             )
 
-        # Validate declared source against auto-detection
+        # Validate declared source against auto-detection (warn only, never override)
         detected = self._detect_landuse_source(raw_values)
         if detected != declared:
             self.logger.warning(
                 f"⚠️  landuse_source in namelist is '{declared}' but auto-detection "
-                f"says '{detected}'.  Overriding to '{detected}' to avoid all-NaN reclassification.  "
-                f"Double-check your landuse_dir path or set landuse_source: 'auto'."
+                f"says '{detected}'.  Trusting the namelist declaration.  "
+                f"If reclassification produces all-NaN, check your landuse_dir path."
             )
-            return detected
 
         return declared
 
@@ -796,6 +798,7 @@ class CatchmentProcessor:
                     landuse_data = src.read(1, window=window)
                     landuse_transform = src.window_transform(window)
                     landuse_crs = src.crs
+                    landuse_nodata = src.nodata
                     
                     self.logger.info(f"Loaded windowed landuse: {landuse_data.shape} "
                                 f"(reduced from {src.shape})")
@@ -817,7 +820,9 @@ class CatchmentProcessor:
                 )
                 landuse = landuse.rio.write_crs(landuse_crs)
                 landuse = landuse.rio.write_transform(landuse_transform)
-                
+                if landuse_nodata is not None:
+                    landuse = landuse.rio.write_nodata(landuse_nodata)
+
                 self.logger.debug(f"Created xarray DataArray with shape {landuse.shape}")
                 
                 # Free the numpy array
@@ -836,10 +841,17 @@ class CatchmentProcessor:
             self.logger.debug("Small landuse file, loading normally")
             landuse = rxr.open_rasterio(landuse_source_path).squeeze()
 
-        # CONVERT TO FLOAT FIRST, THEN HANDLE CLASS 0
-        self.logger.debug("Converting landuse values to float and handling nodata")
+        # CONVERT TO FLOAT FIRST, THEN HANDLE NODATA
+        # Read the raster's declared nodata value (e.g. ICIMOD=15, ESA=0)
+        nodata_val = landuse.attrs.get('_FillValue', None)
+        if nodata_val is None and hasattr(landuse, 'rio') and landuse.rio.nodata is not None:
+            nodata_val = landuse.rio.nodata
+        self.logger.debug(f"Landuse nodata value: {nodata_val}")
+
         landuse_values = landuse.values.astype(np.float32)
         landuse_values[landuse_values == 0] = np.nan
+        if nodata_val is not None and nodata_val != 0:
+            landuse_values[landuse_values == nodata_val] = np.nan
         
         # Update the DataArray with cleaned values
         landuse = xr.DataArray(
@@ -877,6 +889,14 @@ class CatchmentProcessor:
             self.logger.info(f"Resampling landuse to match DEM grid: {landuse.shape} -> {self.dem_data.shape}")
             landuse = landuse.rio.reproject_match(self.dem_data)
         
+        # ── Re-apply nodata masking after reprojection/resampling ──────────
+        # Reprojection can reintroduce the original nodata value (e.g. ICIMOD nodata=15)
+        if nodata_val is not None and nodata_val != 0:
+            reintroduced = np.count_nonzero(landuse.values == nodata_val)
+            if reintroduced > 0:
+                self.logger.debug(f"Re-masking {reintroduced} pixels with nodata value {nodata_val} after reprojection")
+                landuse.values[landuse.values == nodata_val] = np.nan
+
         # ── Detect / validate landuse source and apply reclassification ──────
         raw = landuse.values.copy()
         source = self._get_landuse_source(raw)
@@ -1060,6 +1080,19 @@ class CatchmentProcessor:
             with rasterio.open(glacier_raster_path) as src:
                 glacier_raster = src.read(1)
             self.glacier_data = glacier_raster
+            # Rebuild ID mappings from the clipped shapefile (needed for HRU creation)
+            if glacier_path.exists() and not hasattr(self, 'glacier_int_to_str'):
+                try:
+                    gdf = gpd.read_file(glacier_path)
+                    if len(gdf) > 0 and 'RGIId' in gdf.columns:
+                        gdf['numeric_id_str'] = gdf['RGIId'].apply(lambda x: x.split('.')[-1])
+                        gdf['numeric_id_int'] = gdf['numeric_id_str'].astype(int)
+                        self.glacier_id_mapping = dict(zip(gdf['numeric_id_str'], gdf['RGIId']))
+                        self.glacier_int_to_str = dict(zip(gdf['numeric_id_int'], gdf['numeric_id_str']))
+                except Exception as e:
+                    self.logger.warning(f"Could not rebuild glacier ID mappings: {e}")
+                    self.glacier_id_mapping = {}
+                    self.glacier_int_to_str = {}
             return glacier_raster
         
         # Ensure glacier clipping is done
@@ -1247,6 +1280,13 @@ class CatchmentProcessor:
         if self.glacier_data is None and self.glacier_dir is not None:
             self.rasterize_glacier_shapefile()
 
+        # When not coupled, burn glacier pixels as landuse class 7 so they
+        # participate in criteria-based discretization (elevation bands, aspect, etc.)
+        if self.glacier_data is not None and not self.coupled:
+            glacier_mask = (self.glacier_data > 0) & np.isfinite(self.glacier_data)
+            self.landuse_data.values[glacier_mask] = 7
+            self.logger.info(f"Burned {int(np.count_nonzero(glacier_mask))} glacier pixels as landuse class 7 for criteria-based discretization")
+
         # Debug info after data loading but before processing
         if self.debug:
             self.logger.debug("Debugging catchment processing")
@@ -1301,8 +1341,10 @@ class CatchmentProcessor:
             # 1=Forest, 2=Open, 3=Crop, 4=Built, 5=Rock, 6=Water/Lake
             # 9=Bare Open (ICIMOD Bare Soil → class 9; must be included or entire
             #   high-altitude non-glacier areas are silently dropped)
-            # Glacier HRUs always come from RGI shapefile, never from landuse reclassification
             criteria_dict['landuse'] = [1, 2, 3, 4, 5, 6, 9]
+            # When not coupled, glacier pixels (class 7) participate in normal discretization
+            if self.glacier_data is not None and not self.coupled:
+                criteria_dict['landuse'].append(7)
         
         if self.debug:
             self.logger.debug(f"Criteria dictionary: {criteria_dict}")
@@ -1330,8 +1372,9 @@ class CatchmentProcessor:
             'W': ((self.aspect_data >= 225) & (self.aspect_data < 315))
         }
         
-        # Handle glaciers: always create aggregated glacier HRUs from RGI when glacier data available
-        if self.glacier_data is not None:
+        # Handle glaciers: create aggregated glacier HRUs only when coupled (GloGEM external melt)
+        # When not coupled, glacier pixels participate in normal criteria-based discretization
+        if self.glacier_data is not None and self.coupled:
             glacier_data_np = self.glacier_data
             # Get unique glacier IDs, filtering out NaN and infinite values
             valid_glacier_data = glacier_data_np[~np.isnan(glacier_data_np)]
@@ -1561,8 +1604,8 @@ class CatchmentProcessor:
                 elif criterion_name == 'landuse':
                     mask_unit &= (landuse_np == criterion)
             
-            # Exclude glacier cells (already assigned to glacier HRUs)
-            if self.glacier_data is not None:
+            # Exclude glacier cells only when coupled (already assigned to aggregated glacier HRUs)
+            if self.glacier_data is not None and self.coupled:
                 mask_unit &= (map_unit_ids == 0)
                 
             # Skip empty HRUs

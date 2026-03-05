@@ -1,59 +1,67 @@
-gauge_id: '0118'
-start_date: '1985-01-01'
-end_date: '1997-12-31'
-cali_end_date: '1991-12-31'
-warm_up_date: '1983-01-01'
+# =============================================================================
+# Namelist for gauge 0101 (coupled mode, ERA5 forcing, ESA landuse)
+# =============================================================================
+
+gauge_id: '0101'
+start_date: '2016-06-22'
+end_date: '2022-12-31'
+cali_end_date: '2020-12-31'
+warm_up_date: '2015-06-22'
+
 model_type: 'HBV'
 template: true
-main_dir: '/home/jberg/OneDrive/Raven_worldwide/03_model_setups_14.02'
+main_dir: '/home/jberg/OneDrive/Raven_worldwide'
+config_dir: 'test_march/03_model_setups_coupled'
+debug: true
+
 coupled: true
-# lateral connections: 'multiple': HRU connects to multiple HRUs downstream, 'single': each HRU has one lateral connection
+
 nconnect: 'multiple'
-# possible discretization options: 'elevation', 'landuse', 'aspect', 'slope'
 criteria:
   - elevation
   - landuse
-future: false
-debug: true
-meteo_source: 'ERA5'
 
+meteo_source: 'ERA5'
+future: false
+
+# =============================================================================
 # Paths (relative to main_dir or absolute)
+# =============================================================================
 meteo_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/Indus-Era5'
 meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
 shape_dir: '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp'
 raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
-#glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_15.rgi60.SouthAsiaEast/15_rgi60_SouthAsiaEast.shp'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
 glogem_dir: '01_data/GloGEM/Indus/GMB'
-params_dir: 'src/config/default_params.yaml'
+params_dir: '../src/config/default_params.yaml'
 
-
-config_dir: '03_model_setups_snowline'
-
-
-# Forcing files (can be empty or filled as needed)
+# =============================================================================
+# Forcing file templates (populated by meteo preprocessors)
+# =============================================================================
 forcing_files:
   - 'era5_land_2m_temperature_2000-2000_daily_max_combined.nc'
   - 'era5_land_2m_temperature_2000-2000_daily_min_combined.nc'
   - 'era5_land_2m_temperature_2000-2000_daily_mean_combined.nc'
   - 'era5_land_total_precipitation_2000-2000_daily_combined.nc'
 
-# Forcing files (can be empty or filled as needed)
 forcing_files_har:
   - 'har_land_2m_temperature_2000-2000_daily_max_combined.nc'
   - 'har_land_2m_temperature_2000-2000_daily_min_combined.nc'
   - 'har_land_2m_temperature_2000-2000_daily_mean_combined.nc'
   - 'har_land_total_precipitation_2000-2000_daily_combined.nc'
 
+# =============================================================================
+# Calibration settings
+# =============================================================================
 calibration:
    metrics:
-     primary: 'KGE'           # Primary metric for optimization
-     secondary: ['NSE', 'PBIAS', 'RMSE']  # Secondary metrics to report
-   iterations: 2          # Number of iterations for calibration
-   ngs: 2 
-   cali_end_date: '1995-12-31' 
-   vali_end_date: '2010-12-31'    
+     primary: 'KGE'
+     secondary: ['NSE', 'PBIAS', 'RMSE']
+   iterations: 10
+   ngs: 2
+   cali_end_date: '2020-12-31'
+   vali_end_date: '2022-12-31'
 
 raven_executable: '/home/jberg/RavenHydroFramework/build/Raven'

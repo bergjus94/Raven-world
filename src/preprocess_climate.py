@@ -1,32 +1,44 @@
 #!/usr/bin/env python3
 """
-preprocess_climate.py  —  Bias-correct CORDEX WAS-44 projections to the
+preprocess_climate.py  —  Bias-correct climate projections to the
 ERA5-Land 0.1° grid using xclim Quantile Delta Mapping (QDM).
+
+Supported sources
+-----------------
+CORDEX WAS-44  (CMIP5-era RCM downscaling)
+  - Input:  CORDEX files clipped by download_cordex.py
+  - Class:  CORDEXDownscaler
+  - Output: cordex_{model}_{scenario}_{vartype}.nc
+
+CMIP6 GCMs  (raw ISIMIP3b-compatible models)
+  - Input:  CMIP6 files downloaded by download_cmip6.py
+  - Class:  CMIP6Downscaler
+  - Output: cmip6_{model}_{scenario}_{vartype}.nc
 
 Workflow (per variable/scenario)
 ---------------------------------
-1. Load CORDEX file (clipped, from download_cordex.py)
+1. Load source file (CORDEX or CMIP6)
 2. Convert units:  K → °C  |  kg m⁻² s⁻¹ → mm day⁻¹
-3. Regrid CORDEX rotated-pole → ERA5-Land 0.1° regular grid  (xesmf bilinear)
+3. Regrid to ERA5-Land 0.1° regular grid  (xesmf bilinear)
 4. Lapse-rate elevation correction for temperature
-       T_out = T_regridded + 0.0065 × (orog_CORDEX_on_ERA5grid − ERA5_elevation)
-5. Train QDM on training period (default 1980–2005, monthly grouping)
-       ref  = ERA5-Land  |  hist = CORDEX historical  (both on ERA5 grid)
-6. Apply QDM to scenario data (historical or rcp26/45/85)
+       T_out = T_regridded + 0.0065 × (orog_source_on_ERA5grid − ERA5_elevation)
+5. Train QDM on training period (monthly grouping)
+       ref  = ERA5-Land  |  hist = source historical  (both on ERA5 grid)
+6. Apply QDM to scenario data
 7. Save ERA5-Land-compatible NetCDF to  data_obs/
 
 Output file convention
 -----------------------
-  cordex_{model}_{scenario}_temp_mean.nc   variable 't2m'  units '°C'
-  cordex_{model}_{scenario}_temp_min.nc    variable 't2m'  units '°C'
-  cordex_{model}_{scenario}_temp_max.nc    variable 't2m'  units '°C'
-  cordex_{model}_{scenario}_precip.nc      variable 'tp'   units 'mm/day'
+  {prefix}_{model}_{scenario}_temp_mean.nc   variable 't2m'  units '°C'
+  {prefix}_{model}_{scenario}_temp_min.nc    variable 't2m'  units '°C'
+  {prefix}_{model}_{scenario}_temp_max.nc    variable 't2m'  units '°C'
+  {prefix}_{model}_{scenario}_precip.nc      variable 'tp'   units 'mm/day'
 
 These are drop-in replacements for the ERA5-Land files.  The model
 preprocessors (preprocess_HBV.py etc.) switch to them when
   future: true
-  cordex_models: [...]
-  cordex_scenarios: [...]
+  cordex_models: [...]   or   cmip6_models: [...]
+  cordex_scenarios: [...]      cmip6_scenarios: [...]
 are set in the namelist YAML.
 
 Required packages
@@ -86,7 +98,7 @@ except ImportError:
     _MATPLOTLIB_AVAILABLE = False
 
 # Precipitation jitter threshold: values below this are perturbed to avoid
-# multiplicative QDM division-by-zero when CORDEX has many dry days.
+# multiplicative QDM division-by-zero when source has many dry days.
 _PRECIP_JITTER_THRESH = "0.1 mm d-1"
 
 
@@ -97,11 +109,20 @@ _PRECIP_JITTER_THRESH = "0.1 mm d-1"
 _LAPSE_RATE      = 0.0065   # K m⁻¹ (standard environmental lapse rate)
 _QDM_NQUANTILES  = 20
 _TRAINING_START  = "1980-01-01"
-_TRAINING_END    = "2005-12-31"
+_TRAINING_END    = "2005-12-31"    # CORDEX default
+_CMIP6_TRAINING_END = "2014-12-31" # CMIP6 historical ends 2014
 _TIME_CHUNK      = 365       # days per dask chunk
 
 # CORDEX variable names that correspond to each variable type
 _CORDEX_VAR: dict[str, str] = {
+    "temp_mean": "tas",
+    "temp_min":  "tasmin",
+    "temp_max":  "tasmax",
+    "precip":    "pr",
+}
+
+# CMIP6 variable names — same as CORDEX (both follow CF/CMIP conventions)
+_CMIP6_VAR: dict[str, str] = {
     "temp_mean": "tas",
     "temp_min":  "tasmin",
     "temp_max":  "tasmax",
@@ -151,22 +172,46 @@ def _setup_logger(name: str, debug: bool = False) -> logging.Logger:
 
 
 # ===========================================================================
-# CORDEXDownscaler
+# _DownscalerBase  —  shared base for CORDEXDownscaler and CMIP6Downscaler
 # ===========================================================================
 
-class CORDEXDownscaler:
+class _DownscalerBase:
     """
-    Downscale one CORDEX model to ERA5-Land 0.1° resolution using xclim QDM.
+    Shared base class for CORDEX and CMIP6 QDM downscalers.
 
-    Parameters
-    ----------
-    namelist_path : str or Path
-        Raven-world namelist YAML for the target catchment.
-    model_id : str
-        GloGEM/Raven-world model ID (e.g. 'SMHI-RCA_MPIESM').
-    force_reprocess : bool
-        Re-compute even if output files already exist.
+    Subclasses must set these class-level attributes and implement the
+    abstract methods listed below.
+
+    Class attributes to override
+    ----------------------------
+    _DEFAULT_TRAIN_START : str     ISO date for fallback training start
+    _DEFAULT_TRAIN_END   : str     ISO date for fallback training end
+    _output_prefix       : str     file prefix ('cordex' or 'cmip6')
+    _source_label        : str     human-readable label ('CORDEX' or 'CMIP6')
+    _train_start_key     : str     namelist key for training start
+    _train_end_key       : str     namelist key for training end
+    _SOURCE_VAR          : dict    {variable_type: source_var_name}
+    _default_scenarios   : list    default scenarios if not in namelist
+    _scenarios_key       : str     namelist key for scenarios list
+
+    Abstract methods (must implement)
+    ----------------------------------
+    _build_regridder(da_sample)     → xe.Regridder
+    _load_source(vtype, scen, ...)  → xr.DataArray  on ERA5 grid
+    _load_source_orog_on_era5()     → Optional[xr.DataArray]
+    _source_file_path(vtype, scen)  → Path
     """
+
+    # Defaults — override in subclasses
+    _DEFAULT_TRAIN_START = "1980-01-01"
+    _DEFAULT_TRAIN_END   = "2005-12-31"
+    _output_prefix       = "base"
+    _source_label        = "source"
+    _train_start_key     = "train_start"
+    _train_end_key       = "train_end"
+    _SOURCE_VAR: dict    = _CORDEX_VAR
+    _default_scenarios   = ["historical"]
+    _scenarios_key       = "scenarios"
 
     def __init__(
         self,
@@ -174,19 +219,8 @@ class CORDEXDownscaler:
         model_id: str,
         force_reprocess: bool = False,
     ) -> None:
-        if not _XESMF_AVAILABLE:
-            raise ImportError(
-                "xesmf is required for CORDEX regridding.\n"
-                "  conda install -c conda-forge xesmf"
-            )
-        if not _XCLIM_AVAILABLE:
-            raise ImportError(
-                "xsdba (or xclim) is required for QDM bias correction.\n"
-                "  conda install -c conda-forge xsdba xclim"
-            )
-
-        self.namelist_path  = Path(namelist_path)
-        self.model_id       = model_id
+        self.namelist_path   = Path(namelist_path)
+        self.model_id        = model_id
         self.force_reprocess = force_reprocess
 
         with open(self.namelist_path) as f:
@@ -200,37 +234,34 @@ class CORDEXDownscaler:
         )
         self.shared_data_dir.mkdir(parents=True, exist_ok=True)
 
-        cordex_dir = self.config.get("cordex_dir")
-        if not cordex_dir:
-            raise ValueError(
-                "namelist must contain a 'cordex_dir' key pointing to the "
-                "downloaded CORDEX data directory."
-            )
-        self.cordex_dir = Path(cordex_dir)
-
         self.train_start = pd.Timestamp(
-            self.config.get("cordex_train_start", _TRAINING_START)
+            self.config.get(self._train_start_key, self._DEFAULT_TRAIN_START)
         )
         self.train_end = pd.Timestamp(
-            self.config.get("cordex_train_end", _TRAINING_END)
+            self.config.get(self._train_end_key, self._DEFAULT_TRAIN_END)
         )
 
         self.debug  = self.config.get("debug", False)
+        class_name  = type(self).__name__
         self.logger = _setup_logger(
-            f"CORDEXDownscaler_{self.gauge_id}_{model_id}", self.debug
+            f"{class_name}_{self.gauge_id}_{model_id}", self.debug
         )
-        self.logger.info(f"CORDEXDownscaler  gauge={self.gauge_id}  model={model_id}")
-        self.logger.info(f"  CORDEX dir  : {self.cordex_dir}")
+        self.logger.info(f"{class_name}  gauge={self.gauge_id}  model={model_id}")
         self.logger.info(f"  Output dir  : {self.shared_data_dir}")
         self.logger.info(
-            f"  Train period: {self.train_start.date()} – {self.train_end.date()}"
+            f"  Train period: {self.train_start.date()} - {self.train_end.date()}"
         )
 
+        # Optional: raw ERA5 meteo directory for extending training data
+        meteo_dir = self.config.get("meteo_dir")
+        self.meteo_dir: Optional[Path] = Path(meteo_dir) if meteo_dir else None
+
         # Lazy-built caches
-        self._regridder: Optional[object] = None   # xesmf.Regridder
-        self._era5_target_grid: Optional[xr.Dataset] = None
-        self._era5_elev: Optional[xr.DataArray] = None
-        self._cordex_orog_on_era5: Optional[xr.DataArray] = None
+        self._regridder: Optional[object]              = None
+        self._era5_target_grid: Optional[xr.Dataset]   = None
+        self._era5_elev: Optional[xr.DataArray]        = None
+        self._source_orog_cache: Optional[xr.DataArray] = None
+        self._era5_ref_cache: dict                      = {}
 
     # ── ERA5-Land target grid ────────────────────────────────────────────────
 
@@ -239,7 +270,6 @@ class CORDEXDownscaler:
         if self._era5_target_grid is not None:
             return self._era5_target_grid
 
-        # Find any existing ERA5-Land file to read the grid from
         for vtype in ("precip", "temp_mean", "temp_min"):
             era5_file = self.shared_data_dir / _ERA5_SOURCE_FILE[vtype]
             if era5_file.exists():
@@ -251,20 +281,16 @@ class CORDEXDownscaler:
             )
 
         with xr.open_dataset(era5_file) as ds:
-            # Standardise to 'lat'/'lon' for xesmf
             lat_coord = "latitude" if "latitude" in ds.coords else "lat"
             lon_coord = "longitude" if "longitude" in ds.coords else "lon"
             lat = ds[lat_coord].values
             lon = ds[lon_coord].values
 
-        # xesmf expects 'lat' and 'lon'
         self._era5_target_grid = xr.Dataset({
             "lat": xr.DataArray(lat, dims=["lat"],
-                                attrs={"units": "degrees_north",
-                                       "axis": "Y"}),
+                                attrs={"units": "degrees_north", "axis": "Y"}),
             "lon": xr.DataArray(lon, dims=["lon"],
-                                attrs={"units": "degrees_east",
-                                       "axis": "X"}),
+                                attrs={"units": "degrees_east",  "axis": "X"}),
         })
         return self._era5_target_grid
 
@@ -294,9 +320,6 @@ class CORDEXDownscaler:
                 )
                 return None
 
-        # The elevation file may cover a larger domain or use a different grid
-        # than the catchment-clipped ERA5 files. Interpolate it to the target
-        # ERA5 grid so that coordinate alignment works correctly.
         tgt = self._get_era5_target_grid()
         lat_dim = "latitude" if "latitude" in da.dims else "lat"
         lon_dim = "longitude" if "longitude" in da.dims else "lon"
@@ -304,7 +327,6 @@ class CORDEXDownscaler:
             {lat_dim: tgt["lat"].values, lon_dim: tgt["lon"].values},
             method="linear",
         )
-        # Rename to standard (latitude, longitude) after interp
         rename = {}
         if "lat" in da.dims and "lat" != "latitude":
             rename["lat"] = "latitude"
@@ -316,83 +338,30 @@ class CORDEXDownscaler:
         self._era5_elev = da
         return da
 
-    def _load_cordex_orog_on_era5(self) -> Optional[xr.DataArray]:
-        """Return CORDEX orography (m) regridded to the ERA5-Land grid."""
-        if self._cordex_orog_on_era5 is not None:
-            return self._cordex_orog_on_era5
-
-        orog_path = self.cordex_dir / self.model_id / "orog.nc"
-        if not orog_path.exists():
-            self.logger.warning(
-                f"CORDEX orog.nc not found at {orog_path} – "
-                "lapse-rate correction skipped."
-            )
-            return None
-
-        era5_elev = self._load_era5_elevation()
-        if era5_elev is None:
-            return None
-
-        with xr.open_dataset(orog_path) as ds:
-            orog_var = "orog" if "orog" in ds else list(ds.data_vars)[0]
-            da_orog  = ds[orog_var].load()
-
-        self.logger.info("Regridding CORDEX orog to ERA5-Land grid…")
-        orog_on_era5 = self._regrid(da_orog)
-        self._cordex_orog_on_era5 = orog_on_era5
-        return orog_on_era5
+    def _load_source_orog_on_era5(self) -> Optional[xr.DataArray]:
+        """Return source model orography (m) regridded to ERA5-Land grid.
+        Subclasses must implement this."""
+        raise NotImplementedError
 
     # ── xesmf regridder ──────────────────────────────────────────────────────
 
     def _build_regridder(self, da_sample: xr.DataArray) -> "xe.Regridder":
-        """
-        Build (and cache) an xesmf bilinear regridder from the CORDEX grid
-        to the ERA5-Land grid.
-
-        Parameters
-        ----------
-        da_sample : DataArray
-            A representative CORDEX DataArray (any time step; used only for
-            the spatial grid structure).
-        """
-        tgt = self._get_era5_target_grid()
-
-        # Build a source Dataset that xesmf can read the 2-D lat/lon from.
-        # CORDEX clipped files store geographic lat/lon as 2-D auxiliary
-        # coordinates; xesmf picks them up automatically when they are
-        # present as data variables named 'lat' and 'lon'.
-        if "time" in da_sample.dims:
-            one_step = da_sample.isel(time=0).drop_vars("time", errors="ignore")
-        else:
-            one_step = da_sample
-        src_ds = one_step.to_dataset(name="_v")
-        if "lat" not in src_ds and "lat" in one_step.coords:
-            src_ds["lat"] = one_step.coords["lat"]
-        if "lon" not in src_ds and "lon" in one_step.coords:
-            src_ds["lon"] = one_step.coords["lon"]
-
-        regridder = xe.Regridder(
-            src_ds, tgt,
-            method         = "bilinear",
-            extrap_method  = "nearest_s2d",
-            ignore_degenerate = True,
-        )
-        self.logger.debug("xesmf bilinear regridder built.")
-        return regridder
+        """Build (and cache) an xesmf bilinear regridder.
+        Subclasses must implement this."""
+        raise NotImplementedError
 
     def _regrid(self, da: xr.DataArray) -> xr.DataArray:
         """
-        Regrid *da* from the CORDEX rotated-pole grid to the ERA5-Land grid.
+        Regrid *da* from the source grid to the ERA5-Land grid.
 
-        Returns a DataArray with dims (…, lat, lon) renamed to
-        (…, latitude, longitude) to match ERA5-Land convention.
+        Returns a DataArray with dims renamed to (…, latitude, longitude)
+        to match ERA5-Land convention.
         """
         if self._regridder is None:
             self._regridder = self._build_regridder(da)
 
         da_out = self._regridder(da)
 
-        # Rename lat/lon → latitude/longitude to match ERA5-Land files
         rename = {}
         if "lat" in da_out.dims:
             rename["lat"] = "latitude"
@@ -407,25 +376,21 @@ class CORDEXDownscaler:
 
     @staticmethod
     def _convert_units(da: xr.DataArray, variable_type: str) -> xr.DataArray:
-        """Convert CORDEX raw units to ERA5-Land-compatible units (°C, mm/day)."""
+        """Convert source raw units to ERA5-Land-compatible units (°C, mm/day)."""
         units = da.attrs.get("units", "")
 
         if variable_type in ("temp_mean", "temp_min", "temp_max"):
-            # CORDEX stores temperature in Kelvin
             if units in ("K", "Kelvin", "kelvin"):
                 da = da - 273.15
                 da.attrs["units"] = "degC"
-            # If already °C, just normalise the attribute
             elif units in ("degC", "°C", "C", "celsius"):
                 da.attrs["units"] = "degC"
 
         elif variable_type == "precip":
-            # CORDEX stores precip as kg m-2 s-1 → mm/day (×86400)
             if units in ("kg m-2 s-1", "kg m**-2 s**-1", "kgm-2s-1",
                          "kg/m2/s", "kg/(m2*s)"):
                 da = da * 86400.0
                 da = da.clip(min=0)
-            # Normalise all precip unit strings to 'mm d-1' (CF-recognised rate unit)
             da.attrs["units"] = "mm d-1"
 
         return da
@@ -434,22 +399,18 @@ class CORDEXDownscaler:
 
     def _lapse_rate_correct(self, da_temp: xr.DataArray) -> xr.DataArray:
         """
-        Adjust temperature for the elevation difference between the CORDEX
-        coarse orography and the ERA5-Land fine orography.
+        Adjust temperature for elevation difference between source and ERA5-Land.
 
-            T_out = T_in + 0.0065 × (orog_CORDEX − orog_ERA5)   [°C]
-
-        If elevation data is unavailable the DataArray is returned unchanged.
+            T_out = T_in + 0.0065 × (orog_source − orog_ERA5)   [°C]
         """
         era5_elev   = self._load_era5_elevation()
-        cordex_orog = self._load_cordex_orog_on_era5()
+        source_orog = self._load_source_orog_on_era5()
 
-        if era5_elev is None or cordex_orog is None:
+        if era5_elev is None or source_orog is None:
             return da_temp
 
-        # Align spatial coordinates
         try:
-            dz = cordex_orog - era5_elev   # positive → CORDEX is higher
+            dz = source_orog - era5_elev
         except Exception:
             self.logger.warning(
                 "Could not align elevation arrays for lapse-rate correction; "
@@ -457,12 +418,92 @@ class CORDEXDownscaler:
             )
             return da_temp
 
-        correction  = _LAPSE_RATE * dz   # °C  (positive → CORDEX higher → ERA5 warmer)
+        correction  = _LAPSE_RATE * dz
         da_out      = da_temp + correction
         da_out.attrs.update(da_temp.attrs)
         return da_out
 
     # ── ERA5-Land reference loader ────────────────────────────────────────────
+
+    # Raw ERA5-Land file naming conventions (monthly files in meteo_dir)
+    _ERA5_RAW_TEMP_GLOB   = "era5_land_2m_temperature_{year}_{month:02d}.nc"
+    _ERA5_RAW_PRECIP_GLOB = "era5_land_total_precipitation_{year}_{month:02d}.nc"
+
+    def _load_era5_from_raw(
+        self,
+        variable_type: str,
+        start_year: int,
+        end_year: int,
+        tgt_lat: np.ndarray,
+        tgt_lon: np.ndarray,
+    ) -> Optional[xr.DataArray]:
+        """
+        Build a daily ERA5-Land DataArray for *variable_type* from the raw
+        monthly ERA5 files stored in ``self.meteo_dir``.
+
+        Covers [start_year-01-01, end_year-12-31]. Returns None if files are
+        missing or meteo_dir is not configured.
+        """
+        if self.meteo_dir is None:
+            return None
+
+        if variable_type in ("temp_mean", "temp_min", "temp_max"):
+            raw_glob = self._ERA5_RAW_TEMP_GLOB
+            raw_var  = "t2m"
+        else:
+            raw_glob = self._ERA5_RAW_PRECIP_GLOB
+            raw_var  = "tp"
+
+        yearly: list[xr.DataArray] = []
+        for year in range(start_year, end_year + 1):
+            monthly: list[xr.DataArray] = []
+            for month in range(1, 13):
+                fname = self.meteo_dir / raw_glob.format(year=year, month=month)
+                if not fname.exists():
+                    self.logger.debug(f"  Raw ERA5 file missing: {fname.name} — stop")
+                    return xr.concat(yearly, dim="valid_time") if yearly else None
+                ds = xr.open_dataset(fname)
+                # Clip to a generous buffer around the target grid
+                lat_min = float(tgt_lat.min()) - 0.5
+                lat_max = float(tgt_lat.max()) + 0.5
+                lon_min = float(tgt_lon.min()) - 0.5
+                lon_max = float(tgt_lon.max()) + 0.5
+                raw = ds[raw_var].sel(
+                    latitude =slice(lat_max, lat_min),   # lat is decreasing
+                    longitude=slice(lon_min, lon_max),
+                ).load()
+                ds.close()
+                monthly.append(raw)
+
+            year_da = xr.concat(monthly, dim="valid_time")
+
+            # Resample hourly → daily
+            if variable_type == "temp_mean":
+                daily = year_da.resample(valid_time="1D").mean() - 273.15
+            elif variable_type == "temp_min":
+                daily = year_da.resample(valid_time="1D").min()  - 273.15
+            elif variable_type == "temp_max":
+                daily = year_da.resample(valid_time="1D").max()  - 273.15
+            else:  # precip: sum hours, m → mm
+                daily = year_da.resample(valid_time="1D").sum() * 1000.0
+                daily = daily.clip(min=0)
+
+            yearly.append(daily)
+            self.logger.debug(f"  Raw ERA5 loaded: {year}  ({len(daily.valid_time)} days)")
+
+        if not yearly:
+            return None
+
+        combined = xr.concat(yearly, dim="valid_time")
+
+        # Snap to the exact target lat/lon grid
+        combined = combined.interp(
+            latitude=tgt_lat, longitude=tgt_lon, method="nearest"
+        )
+        combined = combined.rename(
+            {"valid_time": "time", "latitude": "latitude", "longitude": "longitude"}
+        )
+        return combined
 
     def _load_era5_ref(
         self,
@@ -471,10 +512,14 @@ class CORDEXDownscaler:
         end:   Optional[pd.Timestamp] = None,
     ) -> xr.DataArray:
         """
-        Load an ERA5-Land DataArray for use as QDM reference.
+        Load ERA5-Land DataArray for use as QDM reference.
 
-        Returns a DataArray with dim names (time, latitude, longitude)
-        and CF-compatible attributes.
+        If the processed file in data_obs/ does not cover the requested *end*
+        date (or self.train_end when end is None), and meteo_dir is configured
+        in the namelist, the missing years are loaded transparently from the
+        raw ERA5-Land monthly files and appended.  This lets the QDM training
+        period extend beyond the model calibration period without any change to
+        end_date or the model files.
         """
         era5_file = self.shared_data_dir / _ERA5_SOURCE_FILE[variable_type]
         if not era5_file.exists():
@@ -484,17 +529,54 @@ class CORDEXDownscaler:
             )
 
         era5_var = _ERA5_OUTPUT_VAR[variable_type]
-        ds = xr.open_dataset(era5_file, chunks={"time": _TIME_CHUNK})
-        da = ds[era5_var]
 
-        # Standardise dim names
-        rename = {}
-        if "lat" in da.dims:
-            rename["lat"] = "latitude"
-        if "lon" in da.dims:
-            rename["lon"] = "longitude"
-        if rename:
-            da = da.rename(rename)
+        # Use cache to avoid reloading/reprocessing raw files multiple times
+        cache_key = variable_type
+        if cache_key not in self._era5_ref_cache:
+            ds = xr.open_dataset(era5_file, chunks={"time": _TIME_CHUNK})
+            da = ds[era5_var]
+
+            rename = {}
+            if "lat" in da.dims and "latitude" not in da.dims:
+                rename["lat"] = "latitude"
+            if "lon" in da.dims and "longitude" not in da.dims:
+                rename["lon"] = "longitude"
+            if rename:
+                da = da.rename(rename)
+
+            processed_end = pd.Timestamp(da.time.values[-1])
+            want_end      = end if end is not None else self.train_end
+
+            if want_end > processed_end and self.meteo_dir is not None:
+                ext_start = processed_end.year + 1
+                ext_end   = want_end.year
+                self.logger.info(
+                    f"  ERA5 processed file ends {processed_end.date()}; "
+                    f"extending from raw files {ext_start}–{ext_end} ..."
+                )
+                tgt_lat = da["latitude"].values
+                tgt_lon = da["longitude"].values
+                extension = self._load_era5_from_raw(
+                    variable_type, ext_start, ext_end, tgt_lat, tgt_lon
+                )
+                if extension is not None:
+                    da = xr.concat(
+                        [da.load(), extension], dim="time"
+                    ).sortby("time")
+                    new_end = pd.Timestamp(da.time.values[-1])
+                    self.logger.info(
+                        f"  ERA5 extended to {new_end.date()} "
+                        f"({len(da.time)} days total)"
+                    )
+                else:
+                    self.logger.warning(
+                        "  Raw ERA5 extension failed; training limited to "
+                        f"{processed_end.date()}"
+                    )
+
+            self._era5_ref_cache[cache_key] = da
+
+        da = self._era5_ref_cache[cache_key]
 
         if start or end:
             da = da.sel(time=slice(
@@ -502,84 +584,37 @@ class CORDEXDownscaler:
                 end.strftime("%Y-%m-%d")   if end   else None,
             ))
 
-        # CF attributes for xclim — always override to ensure consistent units
         if variable_type == "precip":
-            da.attrs["units"]        = "mm d-1"   # ERA5 file stores 'mm'; normalise to rate
-            da.attrs["cell_methods"] = "time: sum within days"
+            da.attrs["units"]         = "mm d-1"
+            da.attrs["cell_methods"]  = "time: sum within days"
             da.attrs["standard_name"] = "precipitation_flux"
         else:
-            da.attrs["units"]        = "degC"
-            da.attrs["cell_methods"] = "time: mean within days"
+            da.attrs["units"]         = "degC"
+            da.attrs["cell_methods"]  = "time: mean within days"
             da.attrs["standard_name"] = "air_temperature"
 
         da.name = era5_var
         return da
 
-    # ── CORDEX loader ────────────────────────────────────────────────────────
+    # ── Source loader (abstract) ──────────────────────────────────────────────
 
-    def _load_cordex(
+    def _load_source(
         self,
         variable_type: str,
         scenario: str,
         start: Optional[pd.Timestamp] = None,
         end:   Optional[pd.Timestamp] = None,
     ) -> xr.DataArray:
-        """
-        Load a CORDEX variable, convert units, regrid and (for T) lapse-correct.
+        """Load source variable, convert units, regrid, and lapse-correct.
+        Subclasses must implement this."""
+        raise NotImplementedError
 
-        Returns a DataArray on the ERA5-Land grid with dim names
-        (time, latitude, longitude) and CF attributes.
-        """
-        cordex_var = _CORDEX_VAR[variable_type]
-        nc_path    = self.cordex_dir / self.model_id / scenario / f"{cordex_var}.nc"
+    # ── Source file path (abstract) ──────────────────────────────────────────
 
-        if not nc_path.exists():
-            raise FileNotFoundError(
-                f"CORDEX file not found: {nc_path}. "
-                "Run download_cordex.py first."
-            )
-
-        ds = xr.open_dataset(nc_path, chunks={"time": _TIME_CHUNK})
-        da = ds[cordex_var]
-
-        # Normalise CORDEX timestamps to midnight (CORDEX often stores noon T12:00:00,
-        # ERA5-Land uses midnight T00:00:00 — they must match for xsdba alignment)
-        try:
-            midnight_times = da.indexes["time"].normalize()
-            da = da.assign_coords(time=midnight_times)
-        except AttributeError:
-            pass  # cftime index — handle below if needed
-
-        if start or end:
-            da = da.sel(time=slice(
-                start.strftime("%Y-%m-%d") if start else None,
-                end.strftime("%Y-%m-%d")   if end   else None,
-            ))
-
-        # Unit conversion (operates lazily on dask arrays)
-        da = self._convert_units(da, variable_type)
-
-        # Regrid to ERA5 grid
-        self.logger.debug(f"  Regridding {cordex_var} ({scenario})…")
-        da = self._regrid(da)
-
-        # Lapse-rate correction for temperature
-        if variable_type != "precip":
-            da = self._lapse_rate_correct(da)
-
-        # CF attributes for xclim — always override to ensure consistent units
-        era5_var = _ERA5_OUTPUT_VAR[variable_type]
-        da.name  = era5_var
-        if variable_type == "precip":
-            da.attrs["units"]        = "mm d-1"
-            da.attrs["cell_methods"] = "time: sum within days"
-            da.attrs["standard_name"] = "precipitation_flux"
-        else:
-            da.attrs["units"]        = "degC"
-            da.attrs["cell_methods"] = "time: mean within days"
-            da.attrs["standard_name"] = "air_temperature"
-
-        return da
+    def _source_file_path(self, vtype: str, scen: str) -> Path:
+        """Return path to source file for one variable / scenario.
+        Subclasses must implement this."""
+        raise NotImplementedError
 
     # ── QDM training and application ─────────────────────────────────────────
 
@@ -593,9 +628,8 @@ class CORDEXDownscaler:
         kind = _QDM_KIND[variable_type]
         self.logger.info(
             f"  Training QDM (kind='{kind}', nq={_QDM_NQUANTILES}, "
-            f"group=time.month, period={self.train_start.year}–{self.train_end.year})"
+            f"group=time.month, period={self.train_start.year}-{self.train_end.year})"
         )
-        # xsdba requires a single chunk along the adjustment dimension (time)
         ref  = ref.chunk({"time": -1})
         hist = hist.chunk({"time": -1})
         qdm = QuantileDeltaMapping.train(
@@ -611,7 +645,10 @@ class CORDEXDownscaler:
 
     def _output_path(self, variable_type: str, scenario: str) -> Path:
         model_safe = self.model_id.replace("/", "_").replace(" ", "_")
-        return self.shared_data_dir / f"cordex_{model_safe}_{scenario}_{variable_type}.nc"
+        return (
+            self.shared_data_dir
+            / f"{self._output_prefix}_{model_safe}_{scenario}_{variable_type}.nc"
+        )
 
     def _save_output(
         self,
@@ -634,14 +671,14 @@ class CORDEXDownscaler:
             da = da.rename(rename)
 
         long_names = {
-            "temp_mean": "2 metre temperature (daily mean) - CORDEX QDM-corrected",
-            "temp_min":  "2 metre temperature (daily minimum) - CORDEX QDM-corrected",
-            "temp_max":  "2 metre temperature (daily maximum) - CORDEX QDM-corrected",
-            "precip":    "Total precipitation - CORDEX QDM-corrected",
+            "temp_mean": f"2 metre temperature (daily mean) - {self._source_label} QDM-corrected",
+            "temp_min":  f"2 metre temperature (daily minimum) - {self._source_label} QDM-corrected",
+            "temp_max":  f"2 metre temperature (daily maximum) - {self._source_label} QDM-corrected",
+            "precip":    f"Total precipitation - {self._source_label} QDM-corrected",
         }
         da.attrs["long_name"] = long_names[variable_type]
         da.attrs["source"]    = (
-            f"CORDEX WAS-44 {self.model_id}, bias-corrected with xclim QDM "
+            f"{self._source_label} {self.model_id}, bias-corrected with xclim QDM "
             f"(ref: ERA5-Land {self.train_start.year}-{self.train_end.year})"
         )
 
@@ -651,26 +688,18 @@ class CORDEXDownscaler:
         if extra:
             da = da.drop_vars(extra, errors="ignore")
 
-        # Also remove 'coordinates' attr if it references a now-dropped variable
-        # (e.g. ERA5 sets coordinates='number' on tp/t2m; Raven fails if the
-        # referenced variable is absent from the output file).
         da.attrs.pop("coordinates", None)
 
-        # Ensure standard dimension order (time, latitude, longitude) to match
-        # the ERA5-Land files that Raven expects.
+        # Ensure standard dimension order (time, latitude, longitude)
         target_dims = [d for d in ("time", "latitude", "longitude") if d in da.dims]
         if list(da.dims) != target_dims:
             da = da.transpose(*target_dims)
 
         ds = da.to_dataset()
 
-        # Add ERA5-Land elevation to the output file so that Raven can apply
-        # its internal lapse-rate correction from the grid-cell elevation to
-        # individual HRU elevations (required by :ElevationVarNameNC elevation
-        # in the .rvt file).
+        # Add ERA5-Land elevation variable for Raven's :ElevationVarNameNC
         era5_elev = self._load_era5_elevation()
         if era5_elev is not None:
-            # Drop any non-spatial coords (e.g. 'number') before merging
             elev_clean = era5_elev.drop_vars(
                 [c for c in era5_elev.coords
                  if c not in ("latitude", "longitude")],
@@ -680,7 +709,7 @@ class CORDEXDownscaler:
         else:
             self.logger.warning(
                 "ERA5-Land elevation not available — "
-                "elevation variable omitted from CORDEX output file."
+                f"elevation variable omitted from {self._output_prefix} output file."
             )
 
         encoding: dict = {
@@ -699,11 +728,8 @@ class CORDEXDownscaler:
 
         # Final scrub before writing:
         # 1. Remove 'coordinates' attr — xarray may regenerate it from encoding
-        #    even after da.attrs.pop(), causing Raven to look up 'number' which
-        #    doesn't exist in the CORDEX output file.
-        # 2. Replace non-ASCII characters in all string attributes — unicode chars
-        #    (em-dash, superscript 2, etc.) force NetCDF4 to use NC_STRING type
-        #    instead of NC_CHAR, which Raven's libnetcdf cannot handle.
+        # 2. Replace non-ASCII characters — unicode forces NC_STRING type which
+        #    Raven's libnetcdf cannot handle.
         def _ascii_safe(s: str) -> str:
             return s.encode("ascii", errors="replace").decode("ascii")
 
@@ -716,10 +742,10 @@ class CORDEXDownscaler:
                     obj.attrs[k] = _ascii_safe(v)
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"  Saving {out_path.name} …")
+        self.logger.info(f"  Saving {out_path.name} ...")
         ds.to_netcdf(out_path, encoding=encoding)
         size_mb = out_path.stat().st_size / 1e6
-        self.logger.info(f"  ✅ Saved: {out_path.name}  ({size_mb:.1f} MB)")
+        self.logger.info(f"  OK Saved: {out_path.name}  ({size_mb:.1f} MB)")
 
     # ── Diagnostic plots ──────────────────────────────────────────────────────
 
@@ -728,27 +754,19 @@ class CORDEXDownscaler:
         variable_type: str,
         scenario: str,
         era5_train: xr.DataArray,
-        cordex_raw_train: xr.DataArray,
+        source_raw_train: xr.DataArray,
         corrected_full: xr.DataArray,
     ) -> Optional[Path]:
         """
         Save a multi-panel diagnostic figure for one variable / scenario.
 
-        Layout (3 rows × 3 cols, 16 × 12 in)
-        ─────────────────────────────────────
-        Row 0  Monthly climatology [cols 0-1] │ QQ plot            [col 2]
-        Row 1  Daily time series 2-yr zoom    │ Wet-day / bias     [col 2]
-               [cols 0-1]                     │
-        Row 2  Spatial mean maps: ERA5 | CORDEX raw | corrected
-               [col 0]            [col 1]     │ [col 2]
-
-        Parameters
-        ----------
-        era5_train, cordex_raw_train
-            Training-period DataArrays (pre-jitter), dims (time, latitude, longitude).
-        corrected_full
-            Full-period QDM-corrected DataArray — sliced to training period internally
-            for the climatology / QQ / spatial panels.
+        Layout (3 rows x 3 cols, 16 x 12 in)
+        ──────────────────────────────────────
+        Row 0  Monthly climatology [cols 0-1] | QQ plot            [col 2]
+        Row 1  Daily time series 2-yr zoom    | Wet-day / bias     [col 2]
+               [cols 0-1]                     |
+        Row 2  Spatial mean maps: ERA5 | source raw | corrected
+               [col 0]            [col 1]     | [col 2]
         """
         if not _MATPLOTLIB_AVAILABLE:
             self.logger.warning(
@@ -757,16 +775,19 @@ class CORDEXDownscaler:
             return None
 
         self.logger.info(
-            f"  Generating diagnostic plots ({variable_type} / {scenario})…"
+            f"  Generating diagnostic plots ({variable_type} / {scenario})..."
         )
 
         model_safe = self.model_id.replace("/", "_").replace(" ", "_")
         catchment_dir = self.model_dir / f"catchment_{self.gauge_id}"
         plot_dir = catchment_dir / "plots" / "future_climate"
         plot_dir.mkdir(parents=True, exist_ok=True)
-        plot_path  = plot_dir / f"cordex_{model_safe}_{scenario}_{variable_type}.png"
+        plot_path = (
+            plot_dir
+            / f"{self._output_prefix}_{model_safe}_{scenario}_{variable_type}.png"
+        )
 
-        unit_label = "mm/day" if variable_type == "precip" else "°C"
+        unit_label = "mm/day" if variable_type == "precip" else "degC"
         var_title  = {
             "temp_mean": "Mean Temperature",
             "temp_min":  "Min Temperature",
@@ -777,9 +798,8 @@ class CORDEXDownscaler:
         # ── Compute spatial means (lazy → numpy) ─────────────────────────────
         sp_dims = [d for d in ("latitude", "longitude") if d in era5_train.dims]
         era5_sm = era5_train.mean(dim=sp_dims).compute()
-        raw_sm  = cordex_raw_train.mean(dim=sp_dims).compute()
+        raw_sm  = source_raw_train.mean(dim=sp_dims).compute()
 
-        # Slice corrected to training period
         t0 = pd.Timestamp(era5_train.time.values[0]).strftime("%Y-%m-%d")
         t1 = pd.Timestamp(era5_train.time.values[-1]).strftime("%Y-%m-%d")
         try:
@@ -794,7 +814,7 @@ class CORDEXDownscaler:
 
         # ── Spatial time-mean maps ────────────────────────────────────────────
         era5_map = era5_train.mean(dim="time").compute()
-        raw_map  = cordex_raw_train.mean(dim="time").compute()
+        raw_map  = source_raw_train.mean(dim="time").compute()
         try:
             corr_map = (
                 corrected_full
@@ -820,7 +840,7 @@ class CORDEXDownscaler:
         raw_sorted  = np.sort(raw_sm.values.ravel())
         corr_sorted = np.sort(corr_sm.values.ravel())
         n = min(len(era5_sorted), len(raw_sorted), len(corr_sorted))
-        step = max(1, n // 2000)   # subsample for plot clarity
+        step = max(1, n // 2000)
         era5_qq = era5_sorted[:n:step]
         raw_qq  = raw_sorted[:n:step]
         corr_qq = corr_sorted[:n:step]
@@ -868,7 +888,7 @@ class CORDEXDownscaler:
         ax_m3      = fig.add_subplot(gs[2, 2])
 
         fig.suptitle(
-            f"CORDEX QDM — {var_title}  |  {model_safe}  |  {scenario}"
+            f"{self._source_label} QDM -- {var_title}  |  {model_safe}  |  {scenario}"
             f"  |  catchment {self.gauge_id}",
             fontsize=12, y=1.005,
         )
@@ -881,9 +901,9 @@ class CORDEXDownscaler:
         ax_monthly.plot(months, era5_clim, "o-",  color=col_era5, lw=2,   ms=5,
                         label="ERA5-Land")
         ax_monthly.plot(months, raw_clim,  "^--", color=col_raw,  lw=1.5, ms=5,
-                        label="CORDEX raw")
+                        label=f"{self._source_label} raw")
         ax_monthly.plot(months, corr_clim, "s-",  color=col_corr, lw=1.5, ms=5,
-                        label="CORDEX corrected")
+                        label=f"{self._source_label} corrected")
         ax_monthly.set_xticks(months)
         ax_monthly.set_xticklabels(month_labels)
         ax_monthly.set_ylabel(unit_label)
@@ -893,14 +913,14 @@ class CORDEXDownscaler:
 
         # Panel B — QQ plot
         ax_qq.scatter(era5_qq, raw_qq,  s=5, c=col_raw,  alpha=0.5,
-                      label="CORDEX raw", rasterized=True)
+                      label=f"{self._source_label} raw", rasterized=True)
         ax_qq.scatter(era5_qq, corr_qq, s=5, c=col_corr, alpha=0.5,
-                      label="CORDEX corrected", rasterized=True)
+                      label=f"{self._source_label} corrected", rasterized=True)
         _diag = [min(era5_qq.min(), raw_qq.min(), corr_qq.min()),
                  max(era5_qq.max(), raw_qq.max(), corr_qq.max())]
         ax_qq.plot(_diag, _diag, "k--", lw=1, label="1:1")
         ax_qq.set_xlabel(f"ERA5-Land  ({unit_label})")
-        ax_qq.set_ylabel(f"CORDEX  ({unit_label})")
+        ax_qq.set_ylabel(f"{self._source_label}  ({unit_label})")
         ax_qq.set_title("QQ plot (spatial mean, training)")
         ax_qq.legend(fontsize=8)
         ax_qq.grid(True, alpha=0.3)
@@ -909,9 +929,9 @@ class CORDEXDownscaler:
         ax_ts.plot(t_era5, era5_ts.values, color=col_era5, lw=1.2,
                    label="ERA5-Land", alpha=0.85)
         ax_ts.plot(t_raw,  raw_ts.values,  color=col_raw,  lw=0.8,
-                   label="CORDEX raw", alpha=0.6)
+                   label=f"{self._source_label} raw", alpha=0.6)
         ax_ts.plot(t_corr, corr_ts.values, color=col_corr, lw=0.9,
-                   label="CORDEX corrected", alpha=0.75)
+                   label=f"{self._source_label} corrected", alpha=0.75)
         ax_ts.set_ylabel(unit_label)
         ax_ts.set_title("Daily spatial-mean time series (first 2 yr of training)")
         ax_ts.legend(fontsize=9)
@@ -922,8 +942,10 @@ class CORDEXDownscaler:
         if variable_type == "precip":
             w = 0.25
             ax_extra.bar(x - w, era5_wet, w, color=col_era5, alpha=0.75, label="ERA5")
-            ax_extra.bar(x,     raw_wet,  w, color=col_raw,  alpha=0.75, label="CORDEX raw")
-            ax_extra.bar(x + w, corr_wet, w, color=col_corr, alpha=0.75, label="Corrected")
+            ax_extra.bar(x,     raw_wet,  w, color=col_raw,  alpha=0.75,
+                         label=f"{self._source_label} raw")
+            ax_extra.bar(x + w, corr_wet, w, color=col_corr, alpha=0.75,
+                         label="Corrected")
             ax_extra.set_xticks(x)
             ax_extra.set_xticklabels(month_labels, fontsize=8)
             ax_extra.set_ylabel("Wet-day fraction  (> 1 mm/d)")
@@ -933,7 +955,7 @@ class CORDEXDownscaler:
         else:
             w = 0.35
             ax_extra.bar(x - w/2, raw_bias,  w, color=col_raw,  alpha=0.8,
-                         label="CORDEX raw bias")
+                         label=f"{self._source_label} raw bias")
             ax_extra.bar(x + w/2, corr_bias, w, color=col_corr, alpha=0.8,
                          label="Corrected bias")
             ax_extra.axhline(0, color="k", lw=1)
@@ -971,15 +993,14 @@ class CORDEXDownscaler:
             return im
 
         _map_panel(ax_m1, era5_map,  f"ERA5 mean ({unit_label})")
-        _map_panel(ax_m2, raw_map,   f"CORDEX raw mean ({unit_label})")
+        _map_panel(ax_m2, raw_map,   f"{self._source_label} raw mean ({unit_label})")
         im3 = _map_panel(ax_m3, corr_map, f"Corrected mean ({unit_label})")
         _plt.colorbar(im3, ax=[ax_m1, ax_m2, ax_m3], shrink=0.65,
                       label=unit_label, pad=0.02)
 
-        # ── Save ──────────────────────────────────────────────────────────────
         fig.savefig(plot_path, dpi=120, bbox_inches="tight")
         _plt.close(fig)
-        self.logger.info(f"  📊 Diagnostic plot saved: {plot_path}")
+        self.logger.info(f"  Diagnostic plot saved: {plot_path}")
         return plot_path
 
     # ── High-level entry points ───────────────────────────────────────────────
@@ -991,7 +1012,7 @@ class CORDEXDownscaler:
         Steps
         -----
         1. Load ERA5-Land reference (training period)
-        2. Load CORDEX historical (training period, regridded + corrected)
+        2. Load source historical (training period, regridded + corrected)
         3. Align training period
         4. Train QDM
         5. Load scenario data (full period)
@@ -1006,7 +1027,7 @@ class CORDEXDownscaler:
         if out_path.exists() and not self.force_reprocess:
             size_mb = out_path.stat().st_size / 1e6
             self.logger.info(
-                f"  ✅ Exists: {out_path.name}  ({size_mb:.1f} MB)  (skip)"
+                f"  OK Exists: {out_path.name}  ({size_mb:.1f} MB)  (skip)"
             )
             return out_path
 
@@ -1016,84 +1037,94 @@ class CORDEXDownscaler:
             f"{'─'*56}"
         )
 
-        # 1 & 2: Load reference and historical data (training period)
-        self.logger.info("  Loading ERA5-Land reference (training period)…")
+        # 1: Load ERA5-Land reference (training period)
+        self.logger.info("  Loading ERA5-Land reference (training period)...")
         era5_train = self._load_era5_ref(
             variable_type, self.train_start, self.train_end
         )
 
-        self.logger.info("  Loading CORDEX historical (training period)…")
-        cordex_train = self._load_cordex(
+        # 2: Load source historical (training period)
+        self.logger.info(
+            f"  Loading {self._source_label} historical (training period)..."
+        )
+        source_train = self._load_source(
             variable_type, "historical",
             self.train_start, self.train_end,
         )
 
-        # 3: Align to common time period (may differ by a few days at boundaries)
+        # 3: Align to common time period
         t_start = max(
             pd.Timestamp(era5_train.time.values[0]),
-            pd.Timestamp(cordex_train.time.values[0]),
+            pd.Timestamp(source_train.time.values[0]),
         )
         t_end = min(
             pd.Timestamp(era5_train.time.values[-1]),
-            pd.Timestamp(cordex_train.time.values[-1]),
+            pd.Timestamp(source_train.time.values[-1]),
         )
         era5_train   = era5_train.sel(
             time=slice(t_start.strftime("%Y-%m-%d"), t_end.strftime("%Y-%m-%d"))
         )
-        cordex_train = cordex_train.sel(
+        source_train = source_train.sel(
             time=slice(t_start.strftime("%Y-%m-%d"), t_end.strftime("%Y-%m-%d"))
         )
+
+        # Inner-join on time: drops days present in one but not the other
+        # (e.g. Feb 29 in ERA5 that a noleap-calendar model lacks).
+        # xsdba requires ref and hist to have identical time coordinates.
+        if len(era5_train.time) != len(source_train.time):
+            era5_train, source_train = xr.align(
+                era5_train, source_train, join="inner", copy=False
+            )
+            self.logger.debug(
+                f"  Inner-joined training time axes: "
+                f"{len(era5_train.time)} common days."
+            )
+
         n_train = len(era5_train.time)
         self.logger.info(
-            f"  Aligned training period: {t_start.date()} – {t_end.date()} "
+            f"  Aligned training period: {t_start.date()} - {t_end.date()} "
             f"({n_train} days)"
         )
 
         # 4: Train QDM
-        # Save pre-jitter copies for diagnostic plots (jitter modifies the arrays).
-        era5_train_orig  = era5_train
-        cordex_train_orig = cordex_train
+        era5_train_orig   = era5_train
+        source_train_orig = source_train
 
-        # For precipitation, apply jitter to near-zero values before multiplicative
-        # QDM to avoid division-by-zero when CORDEX has more dry days than ERA5.
         if variable_type == "precip" and _jitter_under_thresh is not None:
             self.logger.info(
-                f"  Applying jitter (thresh={_PRECIP_JITTER_THRESH}) for precip QDM…"
+                f"  Applying jitter (thresh={_PRECIP_JITTER_THRESH}) for precip QDM..."
             )
-            era5_train    = _jitter_under_thresh(era5_train,    _PRECIP_JITTER_THRESH)
-            cordex_train  = _jitter_under_thresh(cordex_train,  _PRECIP_JITTER_THRESH)
+            era5_train   = _jitter_under_thresh(era5_train,   _PRECIP_JITTER_THRESH)
+            source_train = _jitter_under_thresh(source_train, _PRECIP_JITTER_THRESH)
 
-        qdm = self._train_qdm(era5_train, cordex_train, variable_type)
+        qdm = self._train_qdm(era5_train, source_train, variable_type)
 
         # 5: Load scenario data (full period)
-        self.logger.info(f"  Loading CORDEX {scenario} (full period)…")
-        cordex_sim = self._load_cordex(variable_type, scenario)
+        self.logger.info(
+            f"  Loading {self._source_label} {scenario} (full period)..."
+        )
+        source_sim = self._load_source(variable_type, scenario)
 
-        # 6: Apply QDM — xsdba requires a single chunk along the time dimension
-        self.logger.info(f"  Applying QDM…")
-        cordex_sim = cordex_sim.chunk({"time": -1})
+        # 6: Apply QDM
+        self.logger.info("  Applying QDM...")
+        source_sim = source_sim.chunk({"time": -1})
         if variable_type == "precip" and _jitter_under_thresh is not None:
-            cordex_sim = _jitter_under_thresh(cordex_sim, _PRECIP_JITTER_THRESH)
-        corrected = qdm.adjust(cordex_sim)
+            source_sim = _jitter_under_thresh(source_sim, _PRECIP_JITTER_THRESH)
+        corrected = qdm.adjust(source_sim)
         if variable_type == "precip":
             corrected = corrected.clip(min=0)
 
-        # 6b: Prepend ERA5-Land warmup data if ERA5 starts before CORDEX.
-        # This fills the gap so Raven can initialise model storages (snowpack,
-        # soil moisture, groundwater) before the CORDEX projection period begins.
-        # ERA5 and QDM-corrected CORDEX share the same statistical distribution,
-        # so the concatenation at the CORDEX start date is seamless.
+        # 6b: Prepend ERA5-Land warmup if ERA5 starts before the source data.
         era5_full = self._load_era5_ref(variable_type)
-        era5_full_start  = pd.Timestamp(era5_full.time.values[0])
-        cordex_data_start = pd.Timestamp(corrected.time.values[0])
+        era5_full_start    = pd.Timestamp(era5_full.time.values[0])
+        source_data_start  = pd.Timestamp(corrected.time.values[0])
 
-        if era5_full_start < cordex_data_start:
+        if era5_full_start < source_data_start:
             warmup_end = (
-                cordex_data_start - pd.Timedelta(days=1)
+                source_data_start - pd.Timedelta(days=1)
             ).strftime("%Y-%m-%d")
             era5_warmup = era5_full.sel(time=slice(None, warmup_end))
 
-            # Drop any scalar coords that would block concatenation (e.g. 'number')
             keep_coords = {"time", "latitude", "longitude", "lat", "lon"}
             extra = [c for c in era5_warmup.coords if c not in keep_coords]
             if extra:
@@ -1101,7 +1132,7 @@ class CORDEXDownscaler:
 
             n_warmup = len(era5_warmup.time)
             self.logger.info(
-                f"  Prepending ERA5 warmup: {era5_full_start.date()} → "
+                f"  Prepending ERA5 warmup: {era5_full_start.date()} -> "
                 f"{warmup_end}  ({n_warmup} days)"
             )
             corrected = xr.concat(
@@ -1113,11 +1144,11 @@ class CORDEXDownscaler:
         # 7: Save
         self._save_output(corrected, out_path, variable_type)
 
-        # 8: Diagnostic plots (non-fatal — never break the pipeline)
+        # 8: Diagnostic plots (non-fatal)
         try:
             self._save_diagnostic_plots(
                 variable_type, scenario,
-                era5_train_orig, cordex_train_orig, corrected,
+                era5_train_orig, source_train_orig, corrected,
             )
         except Exception as _plot_exc:
             self.logger.warning(f"  Diagnostic plots skipped: {_plot_exc}")
@@ -1132,32 +1163,24 @@ class CORDEXDownscaler:
         """
         Process all variable / scenario combinations for this model.
 
-        Parameters
-        ----------
-        scenarios : list of str, optional
-            Defaults to namelist key 'cordex_scenarios' or ['historical','rcp45','rcp85'].
-        variables : list of str, optional
-            Defaults to all four: ['temp_mean','temp_min','temp_max','precip'].
-
         Returns
         -------
         dict mapping (variable_type, scenario) → output Path
         """
         if scenarios is None:
             scenarios = self.config.get(
-                "cordex_scenarios", ["historical", "rcp45", "rcp85"]
+                self._scenarios_key, self._default_scenarios
             )
         if variables is None:
-            variables = list(_CORDEX_VAR.keys())
+            variables = list(self._SOURCE_VAR.keys())
 
         results: dict = {}
         for vtype in variables:
             for scen in scenarios:
-                cordex_var = _CORDEX_VAR[vtype]
-                src_file   = self.cordex_dir / self.model_id / scen / f"{cordex_var}.nc"
+                src_file = self._source_file_path(vtype, scen)
                 if not src_file.exists():
                     self.logger.warning(
-                        f"  ⏭️  Skip {vtype}/{scen}: "
+                        f"  Skip {vtype}/{scen}: "
                         f"source not found ({src_file.name})"
                     )
                     continue
@@ -1165,14 +1188,408 @@ class CORDEXDownscaler:
                     out_path = self.process_variable(vtype, scen)
                     results[(vtype, scen)] = out_path
                 except Exception as exc:
-                    self.logger.error(f"  ❌ {vtype}/{scen}: {exc}")
+                    self.logger.error(f"  {vtype}/{scen}: {exc}")
                     self.logger.debug(traceback.format_exc())
 
         return results
 
 
 # ===========================================================================
-# Top-level entry point for create_input_files.py
+# CORDEXDownscaler  —  CORDEX WAS-44 rotated-pole RCM data
+# ===========================================================================
+
+class CORDEXDownscaler(_DownscalerBase):
+    """
+    Downscale one CORDEX model to ERA5-Land 0.1° resolution using xclim QDM.
+
+    Parameters
+    ----------
+    namelist_path : str or Path
+        Raven-world namelist YAML for the target catchment.
+    model_id : str
+        GloGEM/Raven-world model ID (e.g. 'SMHI-RCA_MPIESM').
+    force_reprocess : bool
+        Re-compute even if output files already exist.
+    """
+
+    _DEFAULT_TRAIN_START = "1980-01-01"
+    _DEFAULT_TRAIN_END   = "2005-12-31"
+    _output_prefix       = "cordex"
+    _source_label        = "CORDEX"
+    _train_start_key     = "cordex_train_start"
+    _train_end_key       = "cordex_train_end"
+    _SOURCE_VAR          = _CORDEX_VAR
+    _default_scenarios   = ["historical", "rcp45", "rcp85"]
+    _scenarios_key       = "cordex_scenarios"
+
+    def __init__(
+        self,
+        namelist_path: "str | Path",
+        model_id: str,
+        force_reprocess: bool = False,
+    ) -> None:
+        if not _XESMF_AVAILABLE:
+            raise ImportError(
+                "xesmf is required for CORDEX regridding.\n"
+                "  conda install -c conda-forge xesmf"
+            )
+        if not _XCLIM_AVAILABLE:
+            raise ImportError(
+                "xsdba (or xclim) is required for QDM bias correction.\n"
+                "  conda install -c conda-forge xsdba xclim"
+            )
+
+        super().__init__(namelist_path, model_id, force_reprocess)
+
+        cordex_dir = self.config.get("cordex_dir")
+        if not cordex_dir:
+            raise ValueError(
+                "namelist must contain a 'cordex_dir' key pointing to the "
+                "downloaded CORDEX data directory."
+            )
+        self.cordex_dir = Path(cordex_dir)
+        self.logger.info(f"  CORDEX dir  : {self.cordex_dir}")
+
+    def _build_regridder(self, da_sample: xr.DataArray) -> "xe.Regridder":
+        """
+        Build xesmf bilinear regridder from CORDEX rotated-pole grid to ERA5.
+
+        CORDEX clipped files store geographic lat/lon as 2-D auxiliary
+        coordinates alongside the 1-D rotated rlat/rlon dimensions.
+        """
+        tgt = self._get_era5_target_grid()
+
+        if "time" in da_sample.dims:
+            one_step = da_sample.isel(time=0).drop_vars("time", errors="ignore")
+        else:
+            one_step = da_sample
+        src_ds = one_step.to_dataset(name="_v")
+        if "lat" not in src_ds and "lat" in one_step.coords:
+            src_ds["lat"] = one_step.coords["lat"]
+        if "lon" not in src_ds and "lon" in one_step.coords:
+            src_ds["lon"] = one_step.coords["lon"]
+
+        regridder = xe.Regridder(
+            src_ds, tgt,
+            method            = "bilinear",
+            extrap_method     = "nearest_s2d",
+            ignore_degenerate = True,
+        )
+        self.logger.debug("xesmf bilinear regridder built (CORDEX rotated-pole).")
+        return regridder
+
+    def _load_source_orog_on_era5(self) -> Optional[xr.DataArray]:
+        """Return CORDEX orography (m) regridded to the ERA5-Land grid."""
+        if self._source_orog_cache is not None:
+            return self._source_orog_cache
+
+        orog_path = self.cordex_dir / self.model_id / "orog.nc"
+        if not orog_path.exists():
+            self.logger.warning(
+                f"CORDEX orog.nc not found at {orog_path} – "
+                "lapse-rate correction skipped."
+            )
+            return None
+
+        era5_elev = self._load_era5_elevation()
+        if era5_elev is None:
+            return None
+
+        with xr.open_dataset(orog_path) as ds:
+            orog_var = "orog" if "orog" in ds else list(ds.data_vars)[0]
+            da_orog  = ds[orog_var].load()
+
+        self.logger.info("Regridding CORDEX orog to ERA5-Land grid...")
+        orog_on_era5 = self._regrid(da_orog)
+        self._source_orog_cache = orog_on_era5
+        return orog_on_era5
+
+    def _load_source(
+        self,
+        variable_type: str,
+        scenario: str,
+        start: Optional[pd.Timestamp] = None,
+        end:   Optional[pd.Timestamp] = None,
+    ) -> xr.DataArray:
+        """Load a CORDEX variable, convert units, regrid and lapse-correct."""
+        cordex_var = _CORDEX_VAR[variable_type]
+        nc_path    = self.cordex_dir / self.model_id / scenario / f"{cordex_var}.nc"
+
+        if not nc_path.exists():
+            raise FileNotFoundError(
+                f"CORDEX file not found: {nc_path}. "
+                "Run download_cordex.py first."
+            )
+
+        ds = xr.open_dataset(nc_path, chunks={"time": _TIME_CHUNK})
+        da = ds[cordex_var]
+
+        # Normalise CORDEX timestamps to midnight
+        try:
+            midnight_times = da.indexes["time"].normalize()
+            da = da.assign_coords(time=midnight_times)
+        except AttributeError:
+            pass
+
+        if start or end:
+            da = da.sel(time=slice(
+                start.strftime("%Y-%m-%d") if start else None,
+                end.strftime("%Y-%m-%d")   if end   else None,
+            ))
+
+        da = self._convert_units(da, variable_type)
+
+        self.logger.debug(f"  Regridding {cordex_var} ({scenario})...")
+        da = self._regrid(da)
+
+        if variable_type != "precip":
+            da = self._lapse_rate_correct(da)
+
+        era5_var = _ERA5_OUTPUT_VAR[variable_type]
+        da.name  = era5_var
+        if variable_type == "precip":
+            da.attrs["units"]         = "mm d-1"
+            da.attrs["cell_methods"]  = "time: sum within days"
+            da.attrs["standard_name"] = "precipitation_flux"
+        else:
+            da.attrs["units"]         = "degC"
+            da.attrs["cell_methods"]  = "time: mean within days"
+            da.attrs["standard_name"] = "air_temperature"
+
+        return da
+
+    def _source_file_path(self, vtype: str, scen: str) -> Path:
+        cordex_var = _CORDEX_VAR[vtype]
+        return self.cordex_dir / self.model_id / scen / f"{cordex_var}.nc"
+
+
+# ===========================================================================
+# CMIP6Downscaler  —  raw CMIP6 GCM data (ISIMIP3b-compatible models)
+# ===========================================================================
+
+class CMIP6Downscaler(_DownscalerBase):
+    """
+    Downscale one CMIP6 GCM to ERA5-Land 0.1° resolution using xclim QDM.
+
+    Uses the same QDM workflow as CORDEXDownscaler but operates on standard
+    lat/lon CMIP6 data (no rotated-pole transformation required).
+
+    Key differences from CORDEXDownscaler
+    --------------------------------------
+    Training end   : 2014 (CMIP6 historical ends Dec 2014)
+    Future start   : 2015
+    Scenarios      : ssp126 / ssp370 / ssp585  (not rcp*)
+    Output prefix  : 'cmip6_'
+    Namelist key   : 'cmip6_dir'
+    Grid           : Standard lat/lon (simpler regridder)
+
+    Parameters
+    ----------
+    namelist_path : str or Path
+        Raven-world namelist YAML for the target catchment.
+    model_id : str
+        ISIMIP3b / Raven-world model ID (e.g. 'GFDL-ESM4').
+    force_reprocess : bool
+        Re-compute even if output files already exist.
+    """
+
+    _DEFAULT_TRAIN_START = "1980-01-01"
+    _DEFAULT_TRAIN_END   = "2014-12-31"
+    _output_prefix       = "cmip6"
+    _source_label        = "CMIP6"
+    _train_start_key     = "cmip6_train_start"
+    _train_end_key       = "cmip6_train_end"
+    _SOURCE_VAR          = _CMIP6_VAR
+    _default_scenarios   = ["historical", "ssp126"]
+    _scenarios_key       = "cmip6_scenarios"
+
+    def __init__(
+        self,
+        namelist_path: "str | Path",
+        model_id: str,
+        force_reprocess: bool = False,
+    ) -> None:
+        if not _XESMF_AVAILABLE:
+            raise ImportError(
+                "xesmf is required for CMIP6 regridding.\n"
+                "  conda install -c conda-forge xesmf"
+            )
+        if not _XCLIM_AVAILABLE:
+            raise ImportError(
+                "xsdba (or xclim) is required for QDM bias correction.\n"
+                "  conda install -c conda-forge xsdba xclim"
+            )
+
+        super().__init__(namelist_path, model_id, force_reprocess)
+
+        cmip6_dir = self.config.get("cmip6_dir")
+        if not cmip6_dir:
+            raise ValueError(
+                "namelist must contain a 'cmip6_dir' key pointing to the "
+                "downloaded CMIP6 data directory."
+            )
+        self.cmip6_dir = Path(cmip6_dir)
+        self.logger.info(f"  CMIP6 dir   : {self.cmip6_dir}")
+
+    def _build_regridder(self, da_sample: xr.DataArray) -> "xe.Regridder":
+        """
+        Build xesmf bilinear regridder from standard lat/lon CMIP6 grid to ERA5.
+
+        CMIP6 data uses standard 1-D lat/lon coordinates — simpler than
+        CORDEX rotated-pole, no 2-D auxiliary coordinate handling needed.
+        """
+        tgt = self._get_era5_target_grid()
+
+        if "time" in da_sample.dims:
+            one_step = da_sample.isel(time=0).drop_vars("time", errors="ignore")
+        else:
+            one_step = da_sample
+
+        # Ensure lat/lon are named 'lat'/'lon' for xesmf
+        rename = {}
+        if "latitude" in one_step.dims and "lat" not in one_step.dims:
+            rename["latitude"] = "lat"
+        if "longitude" in one_step.dims and "lon" not in one_step.dims:
+            rename["longitude"] = "lon"
+        if rename:
+            one_step = one_step.rename(rename)
+
+        src_ds = one_step.to_dataset(name="_v")
+
+        regridder = xe.Regridder(
+            src_ds, tgt,
+            method            = "bilinear",
+            extrap_method     = "nearest_s2d",
+            ignore_degenerate = True,
+        )
+        self.logger.debug("xesmf bilinear regridder built (CMIP6 standard lat/lon).")
+        return regridder
+
+    def _load_source_orog_on_era5(self) -> Optional[xr.DataArray]:
+        """Return CMIP6 orography (m) regridded to the ERA5-Land grid."""
+        if self._source_orog_cache is not None:
+            return self._source_orog_cache
+
+        orog_path = self.cmip6_dir / self.model_id / "orog.nc"
+        if not orog_path.exists():
+            self.logger.warning(
+                f"CMIP6 orog.nc not found at {orog_path} – "
+                "lapse-rate correction skipped."
+            )
+            return None
+
+        era5_elev = self._load_era5_elevation()
+        if era5_elev is None:
+            return None
+
+        with xr.open_dataset(orog_path) as ds:
+            orog_var = "orog" if "orog" in ds else list(ds.data_vars)[0]
+            da_orog  = ds[orog_var].load()
+
+        # Normalise dimension names for xesmf
+        rename = {}
+        if "latitude" in da_orog.dims and "lat" not in da_orog.dims:
+            rename["latitude"] = "lat"
+        if "longitude" in da_orog.dims and "lon" not in da_orog.dims:
+            rename["longitude"] = "lon"
+        if rename:
+            da_orog = da_orog.rename(rename)
+
+        self.logger.info("Regridding CMIP6 orog to ERA5-Land grid...")
+        orog_on_era5 = self._regrid(da_orog)
+        self._source_orog_cache = orog_on_era5
+        return orog_on_era5
+
+    def _load_source(
+        self,
+        variable_type: str,
+        scenario: str,
+        start: Optional[pd.Timestamp] = None,
+        end:   Optional[pd.Timestamp] = None,
+    ) -> xr.DataArray:
+        """Load a CMIP6 variable, convert units, regrid to ERA5 grid."""
+        cmip6_var = _CMIP6_VAR[variable_type]
+        nc_path   = self.cmip6_dir / self.model_id / scenario / f"{cmip6_var}.nc"
+
+        if not nc_path.exists():
+            raise FileNotFoundError(
+                f"CMIP6 file not found: {nc_path}. "
+                "Run download_cmip6.py first."
+            )
+
+        ds = xr.open_dataset(nc_path, chunks={"time": _TIME_CHUNK})
+
+        # Variable name in the file might differ; try exact match then first var
+        if cmip6_var in ds:
+            da = ds[cmip6_var]
+        else:
+            da = ds[list(ds.data_vars)[0]]
+
+        # Normalise dimension names to lat/lon for xesmf
+        rename = {}
+        if "latitude" in da.dims and "lat" not in da.dims:
+            rename["latitude"] = "lat"
+        if "longitude" in da.dims and "lon" not in da.dims:
+            rename["longitude"] = "lon"
+        if rename:
+            da = da.rename(rename)
+
+        # Convert non-standard calendars (e.g. noleap/360_day) to standard
+        # datetime64 so that pandas/xsdba can handle the timestamps.
+        try:
+            time_index = da.indexes["time"]
+            if hasattr(time_index, "calendar") and time_index.calendar not in (
+                "standard", "gregorian", "proleptic_gregorian",
+            ):
+                self.logger.debug(
+                    f"  Converting {time_index.calendar} calendar to standard..."
+                )
+                # use_cftime=False → numpy datetime64 (required by pandas + xsdba)
+                da = da.convert_calendar("standard", use_cftime=False, align_on="date")
+        except Exception as _cal_err:
+            self.logger.debug(f"  Calendar conversion skipped: {_cal_err}")
+
+        # Normalise timestamps to midnight (some CMIP6 files use noon)
+        try:
+            midnight_times = da.indexes["time"].normalize()
+            da = da.assign_coords(time=midnight_times)
+        except AttributeError:
+            pass
+
+        if start or end:
+            da = da.sel(time=slice(
+                start.strftime("%Y-%m-%d") if start else None,
+                end.strftime("%Y-%m-%d")   if end   else None,
+            ))
+
+        da = self._convert_units(da, variable_type)
+
+        self.logger.debug(f"  Regridding {cmip6_var} ({scenario})...")
+        da = self._regrid(da)
+
+        if variable_type != "precip":
+            da = self._lapse_rate_correct(da)
+
+        era5_var = _ERA5_OUTPUT_VAR[variable_type]
+        da.name  = era5_var
+        if variable_type == "precip":
+            da.attrs["units"]         = "mm d-1"
+            da.attrs["cell_methods"]  = "time: sum within days"
+            da.attrs["standard_name"] = "precipitation_flux"
+        else:
+            da.attrs["units"]         = "degC"
+            da.attrs["cell_methods"]  = "time: mean within days"
+            da.attrs["standard_name"] = "air_temperature"
+
+        return da
+
+    def _source_file_path(self, vtype: str, scen: str) -> Path:
+        cmip6_var = _CMIP6_VAR[vtype]
+        return self.cmip6_dir / self.model_id / scen / f"{cmip6_var}.nc"
+
+
+# ===========================================================================
+# Top-level entry points for create_input_files.py
 # ===========================================================================
 
 def process_cordex_climate(
@@ -1219,6 +1636,73 @@ def process_cordex_climate(
         print(f"{'='*60}\n")
 
         downscaler = CORDEXDownscaler(
+            namelist_path   = namelist_path,
+            model_id        = model_id,
+            force_reprocess = force_reprocess,
+        )
+        all_results[model_id] = downscaler.process_all(
+            scenarios = scenarios,
+            variables = variables,
+        )
+
+    return all_results
+
+
+def process_cmip6_climate(
+    namelist_path: "str | Path",
+    force_reprocess: bool = False,
+) -> dict:
+    """
+    Downscale CMIP6 projections for all models listed in the namelist.
+
+    Called from create_input_files.py when ``future: true`` and
+    ``cmip6_models`` are set.
+
+    Reads from namelist
+    -------------------
+    cmip6_dir         : str   root dir of downloaded CMIP6 data
+    cmip6_models      : list  model IDs to process (e.g. ['GFDL-ESM4'])
+    cmip6_scenarios   : list  must include 'historical' for QDM training
+                              plus future scenarios (e.g. ['historical', 'ssp126'])
+    cmip6_variables   : list  optional subset; default = all four
+    cmip6_train_start : str   optional; default '1980-01-01'
+    cmip6_train_end   : str   optional; default '2014-12-31'
+
+    Returns
+    -------
+    dict  { model_id : { (variable_type, scenario) : Path } }
+    """
+    with open(namelist_path) as f:
+        config = yaml.safe_load(f)
+
+    models    = config.get("cmip6_models", [])
+    scenarios = config.get("cmip6_scenarios", ["historical", "ssp126"])
+    variables = config.get("cmip6_variables", list(_CMIP6_VAR.keys()))
+
+    if not models:
+        raise ValueError(
+            "namelist must contain 'cmip6_models' list when future=True.\n"
+            "Example:\n"
+            "  cmip6_models:\n"
+            "    - GFDL-ESM4\n"
+        )
+
+    if "historical" not in scenarios:
+        raise ValueError(
+            "cmip6_scenarios must include 'historical' for QDM training. "
+            "Add 'historical' to the list.\n"
+            "Example:  cmip6_scenarios: [historical, ssp126]"
+        )
+
+    all_results: dict = {}
+    for model_id in models:
+        print(f"\n{'='*60}")
+        print(f"  CMIP6 downscaling  |  model={model_id}")
+        print(f"  scenarios : {scenarios}")
+        print(f"  variables : {variables}")
+        print(f"{'='*60}\n")
+
+        downscaler = CMIP6Downscaler(
             namelist_path   = namelist_path,
             model_id        = model_id,
             force_reprocess = force_reprocess,

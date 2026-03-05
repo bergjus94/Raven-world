@@ -759,6 +759,31 @@ class MOHYSEPreprocessor:
             dim_names        = "longitude latitude time"
             precip_dim_names = dim_names
 
+        # Override all forcing files when running CMIP6 climate projections.
+        if self.config.get('future', False) and self.config.get('cmip6_models'):
+            models    = self.config['cmip6_models']
+            scenarios = self.config.get('cmip6_scenarios', ['ssp126'])
+            model_id  = models[0].replace('/', '_').replace(' ', '_')
+            future_scens = [s for s in scenarios if s != 'historical']
+            scenario  = future_scens[0] if future_scens else scenarios[0]
+            precip_tuple = (
+                'Rainfall', 'RAINFALL',
+                f'cmip6_{model_id}_{scenario}_precip.nc', 'tp',
+            )
+            other_types = [
+                ('Average Temperature', 'TEMP_AVE',
+                 f'cmip6_{model_id}_{scenario}_temp_mean.nc', 't2m'),
+                ('Maximum Temperature', 'TEMP_MAX',
+                 f'cmip6_{model_id}_{scenario}_temp_max.nc',  't2m'),
+                ('Minimum Temperature', 'TEMP_MIN',
+                 f'cmip6_{model_id}_{scenario}_temp_min.nc',  't2m'),
+            ]
+            grid_weights_file_path = "../data_obs/GridWeights.txt"
+            precip_weights_file    = grid_weights_file_path
+            dim_names        = "longitude latitude time"
+            precip_dim_names = dim_names
+            print(f"Using CMIP6 forcing: {model_id} / {scenario}")
+
         # ✅ Override precipitation source if TPHiPr is requested
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_tuple = ('Rainfall', 'RAINFALL', 'tphipr_precip.nc', 'prcp')

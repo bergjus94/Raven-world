@@ -77,7 +77,7 @@ class StreamflowProcessor:
             
         # Define output paths
         self.output_path = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
-        self.plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'plots'
+        self.plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'plots'
         
         # Create output directories if they don't exist
         os.makedirs(self.output_path, exist_ok=True)

@@ -10,6 +10,7 @@ import xrspatial as xrs
 from pathlib import Path
 import pandas as pd
 import logging
+import matplotlib.pyplot as plt
 from typing import Dict, List, Union, Optional, Any, Tuple
 from shapely.geometry import shape, MultiPolygon
 from rasterio.features import shapes, rasterize
