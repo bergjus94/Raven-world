@@ -59,9 +59,9 @@ HBV:
     X16: HBV_Max_Cap_Rise_Rate          # Capillary rise rate [mm/d]
     X17: HBV_Thickness_Topsoil          # Topsoil thickness [m]
     X18: HBV_Melt_For_Corr               # Forest melt correction [-]
-    #X19: HBV_Glac_Storage_Coeff        # Glacier storage coefficient [-]
-    #X20: HBV_Rain_Corr                   # Rain correction factor [-]
-    #X21: HBV_Snow_Corr                   # Snow correction factor [-]
+    X19: HBV_Glac_Storage_Coeff          # Glacier storage coefficient [-]
+    X20: HBV_Rain_Corr                   # Rain correction factor [-]
+    X21: HBV_Snow_Corr                   # Snow correction factor [-]
     HBV_Time_To_Peak: HBV_Time_To_Peak # Derived: X11 / 2
     HBV_Initial_Thickness_Topsoil: HBV_Initial_Thickness_Topsoil  # Derived: X17 * 500
 
@@ -84,9 +84,9 @@ HBV:
     X16: 18.94145                       # Cap rise rate
     X17: 2.036937                       # Topsoil thickness
     X18: 0.4452843                      # Forest correction
-    #X19: 0.6771759                      # Glacier storage
-    #X20: 1.141608                       # Rain correction
-    #X21: 1.024278                       # Snow correction
+    X19: 0.6771759                       # Glacier storage
+    X20: 1.141608                        # Rain correction
+    X21: 1.024278                        # Snow correction
     HBV_Time_To_Peak: 1.1388905         # Derived: X11 / 2
     HBV_Initial_Thickness_Topsoil: 1018.4685  # Derived: X17 * 500
 
@@ -110,9 +110,9 @@ HBV:
       X16: 0.0
       X17: 0.01
       X18: 0.0
-      #X19: 0.05
-      #X20: 0.8
-      #X21: 0.8
+      X19: 0.05
+      X20: 0.8
+      X21: 0.8
   upper:
       X01: 3.0
       X02: 10.0
@@ -132,9 +132,17 @@ HBV:
       X16: 30.0
       X17: 3.0
       X18: 2.0
-      #X19: 1.0
-      #X20: 1.5
-      #X21: 1.5
+      X19: 1.0
+      X20: 1.5
+      X21: 1.5
+
+  # Optional parameters: only included in calibration when the condition is met.
+  # Conditions: 'not_coupled' (included when coupled: false),
+  #             'precip_correction' (included when precip_correction: true in namelist)
+  optional:
+      X19: 'not_coupled'
+      X20: 'precip_correction'
+      X21: 'precip_correction'
 
 HMETS:
   # HMETS (Hydrological Model - École de Technologie Supérieure) parameters

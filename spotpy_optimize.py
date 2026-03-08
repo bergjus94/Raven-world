@@ -23,7 +23,7 @@ class RavenSCEUA(object):
     
     def __init__(self, gauge_id, model_type, cali_end_date, vali_end_date,
                 obj_function='KGE', main_dir=None, config_dir=None, coupled=False,
-                params_dir=None, raven_exe=None):  # ✅ ADD raven_exe parameter
+                params_dir=None, raven_exe=None, namelist=None):
         """Initialize the setup"""
         # Basic setup
         self.gauge_id = gauge_id
@@ -32,6 +32,7 @@ class RavenSCEUA(object):
         self.vali_end_date = vali_end_date
         self.obj_function = obj_function
         self.coupled = coupled
+        self.namelist = namelist or {}
 
         # Paths
         self.script_dir = Path(__file__).parent.absolute()
@@ -129,17 +130,46 @@ class RavenSCEUA(object):
         print(f"Created results file with headers: {self.results_file}")
     
     def _setup_parameters(self):
-        """Setup parameters for optimization dynamically based on model type"""
+        """Setup parameters for optimization dynamically based on model type.
+
+        Optional parameters (tagged with 'optional: <condition>' in the params
+        config) are only included when the namelist satisfies the condition:
+          - 'not_coupled'    → included when coupled is False
+          - 'precip_correction' → included when precip_correction is True in namelist
+
+        To mark a parameter as optional, add it to the 'optional' dict in the
+        params YAML under the model type, e.g.:
+            optional:
+              X19: 'not_coupled'
+              X20: 'precip_correction'
+        """
         params = []
-        
+
         # Get parameter names, bounds, and initial values
         param_names = self.params_config['names']
         lower_bounds = self.params_config['lower']
         upper_bounds = self.params_config['upper']
         init_values = self.params_config['init']
-        
+
+        # Build set of parameter keys to skip based on optional conditions
+        optional_rules = self.params_config.get('optional', {})
+        skip_params = set()
+        for param_key, condition in optional_rules.items():
+            include = False
+            if condition == 'not_coupled':
+                include = not self.coupled
+            elif condition == 'precip_correction':
+                include = bool(self.namelist.get('precip_correction', False))
+
+            if not include:
+                skip_params.add(param_key)
+                print(f"Skipping optional parameter {param_key} (condition '{condition}' not met)")
+
         # Create SPOTPY parameter objects
         for param_key, param_name in param_names.items():
+            if param_key in skip_params:
+                continue
+
             # Get bounds and initial value
             try:
                 lower = float(lower_bounds[param_key])
@@ -1504,7 +1534,8 @@ if __name__ == "__main__":
         config_dir=args.config_dir,
         coupled=args.coupled,
         params_dir=args.params_dir,
-        raven_exe=args.raven_exe  
+        raven_exe=args.raven_exe,
+        namelist=args.namelist
     )
     
     # Run SCEUA algorithm

@@ -912,6 +912,8 @@ class HBVProcessor:
         # Get optional parameters with default values
         rain_corr = self.params['HBV'][param_or_name].get('X20', 1.0)
         snow_corr = self.params['HBV'][param_or_name].get('X21', 1.0)
+        use_precip_corr = self.config.get('precip_correction', False)
+        comment = "" if use_precip_corr else "#"
 
         forcing_data = {}
 
@@ -923,8 +925,8 @@ class HBVProcessor:
             f"    :VarNameNC            {precip_var}",
             f"    :DimNamesNC           {precip_dim_names}",
             "    :ElevationVarNameNC   elevation",
-            f"#    :RainCorrection       {rain_corr}",
-            f"#    :SnowCorrection       {snow_corr}",
+            f"    {comment}:RainCorrection       {rain_corr}",
+            f"    {comment}:SnowCorrection       {snow_corr}",
             f"    :RedirectToFile       {precip_weights_file}",
             ":EndGriddedForcing",
             ''
