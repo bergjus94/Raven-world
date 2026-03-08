@@ -1860,7 +1860,84 @@ class CatchmentProcessor:
         
         self.hru_stats = stats_df
         return stats_df
-        
+
+    #---------------------------------------------------------------------------------
+
+    def compute_glacier_ice_thickness(self):
+        """
+        Compute area-weighted mean ice thickness per glacier HRU using
+        Farinotti et al. (2019) consensus ice thickness rasters.
+
+        Reads per-glacier .tif files from ``ice_thickness_dir``, reprojects
+        onto the DEM grid, and writes ``glacier_ice_thickness.csv``.
+        """
+        from rasterio.warp import reproject, Resampling
+
+        ice_dir = Path(self.config['main_dir']) / self.config['ice_thickness_dir']
+        if not ice_dir.exists():
+            raise FileNotFoundError(f"Ice thickness directory not found: {ice_dir}")
+
+        transform, dem_crs, _ = self._get_dem_meta()
+        dem_shape = self.dem_data.shape
+
+        # Build combined thickness raster aligned to DEM
+        thickness = np.zeros(dem_shape, dtype='float32')
+
+        n_found = 0
+        n_no_pixels = 0
+        for numeric_id_str, rgi_id in self.glacier_id_mapping.items():
+            numeric_id_int = int(numeric_id_str)
+            glacier_mask = self.glacier_data == numeric_id_int
+
+            if not np.any(glacier_mask):
+                n_no_pixels += 1
+                continue
+
+            tif_path = ice_dir / f"{rgi_id}_thickness.tif"
+            if not tif_path.exists():
+                self.logger.warning(f"Missing ice thickness file: {tif_path.name}")
+                continue
+
+            with rasterio.open(tif_path) as src:
+                reproj = np.zeros(dem_shape, dtype='float32')
+                reproject(
+                    source=rasterio.band(src, 1),
+                    destination=reproj,
+                    dst_transform=transform,
+                    dst_crs=dem_crs,
+                    resampling=Resampling.bilinear,
+                )
+
+            # Only write where glacier raster matches this glacier
+            thickness[glacier_mask] = reproj[glacier_mask]
+            n_found += 1
+
+        self.logger.info(
+            f"Loaded ice thickness for {n_found}/{len(self.glacier_id_mapping)} glaciers "
+            f"({n_no_pixels} too small to rasterize)"
+        )
+
+        # Compute mean thickness per HRU
+        ICE_DENSITY = 917.0  # kg/m3
+        results = []
+        for _, row in self.hru_stats.iterrows():
+            hru_id = int(row['HRU_ID'])
+            if row.get('Landuse_Cl') == 7:
+                mask = self.map_unit_ids == hru_id
+                vals = thickness[mask]
+                vals = vals[vals > 0]
+                mean_m = float(np.mean(vals)) if len(vals) > 0 else 0.0
+                ice_mm = mean_m * ICE_DENSITY  # m ice → mm w.e.
+            else:
+                ice_mm = 0.0
+            results.append({'HRU_ID': hru_id, 'ice_thickness_mm': round(ice_mm, 2)})
+
+        df = pd.DataFrame(results)
+        out_path = self.get_path('glacier_ice_thickness.csv')
+        df.to_csv(out_path, index=False)
+        self.logger.info(f"Saved glacier ice thickness to {out_path}")
+        return df
+
     #---------------------------------------------------------------------------------
 
     def _plot_hru_statistics(self, stats_df: pd.DataFrame) -> None:
@@ -2326,7 +2403,13 @@ class CatchmentProcessor:
             
             # Step 7: Calculate HRU statistics
             self.calculate_hru_statistics()
-            
+
+            # Step 7b: Compute glacier ice thickness (DeltaH mode only)
+            if (self.config.get('glacier_method') == 'DeltaH'
+                    and not self.coupled
+                    and self.config.get('ice_thickness_dir')):
+                self.compute_glacier_ice_thickness()
+
             # Step 8: Create HRU shapefile
             self.create_hru_shapefile()
             

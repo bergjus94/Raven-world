@@ -2160,6 +2160,7 @@ def plot_multi_model_comprehensive_annual_water_balance(multi_config, plot_dirs,
         year_max = annual_balance['year'].max()
         all_years = np.arange(year_min, year_max + 1)
         
+        
         annual_balance_complete = annual_balance.set_index('year').reindex(all_years).reset_index()
         annual_balance_complete.columns = ['year'] + list(annual_balance.columns[1:])
         

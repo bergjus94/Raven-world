@@ -1368,6 +1368,35 @@ class HBVProcessor:
                 ff.writelines(line + '\n' for line in lines)
                 ff.write('\n')
 
+            # DeltaH glacier initial ice volumes
+            if not self.coupled and self.config.get('glacier_method') == 'DeltaH':
+                self._write_glacier_ice_initial_conditions(ff)
+
+    def _write_glacier_ice_initial_conditions(self, ff):
+        """Write :HRUStateVariableTable with GLACIER_ICE column (mm w.e.)."""
+        ice_path = self.topo_files_dir / 'glacier_ice_thickness.csv'
+        if not ice_path.exists():
+            print(f"WARNING: {ice_path} not found, skipping GLACIER_ICE initial conditions")
+            return
+
+        ice_df = pd.read_csv(ice_path)
+        hru_table = pd.read_csv(self.topo_files_dir / 'HRU_table.csv')
+
+        # Build lookup: HRU_ID → ice thickness (mm w.e.)
+        ice_lookup = dict(zip(ice_df['HRU_ID'], ice_df['ice_thickness_mm']))
+
+        # HRU IDs are in ':ATTRIBUTES' column in the Raven HRU table
+        hru_id_col = ':ATTRIBUTES' if ':ATTRIBUTES' in hru_table.columns else 'HRU_ID'
+
+        ff.write("# Glacier ice initial conditions (DeltaH method)\n")
+        ff.write(":HRUStateVariableTable\n")
+        ff.write("  :Attributes,    GLACIER_ICE\n")
+        ff.write("  :Units,         mm\n")
+        for hru_id in hru_table[hru_id_col]:
+            ice_val = ice_lookup.get(int(hru_id), 0.0)
+            ff.write(f"  {int(hru_id)},         {ice_val:.2f}\n")
+        ff.write(":EndHRUStateVariableTable\n\n")
+
     def create_all_files(self, template: bool = False):
         """
         Create all Raven input files for HBV model using namelist configuration.
