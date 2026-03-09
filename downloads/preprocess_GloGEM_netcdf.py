@@ -77,12 +77,12 @@ def parse_dat_file(dat_file: Path, seen_glacier_years: set, logger) -> pd.DataFr
         return pd.DataFrame(records, columns=['glacier_id', 'date', 'value'])
     return pd.DataFrame()
 
-def process_component(base_dir: Path, component: str, scenario: str = 'ssp126'):
-    """Process all .dat files for a component"""
+def process_component(base_dir: Path, component: str, model: str, scenario: str = 'ssp126'):
+    """Process all .dat files for a component/model/scenario combination"""
     logger = setup_logger()
-    
-    output_dir = base_dir / component / scenario
-    output_file = output_dir / f'GloGEM_{component}_Indus_{scenario}.nc'
+
+    output_dir = base_dir / component / model / scenario
+    output_file = base_dir / f'GloGEM_{component}_Indus_{model}_{scenario}.nc'
     
     if output_file.exists():
         logger.info(f"✅ Already exists: {output_file}")
@@ -156,8 +156,9 @@ def process_component(base_dir: Path, component: str, scenario: str = 'ssp126'):
     
     # Add metadata
     ds.attrs.update({
-        'title': f'GloGEM {component} for Indus Basin',
+        'title': f'GloGEM {component} for Indus Basin ({model})',
         'scenario': scenario,
+        'model': model,
         'source': 'GloGEM glacier model',
         'units': 'mm/day',
         'date_range': f"{ds.time.values[0]} to {ds.time.values[-1]}",
@@ -187,15 +188,20 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--base-dir', default='/home/jberg@giub.local/Raven_world/01_data/GloGEM/Snowline')
-    parser.add_argument('--scenario', default='ssp126')
+    parser.add_argument('--base-dir', default='/home/jberg@giub.local/Raven_world/01_data/GloGEM/Indus/Snowline_update')
+    parser.add_argument('--model', nargs='+', default=['gfdl-esm4'],
+                        help='One or more GCM model names (e.g. gfdl-esm4 mpi-esm1-2-hr)')
+    parser.add_argument('--scenario', nargs='+', default=['ssp126'],
+                        help='One or more scenarios (e.g. ssp126 ssp585)')
     parser.add_argument('--component', choices=['Discharge', 'Icemelt', 'Snowmelt', 'Rain', 'all'], default='all')
-    
+
     args = parser.parse_args()
     base_dir = Path(args.base_dir)
-    
+
     components = ['Discharge', 'Icemelt', 'Snowmelt', 'Rain'] if args.component == 'all' else [args.component]
-    
-    for component in components:
-        process_component(base_dir, component, args.scenario)
+
+    for model in args.model:
+        for scenario in args.scenario:
+            for component in components:
+                process_component(base_dir, component, model, scenario)
         

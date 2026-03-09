@@ -578,7 +578,7 @@ class HYMODPreprocessor:
             return
 
         gauge_info = self._create_gauge_info(gauge_lat, gauge_lon, station_elevation)
-        forcing_data = self._create_forcing_block()
+        forcing_data = self._create_forcing_block(param_or_name)
 
         with open(file_path, 'w') as ff:
             ff.writelines(f"{line}\n" for line in self._create_header("rvt"))
@@ -593,7 +593,7 @@ class HYMODPreprocessor:
         """Write .rvt for a multi-subbasin namelist (one :Gauge block per subbasin)."""
         file_path, param_or_name = self._get_file_path('rvt', template)
         subbasins_config = self.config['subbasins']
-        forcing_data = self._create_forcing_block()
+        forcing_data = self._create_forcing_block(param_or_name)
 
         with open(file_path, 'w') as ff:
             ff.writelines(f"{line}\n" for line in self._create_header("rvt"))
@@ -695,7 +695,7 @@ class HYMODPreprocessor:
             print(f"Error reading monthly data: {e}")
             return []
 
-    def _create_forcing_block(self) -> Dict[str, List[str]]:
+    def _create_forcing_block(self, param_or_name: str) -> Dict[str, List[str]]:
         """Create forcing data configuration for RVT file (ERA5-Land or HAR)."""
         if self.meteo_source == 'HAR':
             grid_weights_file_path = "../data_obs/GridWeights_HAR.txt"
@@ -774,6 +774,12 @@ class HYMODPreprocessor:
             precip_weights_file = "../data_obs/GridWeights_TPHiPr.txt"
             precip_dim_names = "longitude latitude time"
 
+        # Get optional precip correction parameters
+        rain_corr = self.params['HYMOD'][param_or_name].get('X09', 1.0)
+        snow_corr = self.params['HYMOD'][param_or_name].get('X10', 1.0)
+        use_precip_corr = self.config.get('precip_correction', False)
+        comment = "" if use_precip_corr else "#"
+
         forcing_data = {}
 
         # Rainfall block (potentially different weights/dims than T/PET)
@@ -785,6 +791,8 @@ class HYMODPreprocessor:
             f"    :VarNameNC            {var_name}",
             f"    :DimNamesNC           {precip_dim_names}",
             "    :ElevationVarNameNC   elevation",
+            f"    {comment}:RainCorrection       {rain_corr}",
+            f"    {comment}:SnowCorrection       {snow_corr}",
             f"    :RedirectToFile       {precip_weights_file}",
             ":EndGriddedForcing",
             ''

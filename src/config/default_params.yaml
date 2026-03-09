@@ -168,6 +168,8 @@ HMETS:
     X19: Hmets_baseflow_coeff_2         # Phreatic baseflow coefficient [1/d]
     X20: Hmets_topsoil_thickness        # Topsoil thickness [m]
     X21: Hmets_phreatic_thickness       # Phreatic layer thickness [m]
+    X22: HMETS_Rain_Corr                 # Rain correction factor [-]
+    X23: HMETS_Snow_Corr                 # Snow correction factor [-]
 
   init:
     X01: 9.5019                 # Surface gamma shape
@@ -191,8 +193,9 @@ HMETS:
     X19: 0.0069                 # Phreatic baseflow
     X20: 310.7211               # Topsoil thickness
     X21: 916.1947               # Phreatic thickness
+    X22: 1.0                     # Rain correction
+    X23: 1.0                     # Snow correction
 
-  
   lower:
       X01: 0.3
       X02: 0.01
@@ -215,6 +218,8 @@ HMETS:
       X19: 0.00001
       X20: 0.0
       X21: 0.0
+      X22: 0.8
+      X23: 0.8
   upper:
       X01: 20.0
       X02: 5.0
@@ -237,6 +242,12 @@ HMETS:
       X19: 0.01
       X20: 0.5
       X21: 2.0
+      X22: 1.5
+      X23: 1.5
+
+  optional:
+      X22: 'precip_correction'
+      X23: 'precip_correction'
 
 MOHYSE:
   names:
@@ -251,6 +262,8 @@ MOHYSE:
     X09: MOHYSE_Gamma_Shape                           # gamma kernel shape (unitless)
     X10: MOHYSE_Gamma_Scale_Aux                       # auxiliary: emulator uses GAMMA_SCALE = 1 / X10 (X10 must be > 0)
     Mohyse_Gamma_Scale: Mohyse_Gamma_Scale            # Derived: 1 / X10
+    X11: MOHYSE_Rain_Corr                               # Rain correction factor [-]
+    X12: MOHYSE_Snow_Corr                               # Snow correction factor [-]
 
   init:
     X01: 1.0                            
@@ -263,7 +276,9 @@ MOHYSE:
     X08: 0.0453                         
     X09: 0.9039                         
     X10: 5.6167
-    Mohyse_Gamma_Scale: 0.178                        
+    Mohyse_Gamma_Scale: 0.178
+    X11: 1.0                             # Rain correction
+    X12: 1.0                             # Snow correction
 
   lower:
       X01: 0.01
@@ -276,6 +291,8 @@ MOHYSE:
       X08: 0.01
       X09: 0.01
       X10: 0.01
+      X11: 0.8
+      X12: 0.8
   upper:
       X01: 20.0
       X02: 1.0
@@ -287,6 +304,12 @@ MOHYSE:
       X08: 1.0
       X09: 15.0
       X10: 15.0
+      X11: 1.5
+      X12: 1.5
+
+  optional:
+      X11: 'precip_correction'
+      X12: 'precip_correction'
 
 HYMOD:
   # HYMOD (Probability Distributed Model) parameters
@@ -299,6 +322,8 @@ HYMOD:
     X06: HYMOD_DD_MELT_TEMP             # Degree-day melt temperature [°C]
     X07: HYMOD_PDM_B                    # PDM distribution exponent [-]
     X08: HYMOD_PET_CORRECTION           # PET correction factor [-]
+    X09: HYMOD_Rain_Corr                 # Rain correction factor [-]
+    X10: HYMOD_Snow_Corr                 # Snow correction factor [-]
 
   init:
     X01: 0.1                   # Routing constant (placeholder)
@@ -309,7 +334,8 @@ HYMOD:
     X06: 0.0                   # Melt temp (placeholder)
     X07: 2.0                   # PDM exponent (placeholder)
     X08: 1.0                   # PET correction (placeholder)
-
+    X09: 1.0                   # Rain correction
+    X10: 1.0                   # Snow correction
 
   lower:
       X01: 0.01
@@ -320,6 +346,8 @@ HYMOD:
       X06: -2.0
       X07: 0.5
       X08: 0.5
+      X09: 0.8
+      X10: 0.8
   upper:
       X01: 1.0
       X02: 5.0
@@ -329,6 +357,12 @@ HYMOD:
       X06: 3.0
       X07: 5.0
       X08: 2.0
+      X09: 1.5
+      X10: 1.5
+
+  optional:
+      X09: 'precip_correction'
+      X10: 'precip_correction'
 
 
 UBCWM:
