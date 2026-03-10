@@ -22,6 +22,7 @@ debug: true
 # coupled: false → Raven handles glacier melt internally; HRUs = GLACIER (class 7),
 #                   Raven glacier processes ACTIVE
 coupled: true
+glogem_model: 'gfdl-esm4'
 
 # --- HRU discretization ---
 # Lateral connections: 'multiple' (HRU connects to multiple HRUs downstream) or 'single'
@@ -99,7 +100,7 @@ raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
-glogem_dir: '01_data/GloGEM/Indus/GMB'
+glogem_dir: '01_data/GloGEM/Indus/TSLA'
 params_dir: '../src/config/default_params.yaml'
 
 # =============================================================================

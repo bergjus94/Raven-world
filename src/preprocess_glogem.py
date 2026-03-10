@@ -64,9 +64,12 @@ class GloGEMProcessor:
         
         # ✅ NEW: Scenario for GloGEM NetCDF files
         self.glogem_scenario = config.get('glogem_scenario', 'ssp126')
-        
+
         # ✅ NEW: Basin name for NetCDF file naming
         self.basin_name = config.get('basin_name', 'Indus')
+
+        # ✅ NEW: Climate model name for NetCDF file naming (e.g. 'gfdl-esm4')
+        self.glogem_model = config.get('glogem_model', None)
         
         # ✅ Load warm-up date if specified
         if 'warm_up_date' in config:
@@ -101,7 +104,9 @@ class GloGEMProcessor:
         self.logger.info(f"📁 GloGEM NetCDF directory: {self.glogem_dir}")
         self.logger.info(f"📁 Irrigation files: {self.shared_data_dir}")
         self.logger.info(f"🌡️  Scenario: {self.glogem_scenario}")
-        
+        if self.glogem_model:
+            self.logger.info(f"🌐 Climate model: {self.glogem_model}")
+
         if self.warm_up_date:
             self.logger.info(f"🔄 Warm-up period: {self.warm_up_date} to {self.start_date}")
         
@@ -136,9 +141,12 @@ class GloGEMProcessor:
         Path
             Path to the NetCDF file
         """
-        filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_scenario}.nc'
+        if self.glogem_model:
+            filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_model}_{self.glogem_scenario}.nc'
+        else:
+            filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_scenario}.nc'
         return self.glogem_dir / filename
-    
+
     def _get_glacier_ids_from_catchment(self) -> Tuple[set, str, Dict[str, List[str]]]:
         """
         Get glacier IDs needed for this catchment from glacier_id_mapping.csv.
@@ -1841,6 +1849,7 @@ class MultiSubbasinGloGEMProcessor:
         self.warm_up_date = config.get('warm_up_date', None)
         self.glogem_scenario = config.get('glogem_scenario', 'ssp126')
         self.basin_name = config.get('basin_name', 'Indus')
+        self.glogem_model = config.get('glogem_model', None)
         self.debug = config.get('debug', False)
 
         self.irrigation_variable = config.get('irrigation_variable', 'discharge').lower()
@@ -1870,7 +1879,10 @@ class MultiSubbasinGloGEMProcessor:
 
     def _get_netcdf_path(self, component: str) -> Path:
         """Return path to a GloGEM NetCDF file (same naming convention as GloGEMProcessor)."""
-        filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_scenario}.nc'
+        if self.glogem_model:
+            filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_model}_{self.glogem_scenario}.nc'
+        else:
+            filename = f'GloGEM_{component}_{self.basin_name}_{self.glogem_scenario}.nc'
         return self.glogem_dir / filename
 
     def process_all(self, force_reprocess: bool = False) -> dict:
