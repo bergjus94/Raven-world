@@ -166,6 +166,67 @@ class TPHiPrAnalyzer(MeteoBase):
             self.logger.info(f"Units '{src_units}' – assuming already mm/day, no conversion")
         ds['prcp'].attrs['units'] = 'mm/day'
 
+        # ── Add warm-up period by repeating the first year of data ──────
+        # Same approach as _add_warmup_to_files() in preprocess_meteo_base.py
+        # used by ERA5 and HAR preprocessors.
+        avail_start = pd.Timestamp(ds.time.values[0])
+        if self.warmup_date is not None and avail_start > self.warmup_date:
+            self.logger.info("Adding warm-up period to TPHiPr data...")
+            years_diff = (avail_start - self.warmup_date).days / 365.25
+            n_repetitions = max(1, int(np.ceil(years_diff)))
+
+            self.logger.info(f"📅 Warm-up: {self.warmup_date.date()} to "
+                             f"{(avail_start - pd.Timedelta(days=1)).date()} "
+                             f"({n_repetitions} repetition(s) of first year)")
+
+            # Extract first year of available data
+            first_year_end = avail_start + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+            first_year = ds.sel(time=slice(avail_start, first_year_end))
+
+            # Repeat first year n times with shifted time coordinates
+            repeated_datasets = []
+            current_time = pd.to_datetime(self.warmup_date)
+
+            for i in range(n_repetitions):
+                year_copy = first_year.copy(deep=True)
+                time_deltas = first_year.time - first_year.time.values[0]
+                new_times = current_time + time_deltas
+                year_copy['time'] = new_times
+                repeated_datasets.append(year_copy)
+                current_time = new_times.values[-1] + pd.Timedelta(days=1)
+                self.logger.debug(f"  Repetition {i+1}: {new_times.values[0]} to {new_times.values[-1]}")
+
+            warmup_data = xr.concat(repeated_datasets, dim='time')
+
+            # Trim warm-up to end exactly one day before available data starts
+            warmup_end = avail_start - pd.Timedelta(days=1)
+            warmup_data = warmup_data.sel(time=slice(self.warmup_date, warmup_end))
+
+            self.logger.info(f"  Warm-up: {warmup_data.time.min().values} to "
+                             f"{warmup_data.time.max().values} ({len(warmup_data.time)} days)")
+
+            # Concatenate warm-up + simulation data
+            ds = xr.concat([warmup_data, ds], dim='time')
+            ds = ds.sortby('time')
+
+            # Verify no duplicates
+            combined_times = pd.to_datetime(ds.time.values)
+            duplicates = combined_times.duplicated()
+            if duplicates.any():
+                self.logger.warning(f"⚠️ {duplicates.sum()} duplicate timestamps – removing")
+                ds = ds.isel(time=~duplicates)
+
+            # Verify consecutive time steps
+            time_diffs = np.diff(ds.time.values).astype('timedelta64[D]').astype(int)
+            non_consecutive = np.where(time_diffs != 1)[0]
+            if len(non_consecutive) > 0:
+                self.logger.warning(f"⚠️ {len(non_consecutive)} non-consecutive time steps")
+            else:
+                self.logger.info(f"  ✅ All time steps consecutive (1-day intervals)")
+
+            self.logger.info(f"  Combined: {ds.time.min().values} to {ds.time.max().values} "
+                             f"({len(ds.time)} days)")
+
         # Metadata
         ds.attrs.update({
             'title': 'TPHiPr daily precipitation',
