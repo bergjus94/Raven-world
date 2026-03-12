@@ -86,6 +86,8 @@ class GloGEMProcessor:
                 f"got '{self.irrigation_variable}'"
             )
 
+        self.coupled = config.get('coupled', False)
+
         self.model_dir = self.main_dir / config.get('config_dir')
 
         # ✅ UPDATED: GloGEM directory now contains NetCDF files
@@ -126,7 +128,24 @@ class GloGEMProcessor:
         
         logger = logging.getLogger('GloGEMProcessor')
         return logger
-    
+
+    @property
+    def icemelt_mode(self) -> bool:
+        """True when coupled + icemelt: HRUs are ROCK with elevation discretization."""
+        return self.coupled and self.irrigation_variable == 'icemelt'
+
+    def _load_glacier_hru_overlap(self) -> pd.DataFrame:
+        """Load glacier_hru_overlap.csv (icemelt mode pixel-overlap table)."""
+        overlap_path = (
+            Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_hru_overlap.csv"
+        )
+        if not overlap_path.exists():
+            raise FileNotFoundError(
+                f"glacier_hru_overlap.csv not found: {overlap_path}\n"
+                "Run preprocess_catchment_hru.py with icemelt mode first."
+            )
+        return pd.read_csv(overlap_path)
+
     def _get_netcdf_path(self, component: str) -> Path:
         """
         Get the path to a GloGEM NetCDF file for a specific component
@@ -736,100 +755,133 @@ class GloGEMProcessor:
         # Replace NaN with 0
         discharge_data = np.nan_to_num(discharge_data, nan=0.0).astype(np.float32)
         
-        # ✅ NEW: Calculate area-weighted averages for LARGE and SMALL glacier HRUs
-        self.logger.info("Calculating area-weighted averages for glacier HRUs...")
-        
-        # Identify large and small glaciers in the data
-        large_glacier_set = set(glacier_categories['large'])
-        small_glacier_set = set(glacier_categories['small'])
-        
-        large_indices = []
-        large_areas = []
-        small_indices = []
-        small_areas = []
-        
-        for g_idx, glacier_id in enumerate(sim_glacier_ids):
-            area = area_map.get(glacier_id, 0.0)
-            if glacier_id in large_glacier_set:
-                large_indices.append(g_idx)
-                large_areas.append(area)
-            elif glacier_id in small_glacier_set:
-                small_indices.append(g_idx)
-                small_areas.append(area)
-        
-        self.logger.info(f"Found {len(large_indices)} large glaciers and {len(small_indices)} small glaciers in data")
-        
-        # Calculate area-weighted averages
         n_sim_times = len(sim_times)
-        large_weighted = np.zeros(n_sim_times, dtype=np.float32)
-        small_weighted = np.zeros(n_sim_times, dtype=np.float32)
-        
-        if large_indices:
-            large_data = discharge_data[:, large_indices]  # (time, n_large_glaciers)
-            large_weights = np.array(large_areas, dtype=np.float32)
-            total_large_area = large_weights.sum()
-            
-            if total_large_area > 0:
-                # Weighted average: sum(value_i * area_i) / sum(area_i)
-                large_weighted = (large_data * large_weights).sum(axis=1) / total_large_area
-                self.logger.info(f"Large glacier mean irrigation: {large_weighted.mean():.3f} mm/day")
-        
-        if small_indices:
-            small_data = discharge_data[:, small_indices]  # (time, n_small_glaciers)
-            small_weights = np.array(small_areas, dtype=np.float32)
-            total_small_area = small_weights.sum()
-            
-            if total_small_area > 0:
-                # Weighted average: sum(value_i * area_i) / sum(area_i)
-                small_weighted = (small_data * small_weights).sum(axis=1) / total_small_area
-                self.logger.info(f"Small glacier mean irrigation: {small_weighted.mean():.3f} mm/day")
-        
-        # ✅ NEW: Find glacier HRU indices in HRU shapefile
-        # Look for HRUs with pipe-separated glacier IDs
-        glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
-        
-        large_hru_idx = None
-        small_hru_idx = None
-        
-        for idx, row in glacier_hrus.iterrows():
-            glacier_id_str = row['Glacier_Cl']
-            hru_id = int(row['HRU ID']) - 1  # 0-based index
-            
-            # Check if this is aggregated format (contains pipe separator)
-            if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
-                # Parse pipe-separated IDs
-                id_list = glacier_id_str.split('|')
-                numeric_ids = []
-                for full_id in id_list:
-                    if rgi_region_code and full_id.startswith(rgi_region_code + '.'):
-                        numeric_id = full_id.replace(rgi_region_code + '.', '')
-                        numeric_ids.append(numeric_id)
-                
-                # Check if this is the large or small HRU
-                has_large = any(nid in large_glacier_set for nid in numeric_ids)
-                has_small = any(nid in small_glacier_set for nid in numeric_ids)
-                
-                if has_large and not has_small:
-                    large_hru_idx = hru_id
-                    self.logger.info(f"Found LARGE glacier HRU at index {hru_id} (HRU ID {row['HRU ID']})")
-                elif has_small and not has_large:
-                    small_hru_idx = hru_id
-                    self.logger.info(f"Found SMALL glacier HRU at index {hru_id} (HRU ID {row['HRU ID']})")
-        
-        # ✅ Create result array with irrigation values only for glacier HRUs
-        self.logger.info("Creating result array...")
         result_sim = np.zeros((n_sim_times, num_hrus), dtype=np.float32)
-        
-        if large_hru_idx is not None:
-            result_sim[:, large_hru_idx] = large_weighted
-            self.logger.info(f"Assigned large glacier irrigation to HRU index {large_hru_idx}")
-        
-        if small_hru_idx is not None:
-            result_sim[:, small_hru_idx] = small_weighted
-            self.logger.info(f"Assigned small glacier irrigation to HRU index {small_hru_idx}")
-        
+
+        # Build glacier_id → NetCDF column index mapping
+        sim_glacier_id_to_idx = {gid: i for i, gid in enumerate(sim_glacier_ids)}
+
+        if self.icemelt_mode:
+            # ── ICEMELT MODE: distribute melt to elevation-discretized ROCK HRUs ──
+            self.logger.info("Icemelt mode: distributing melt via glacier_hru_overlap.csv...")
+            overlap_df = self._load_glacier_hru_overlap()
+
+            # glacier_hru_overlap.csv has glacier_numeric_id as int; glacier_id_mapping
+            # uses numeric_id (padded string).  Build int→padded mapping.
+            mapping_path = (
+                Path(self.model_dir) / f"catchment_{self.gauge_id}"
+                / "topo_files" / "glacier_id_mapping.csv"
+            )
+            mapping_df = pd.read_csv(mapping_path)
+            int_to_padded = {}
+            for _, row in mapping_df.iterrows():
+                int_to_padded[int(row['numeric_id'])] = str(row['numeric_id']).zfill(5)
+
+            # For each HRU, compute pixel-weighted average melt across overlapping glaciers
+            for hru_id, grp in overlap_df.groupby('HRU_ID'):
+                hru_0idx = int(hru_id) - 1  # 0-based
+                if hru_0idx < 0 or hru_0idx >= num_hrus:
+                    continue
+
+                glacier_nc_indices = []
+                pixel_weights = []
+                for _, ov_row in grp.iterrows():
+                    padded = int_to_padded.get(int(ov_row['glacier_numeric_id']))
+                    if padded and padded in sim_glacier_id_to_idx:
+                        glacier_nc_indices.append(sim_glacier_id_to_idx[padded])
+                        pixel_weights.append(float(ov_row['n_pixels']))
+
+                if not glacier_nc_indices:
+                    continue
+
+                weights = np.array(pixel_weights, dtype=np.float32)
+                total_w = weights.sum()
+                if total_w > 0:
+                    data = discharge_data[:, glacier_nc_indices]  # (time, n_overlapping)
+                    result_sim[:, hru_0idx] = (data * weights).sum(axis=1) / total_w
+
+            n_assigned = int((result_sim != 0).any(axis=0).sum())
+            self.logger.info(f"Icemelt mode: assigned melt to {n_assigned} HRUs")
+
+        else:
+            # ── AGGREGATED MODE: 2 HRUs (large + small) via Glacier_Cl field ──
+            self.logger.info("Calculating area-weighted averages for glacier HRUs...")
+
+            large_glacier_set = set(glacier_categories['large'])
+            small_glacier_set = set(glacier_categories['small'])
+
+            large_indices = []
+            large_areas = []
+            small_indices = []
+            small_areas = []
+
+            for g_idx, glacier_id in enumerate(sim_glacier_ids):
+                area = area_map.get(glacier_id, 0.0)
+                if glacier_id in large_glacier_set:
+                    large_indices.append(g_idx)
+                    large_areas.append(area)
+                elif glacier_id in small_glacier_set:
+                    small_indices.append(g_idx)
+                    small_areas.append(area)
+
+            self.logger.info(f"Found {len(large_indices)} large glaciers and {len(small_indices)} small glaciers in data")
+
+            large_weighted = np.zeros(n_sim_times, dtype=np.float32)
+            small_weighted = np.zeros(n_sim_times, dtype=np.float32)
+
+            if large_indices:
+                large_data = discharge_data[:, large_indices]
+                large_weights = np.array(large_areas, dtype=np.float32)
+                total_large_area = large_weights.sum()
+                if total_large_area > 0:
+                    large_weighted = (large_data * large_weights).sum(axis=1) / total_large_area
+                    self.logger.info(f"Large glacier mean irrigation: {large_weighted.mean():.3f} mm/day")
+
+            if small_indices:
+                small_data = discharge_data[:, small_indices]
+                small_weights = np.array(small_areas, dtype=np.float32)
+                total_small_area = small_weights.sum()
+                if total_small_area > 0:
+                    small_weighted = (small_data * small_weights).sum(axis=1) / total_small_area
+                    self.logger.info(f"Small glacier mean irrigation: {small_weighted.mean():.3f} mm/day")
+
+            # Find glacier HRU indices via pipe-separated Glacier_Cl field
+            glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
+            large_hru_idx = None
+            small_hru_idx = None
+
+            for idx, row in glacier_hrus.iterrows():
+                glacier_id_str = row['Glacier_Cl']
+                hru_id = int(row['HRU ID']) - 1  # 0-based index
+
+                if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
+                    id_list = glacier_id_str.split('|')
+                    numeric_ids = []
+                    for full_id in id_list:
+                        if rgi_region_code and full_id.startswith(rgi_region_code + '.'):
+                            numeric_id = full_id.replace(rgi_region_code + '.', '')
+                            numeric_ids.append(numeric_id)
+
+                    has_large = any(nid in large_glacier_set for nid in numeric_ids)
+                    has_small = any(nid in small_glacier_set for nid in numeric_ids)
+
+                    if has_large and not has_small:
+                        large_hru_idx = hru_id
+                        self.logger.info(f"Found LARGE glacier HRU at index {hru_id} (HRU ID {row['HRU ID']})")
+                    elif has_small and not has_large:
+                        small_hru_idx = hru_id
+                        self.logger.info(f"Found SMALL glacier HRU at index {hru_id} (HRU ID {row['HRU ID']})")
+
+            if large_hru_idx is not None:
+                result_sim[:, large_hru_idx] = large_weighted
+                self.logger.info(f"Assigned large glacier irrigation to HRU index {large_hru_idx}")
+
+            if small_hru_idx is not None:
+                result_sim[:, small_hru_idx] = small_weighted
+                self.logger.info(f"Assigned small glacier irrigation to HRU index {small_hru_idx}")
+
         # Clean up
-        del discharge_data, large_weighted, small_weighted
+        del discharge_data
         
         # ✅ Handle warm-up period by repeating first year
         if simulation_start is not None:
@@ -1852,6 +1904,7 @@ class MultiSubbasinGloGEMProcessor:
         self.glogem_model = config.get('glogem_model', None)
         self.debug = config.get('debug', False)
 
+        self.coupled = config.get('coupled', False)
         self.irrigation_variable = config.get('irrigation_variable', 'discharge').lower()
         if self.irrigation_variable not in _VALID_IRRIGATION_VARS:
             raise ValueError(
@@ -1876,6 +1929,11 @@ class MultiSubbasinGloGEMProcessor:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         self.logger = logging.getLogger('MultiSubbasinGloGEMProcessor')
+
+    @property
+    def icemelt_mode(self) -> bool:
+        """True when coupled + icemelt: HRUs are ROCK with elevation discretization."""
+        return self.coupled and self.irrigation_variable == 'icemelt'
 
     def _get_netcdf_path(self, component: str) -> Path:
         """Return path to a GloGEM NetCDF file (same naming convention as GloGEMProcessor)."""
@@ -1967,10 +2025,11 @@ class MultiSubbasinGloGEMProcessor:
                 self.logger.warning(f"  ⚠️ Empty mapping for subbasin {sb_id} — skipping")
                 continue
 
-            # Build large/small sets and area map
+            # Build padded-numeric → area map and large/small sets
             large_glacier_set = set()
             small_glacier_set = set()
             area_map = {}
+            int_to_padded = {}
             rgi_region_code = None
 
             for _, row in mapping_df.iterrows():
@@ -1980,6 +2039,7 @@ class MultiSubbasinGloGEMProcessor:
                 is_large = bool(row['is_large'])
 
                 area_map[numeric_id] = area_km2
+                int_to_padded[int(row['numeric_id'])] = numeric_id
                 if is_large:
                     large_glacier_set.add(numeric_id)
                 else:
@@ -2002,91 +2062,120 @@ class MultiSubbasinGloGEMProcessor:
 
             self.logger.info(f"  Matched {len(matching_ids)}/{len(all_sb_ids)} glaciers in NetCDF")
 
-            # Split into large/small indices and areas
-            large_nc_idx, large_areas = [], []
-            small_nc_idx, small_areas = [], []
-            for gid in matching_ids:
-                nc_idx = glacier_id_to_ncidx[gid]
-                area = area_map.get(gid, 0.0)
-                if gid in large_glacier_set:
-                    large_nc_idx.append(nc_idx)
-                    large_areas.append(area)
-                else:
-                    small_nc_idx.append(nc_idx)
-                    small_areas.append(area)
-
-            # Area-weighted melt timeseries
-            large_weighted = np.zeros(n_sim, dtype=np.float32)
-            small_weighted = np.zeros(n_sim, dtype=np.float32)
-
-            if large_nc_idx:
-                data = full_discharge[:, large_nc_idx]
-                weights = np.array(large_areas, dtype=np.float32)
-                total = weights.sum()
-                if total > 0:
-                    large_weighted = (data * weights).sum(axis=1) / total
-                    self.logger.info(f"  Large glacier mean melt: {large_weighted.mean():.3f} mm/day")
-
-            if small_nc_idx:
-                data = full_discharge[:, small_nc_idx]
-                weights = np.array(small_areas, dtype=np.float32)
-                total = weights.sum()
-                if total > 0:
-                    small_weighted = (data * weights).sum(axis=1) / total
-                    self.logger.info(f"  Small glacier mean melt: {small_weighted.mean():.3f} mm/day")
-
-            # Save per-subbasin intermediate CSV (same topo_files subdir as glacier_id_mapping.csv)
-            sb_out_dir = self.topo_dir / f'subbasin_{sb_id}' / 'topo_files'
-            melt_df = pd.DataFrame({
-                'date': pd.to_datetime(sim_times).strftime('%Y-%m-%d'),
-                'large_melt_mm_day': large_weighted,
-                'small_melt_mm_day': small_weighted,
-            })
-            melt_csv = sb_out_dir / 'GloGEM_catchment_melt.csv'
-            melt_df.to_csv(melt_csv, index=False)
-            self.logger.info(f"  Saved per-subbasin melt CSV: {melt_csv}")
-
-            # Find large/small HRU indices in merged HRU.shp via Glacier_Cl field
-            large_hru_idx = None
-            small_hru_idx = None
-
-            glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()]
-            for _, hru_row in glacier_hrus.iterrows():
-                glacier_cl = str(hru_row['Glacier_Cl'])
-                hru_0idx = int(hru_row['HRU_ID']) - 1   # 0-based
-
-                # Parse pipe-separated full RGI IDs → numeric IDs
-                parts = glacier_cl.split('|')
-                numeric_ids = []
-                for full_id in parts:
-                    full_id = full_id.strip()
-                    if rgi_region_code and full_id.startswith(rgi_region_code + '.'):
-                        numeric_ids.append(full_id.replace(rgi_region_code + '.', '').zfill(5))
-                    elif '.' in full_id:
-                        # Fallback: take the part after the last dot
-                        numeric_ids.append(full_id.rsplit('.', 1)[-1].zfill(5))
-
-                if not numeric_ids:
+            if self.icemelt_mode:
+                # ── ICEMELT MODE: distribute via per-subbasin overlap CSV ──
+                overlap_path = self.topo_dir / f'subbasin_{sb_id}' / 'topo_files' / 'glacier_hru_overlap.csv'
+                if not overlap_path.exists():
+                    self.logger.warning(f"  glacier_hru_overlap.csv not found for subbasin {sb_id} — skipping")
                     continue
 
-                # Belong to this subbasin's large set?
-                if any(nid in large_glacier_set for nid in numeric_ids):
-                    large_hru_idx = hru_0idx
-                    self.logger.info(f"  → LARGE glacier HRU index {hru_0idx} (HRU_ID {hru_row['HRU_ID']})")
-                elif any(nid in small_glacier_set for nid in numeric_ids):
-                    small_hru_idx = hru_0idx
-                    self.logger.info(f"  → SMALL glacier HRU index {hru_0idx} (HRU_ID {hru_row['HRU_ID']})")
+                overlap_df = pd.read_csv(overlap_path)
+                for hru_id, grp in overlap_df.groupby('HRU_ID'):
+                    hru_0idx = int(hru_id) - 1
+                    if hru_0idx < 0 or hru_0idx >= num_hrus:
+                        continue
 
-            # Assign melt to result array
-            if large_hru_idx is not None:
-                result_sim[:, large_hru_idx] = large_weighted
-            elif large_nc_idx:
-                self.logger.warning(f"  ⚠️ Could not find LARGE glacier HRU in HRU.shp for subbasin {sb_id}")
+                    glacier_nc_indices = []
+                    pixel_weights = []
+                    for _, ov_row in grp.iterrows():
+                        padded = int_to_padded.get(int(ov_row['glacier_numeric_id']))
+                        if padded and padded in glacier_id_to_ncidx:
+                            glacier_nc_indices.append(glacier_id_to_ncidx[padded])
+                            pixel_weights.append(float(ov_row['n_pixels']))
 
-            if small_hru_idx is not None:
-                result_sim[:, small_hru_idx] = small_weighted
-            elif small_nc_idx:
-                self.logger.warning(f"  ⚠️ Could not find SMALL glacier HRU in HRU.shp for subbasin {sb_id}")
+                    if not glacier_nc_indices:
+                        continue
+
+                    weights = np.array(pixel_weights, dtype=np.float32)
+                    total_w = weights.sum()
+                    if total_w > 0:
+                        data = full_discharge[:, glacier_nc_indices]
+                        result_sim[:, hru_0idx] = (data * weights).sum(axis=1) / total_w
+
+                n_assigned = int((result_sim != 0).any(axis=0).sum())
+                self.logger.info(f"  Icemelt mode: assigned melt to {n_assigned} HRUs for subbasin {sb_id}")
+
+            else:
+                # ── AGGREGATED MODE: 2 HRUs (large + small) via Glacier_Cl field ──
+                large_nc_idx, large_areas = [], []
+                small_nc_idx, small_areas = [], []
+                for gid in matching_ids:
+                    nc_idx = glacier_id_to_ncidx[gid]
+                    area = area_map.get(gid, 0.0)
+                    if gid in large_glacier_set:
+                        large_nc_idx.append(nc_idx)
+                        large_areas.append(area)
+                    else:
+                        small_nc_idx.append(nc_idx)
+                        small_areas.append(area)
+
+                large_weighted = np.zeros(n_sim, dtype=np.float32)
+                small_weighted = np.zeros(n_sim, dtype=np.float32)
+
+                if large_nc_idx:
+                    data = full_discharge[:, large_nc_idx]
+                    weights = np.array(large_areas, dtype=np.float32)
+                    total = weights.sum()
+                    if total > 0:
+                        large_weighted = (data * weights).sum(axis=1) / total
+                        self.logger.info(f"  Large glacier mean melt: {large_weighted.mean():.3f} mm/day")
+
+                if small_nc_idx:
+                    data = full_discharge[:, small_nc_idx]
+                    weights = np.array(small_areas, dtype=np.float32)
+                    total = weights.sum()
+                    if total > 0:
+                        small_weighted = (data * weights).sum(axis=1) / total
+                        self.logger.info(f"  Small glacier mean melt: {small_weighted.mean():.3f} mm/day")
+
+                # Save per-subbasin intermediate CSV
+                sb_out_dir = self.topo_dir / f'subbasin_{sb_id}' / 'topo_files'
+                melt_df = pd.DataFrame({
+                    'date': pd.to_datetime(sim_times).strftime('%Y-%m-%d'),
+                    'large_melt_mm_day': large_weighted,
+                    'small_melt_mm_day': small_weighted,
+                })
+                melt_csv = sb_out_dir / 'GloGEM_catchment_melt.csv'
+                melt_df.to_csv(melt_csv, index=False)
+                self.logger.info(f"  Saved per-subbasin melt CSV: {melt_csv}")
+
+                # Find large/small HRU indices in merged HRU.shp via Glacier_Cl field
+                large_hru_idx = None
+                small_hru_idx = None
+
+                glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()]
+                for _, hru_row in glacier_hrus.iterrows():
+                    glacier_cl = str(hru_row['Glacier_Cl'])
+                    hru_0idx = int(hru_row['HRU_ID']) - 1
+
+                    parts = glacier_cl.split('|')
+                    numeric_ids = []
+                    for full_id in parts:
+                        full_id = full_id.strip()
+                        if rgi_region_code and full_id.startswith(rgi_region_code + '.'):
+                            numeric_ids.append(full_id.replace(rgi_region_code + '.', '').zfill(5))
+                        elif '.' in full_id:
+                            numeric_ids.append(full_id.rsplit('.', 1)[-1].zfill(5))
+
+                    if not numeric_ids:
+                        continue
+
+                    if any(nid in large_glacier_set for nid in numeric_ids):
+                        large_hru_idx = hru_0idx
+                        self.logger.info(f"  → LARGE glacier HRU index {hru_0idx} (HRU_ID {hru_row['HRU_ID']})")
+                    elif any(nid in small_glacier_set for nid in numeric_ids):
+                        small_hru_idx = hru_0idx
+                        self.logger.info(f"  → SMALL glacier HRU index {hru_0idx} (HRU_ID {hru_row['HRU_ID']})")
+
+                if large_hru_idx is not None:
+                    result_sim[:, large_hru_idx] = large_weighted
+                elif large_nc_idx:
+                    self.logger.warning(f"  Could not find LARGE glacier HRU in HRU.shp for subbasin {sb_id}")
+
+                if small_hru_idx is not None:
+                    result_sim[:, small_hru_idx] = small_weighted
+                elif small_nc_idx:
+                    self.logger.warning(f"  Could not find SMALL glacier HRU in HRU.shp for subbasin {sb_id}")
 
             processed_subbasins.append(sb_id)
 

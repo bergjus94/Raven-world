@@ -97,6 +97,7 @@ class CatchmentProcessor:
         self.gauge_id = self.config['gauge_id']
         self.main_dir = Path(self.config['main_dir'])
         self.coupled = self.config.get('coupled', False)
+        self._irrigation_variable = self.config.get('irrigation_variable', 'discharge').lower()
         self.model_dir = self.main_dir / self.config.get('config_dir') / f"catchment_{self.gauge_id}"
 
         # Data directories (format paths with gauge_id) - CORRECTED PATHS
@@ -145,6 +146,13 @@ class CatchmentProcessor:
         
         # Create output directory
         self._create_output_dir()
+
+    #---------------------------------------------------------------------------------
+
+    @property
+    def icemelt_mode(self) -> bool:
+        """True when coupled + icemelt: use ROCK HRUs with elevation discretization."""
+        return self.coupled and self._irrigation_variable == 'icemelt'
 
     #---------------------------------------------------------------------------------
 
@@ -1280,12 +1288,18 @@ class CatchmentProcessor:
         if self.glacier_data is None and self.glacier_dir is not None:
             self.rasterize_glacier_shapefile()
 
-        # When not coupled, burn glacier pixels as landuse class 7 so they
-        # participate in criteria-based discretization (elevation bands, aspect, etc.)
+        # Three-way glacier handling:
+        # 1. uncoupled: burn as GLACIER (class 7) for criteria-based discretization
+        # 2. icemelt mode (coupled + icemelt): burn as ROCK (class 5) — snow accumulates, no glacier melt
+        # 3. coupled (non-icemelt): leave for aggregated 2-HRU creation below
         if self.glacier_data is not None and not self.coupled:
             glacier_mask = (self.glacier_data > 0) & np.isfinite(self.glacier_data)
             self.landuse_data.values[glacier_mask] = 7
             self.logger.info(f"Burned {int(np.count_nonzero(glacier_mask))} glacier pixels as landuse class 7 for criteria-based discretization")
+        elif self.glacier_data is not None and self.icemelt_mode:
+            glacier_mask = (self.glacier_data > 0) & np.isfinite(self.glacier_data)
+            self.landuse_data.values[glacier_mask] = 5
+            self.logger.info(f"Burned {int(np.count_nonzero(glacier_mask))} glacier pixels as landuse class 5 (ROCK) for icemelt mode")
 
         # Debug info after data loading but before processing
         if self.debug:
@@ -1372,9 +1386,9 @@ class CatchmentProcessor:
             'W': ((self.aspect_data >= 225) & (self.aspect_data < 315))
         }
         
-        # Handle glaciers: create aggregated glacier HRUs only when coupled (GloGEM external melt)
-        # When not coupled, glacier pixels participate in normal criteria-based discretization
-        if self.glacier_data is not None and self.coupled:
+        # Handle glaciers: create aggregated glacier HRUs only when coupled (non-icemelt)
+        # When not coupled or in icemelt mode, glacier pixels participate in criteria-based discretization
+        if self.glacier_data is not None and self.coupled and not self.icemelt_mode:
             glacier_data_np = self.glacier_data
             # Get unique glacier IDs, filtering out NaN and infinite values
             valid_glacier_data = glacier_data_np[~np.isnan(glacier_data_np)]
@@ -1604,8 +1618,8 @@ class CatchmentProcessor:
                 elif criterion_name == 'landuse':
                     mask_unit &= (landuse_np == criterion)
             
-            # Exclude glacier cells only when coupled (already assigned to aggregated glacier HRUs)
-            if self.glacier_data is not None and self.coupled:
+            # Exclude glacier cells only when coupled (non-icemelt) — already assigned to aggregated glacier HRUs
+            if self.glacier_data is not None and self.coupled and not self.icemelt_mode:
                 mask_unit &= (map_unit_ids == 0)
                 
             # Skip empty HRUs
@@ -1686,11 +1700,53 @@ class CatchmentProcessor:
         # Create DataFrame from columns that have data
         valid_columns = {k: v for k, v in columns.items() if len(v) > 0}
         hru_df = pd.DataFrame(valid_columns)
-        
+
         self.hru_df = hru_df
         self.map_unit_ids = map_unit_ids
-        
+
+        # In icemelt mode, compute glacier↔HRU pixel-overlap table
+        if self.icemelt_mode and self.glacier_data is not None:
+            self._create_glacier_hru_overlap(map_unit_ids)
+
         return hru_df, map_unit_ids
+
+    #---------------------------------------------------------------------------------
+
+    def _create_glacier_hru_overlap(self, map_unit_ids: np.ndarray) -> None:
+        """
+        Compute pixel-overlap between glacier IDs and HRU IDs for icemelt mode.
+        Saves glacier_hru_overlap.csv with columns: HRU_ID, glacier_numeric_id, n_pixels.
+        """
+        glacier_data_np = self.glacier_data
+        valid_glacier = (glacier_data_np > 0) & np.isfinite(glacier_data_np)
+        valid_hru = map_unit_ids > 0
+
+        overlap_mask = valid_glacier & valid_hru
+        if not np.any(overlap_mask):
+            self.logger.warning("No glacier↔HRU overlap pixels found in icemelt mode")
+            return
+
+        glacier_ids_flat = glacier_data_np[overlap_mask].astype(int)
+        hru_ids_flat = map_unit_ids[overlap_mask].astype(int)
+
+        # Build overlap table using pandas value_counts for speed
+        overlap_df = pd.DataFrame({
+            'HRU_ID': hru_ids_flat,
+            'glacier_numeric_id': glacier_ids_flat,
+        })
+        overlap_table = (
+            overlap_df.groupby(['HRU_ID', 'glacier_numeric_id'])
+            .size()
+            .reset_index(name='n_pixels')
+        )
+
+        out_path = self.get_path('glacier_hru_overlap.csv')
+        overlap_table.to_csv(out_path, index=False)
+        self.logger.info(
+            f"Saved glacier_hru_overlap.csv: {len(overlap_table)} entries, "
+            f"{overlap_table['HRU_ID'].nunique()} HRUs, "
+            f"{overlap_table['glacier_numeric_id'].nunique()} glaciers"
+        )
 
     #---------------------------------------------------------------------------------
 

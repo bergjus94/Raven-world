@@ -69,6 +69,7 @@ class HMETSPreprocessor:
         self.end_date = namelist['end_date']
         self.cali_end_date = namelist['cali_end_date']
         self.coupled = namelist.get('coupled', False)
+        self._irrigation_variable = namelist.get('irrigation_variable', 'discharge').lower()
         self.author = namelist.get('author', 'Justine Berg')
         self.meteo_source = namelist.get('meteo_source', 'ERA5').upper()
 
@@ -134,6 +135,37 @@ class HMETSPreprocessor:
         """Create necessary directories if they don't exist."""
         for directory in [self.hmets_dir, self.templates_dir, self.data_obs_dir]:
             directory.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def icemelt_mode(self) -> bool:
+        """True when coupled + icemelt: glacier HRUs are ROCK with elevation discretization."""
+        return self.coupled and self._irrigation_variable == 'icemelt'
+
+    def _get_glacier_hru_ids_from_overlap(self, hru_df) -> dict:
+        """Identify glacier-origin ROCK HRUs via overlap CSV for icemelt mode."""
+        import pandas as _pd
+        overlap_path = self.topo_files_dir / 'glacier_hru_overlap.csv'
+        mapping_path = self.topo_files_dir / 'glacier_id_mapping.csv'
+        if not overlap_path.exists() or not mapping_path.exists():
+            all_ids = hru_df[':ATTRIBUTES'].tolist()
+            return {'all': [], 'large': [], 'small': [], 'no_glacier': all_ids}
+        overlap_df = _pd.read_csv(overlap_path)
+        mapping_df = _pd.read_csv(mapping_path)
+        large_ints = {int(r['numeric_id']) for _, r in mapping_df.iterrows() if bool(r['is_large'])}
+        glacier_hru_ids = set(overlap_df['HRU_ID'].unique())
+        all_g, large_g, small_g = [], [], []
+        for _, row in hru_df.iterrows():
+            hid = int(row[':ATTRIBUTES'])
+            if hid not in glacier_hru_ids:
+                continue
+            all_g.append(hid)
+            hru_ov = overlap_df[overlap_df['HRU_ID'] == hid]
+            if any(int(r['glacier_numeric_id']) in large_ints for _, r in hru_ov.iterrows()):
+                large_g.append(hid)
+            else:
+                small_g.append(hid)
+        no_g = sorted(set(hru_df[':ATTRIBUTES'].tolist()) - set(all_g))
+        return {'all': all_g, 'large': large_g, 'small': small_g, 'no_glacier': no_g}
 
     def _create_header(self, rvx_type: str) -> List[str]:
         """
@@ -450,83 +482,47 @@ class HMETSPreprocessor:
                 ""
             ])
 
-        # ✅ ADD GLACIER-RELATED HRU GROUPS
-        
-        # ALL_GLACIER group - all glacier HRUs (GLACIER and MASKED_GLACIER)
-        all_glacier_hrus = hru_df[hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
-        if all_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup ALL_GLACIER",
-                f"  {' '.join(map(str, all_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"ALL_GLACIER group: {len(all_glacier_hrus)} HRUs")
+        # ✅ GLACIER-RELATED HRU GROUPS
+        if self.icemelt_mode:
+            glacier_groups = self._get_glacier_hru_ids_from_overlap(hru_df)
+            all_glacier_hrus = glacier_groups['all']
+            large_glacier_hrus = glacier_groups['large']
+            small_glacier_hrus = glacier_groups['small']
+            no_glacier_hrus = glacier_groups['no_glacier']
+            print(f"Icemelt mode: identified {len(all_glacier_hrus)} glacier-origin ROCK HRUs from overlap CSV")
         else:
-            print("WARNING: No glacier HRUs found for ALL_GLACIER group")
-            hru_groups.extend([
-                ":HRUGroup ALL_GLACIER",
-                "  # No glacier HRUs available",
-                ":EndHRUGroup",
-                ""
-            ])
-        
-        # SMALL_GLACIER group - glacier HRUs with area < 2 km²
-        small_glacier_hrus = hru_df[
-            (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
-            (hru_df['AREA'] < 2)
-        ][':ATTRIBUTES'].tolist()
-        if small_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup SMALL_GLACIER",
-                f"  {' '.join(map(str, small_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"SMALL_GLACIER group: {len(small_glacier_hrus)} HRUs (area < 2 km²)")
-        else:
-            print("WARNING: No small glacier HRUs found")
-            hru_groups.extend([
-                ":HRUGroup SMALL_GLACIER",
-                "  # No small glacier HRUs available",
-                ":EndHRUGroup",
-                ""
-            ])
-        
-        # LARGE_GLACIER group - glacier HRUs with area >= 2 km²
-        large_glacier_hrus = hru_df[
-            (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) & 
-            (hru_df['AREA'] >= 2)
-        ][':ATTRIBUTES'].tolist()
-        if large_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup LARGE_GLACIER",
-                f"  {' '.join(map(str, large_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"LARGE_GLACIER group: {len(large_glacier_hrus)} HRUs (area >= 2 km²)")
-        else:
-            print("WARNING: No large glacier HRUs found")
-            hru_groups.extend([
-                ":HRUGroup LARGE_GLACIER",
-                "  # No large glacier HRUs available",
-                ":EndHRUGroup",
-                ""
-            ])
-        
-        # NO_GLACIER group - all non-glacier HRUs
-        no_glacier_hrus = hru_df[~hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
-        if no_glacier_hrus:
-            hru_groups.extend([
-                ":HRUGroup NO_GLACIER",
-                f"  {' '.join(map(str, no_glacier_hrus))}",
-                ":EndHRUGroup",
-                ""
-            ])
-            print(f"NO_GLACIER group: {len(no_glacier_hrus)} HRUs")
-        else:
-            print("WARNING: No non-glacier HRUs found")
+            all_glacier_hrus = hru_df[hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
+            small_glacier_hrus = hru_df[
+                (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) &
+                (hru_df['AREA'] < 2)
+            ][':ATTRIBUTES'].tolist()
+            large_glacier_hrus = hru_df[
+                (hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])) &
+                (hru_df['AREA'] >= 2)
+            ][':ATTRIBUTES'].tolist()
+            no_glacier_hrus = hru_df[~hru_df['LAND_USE_CLASS'].isin(['GLACIER', 'MASKED_GLACIER'])][':ATTRIBUTES'].tolist()
+
+        for group_name, group_hrus in [
+            ('ALL_GLACIER', all_glacier_hrus),
+            ('SMALL_GLACIER', small_glacier_hrus),
+            ('LARGE_GLACIER', large_glacier_hrus),
+            ('NO_GLACIER', no_glacier_hrus),
+        ]:
+            if group_hrus:
+                hru_groups.extend([
+                    f":HRUGroup {group_name}",
+                    f"  {' '.join(map(str, group_hrus))}",
+                    ":EndHRUGroup",
+                    ""
+                ])
+            else:
+                hru_groups.extend([
+                    f":HRUGroup {group_name}",
+                    f"  # No {group_name} HRUs available",
+                    ":EndHRUGroup",
+                    ""
+                ])
+            print(f"{group_name} group: {len(group_hrus)} HRUs")
 
         # Add elevation band groups with DIFFERENT filtering (only exclude glaciers)
         hrus_by_band = self.get_hrus_by_elevation_band()
