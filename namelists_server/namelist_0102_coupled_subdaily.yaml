@@ -61,8 +61,8 @@ calibration:
    metrics:
      primary: 'KGE'
      secondary: ['NSE', 'PBIAS', 'RMSE']
-   iterations: 10
-   ngs: 2
+   iterations: 3000
+   ngs: 15
    cali_end_date: '1999-12-31'
    vali_end_date: '2014-12-31'
 

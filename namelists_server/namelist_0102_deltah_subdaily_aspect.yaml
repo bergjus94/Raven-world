@@ -1,5 +1,5 @@
 # =============================================================================
-# Namelist for gauge 0102 (uncoupled, ERA5 forcing, DeltaH glacier method)
+# Namelist for gauge 0102 (uncoupled, ERA5 forcing, DeltaH + subdaily melt, aspect HRUs)
 # =============================================================================
 
 gauge_id: '0102'
@@ -11,16 +11,19 @@ warm_up_date: '1978-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg@giub.local/Raven_world'
-config_dir: 'test_march/03_model_setups_deltah'
+config_dir: 'test_march/03_model_setups_deltah_subdaily_aspect'
 debug: true
 
 coupled: false
 glacier_method: 'DeltaH'
+subdaily_method: 'SUBDAILY_HOURLY_MELT'
 
 nconnect: 'multiple'
 criteria:
   - elevation
   - landuse
+  - aspect
+aspect_slope_threshold: 15.0
 
 meteo_source: 'ERA5'
 future: false

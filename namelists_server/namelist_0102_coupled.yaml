@@ -125,8 +125,8 @@ calibration:
    metrics:
      primary: 'KGE'           # Primary metric: 'KGE', 'NSE', 'PBIAS', 'RMSE'
      secondary: ['NSE', 'PBIAS', 'RMSE']
-   iterations: 2              # Number of SCE-UA iterations
-   ngs: 2                     # Number of complexes in SCE-UA
+   iterations: 3000
+   ngs: 15
    cali_end_date: '1999-12-31'
    vali_end_date: '2014-12-31'
 

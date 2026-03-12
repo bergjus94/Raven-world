@@ -336,6 +336,9 @@ class MOHYSEPreprocessor:
             print(f"Error reading HRU table from {hru_table_path}: {e}")
             return
 
+        # Drop GLACIER_SIZE column (internal use only, not a Raven attribute)
+        HRU = HRU.drop(columns=['GLACIER_SIZE'], errors='ignore')
+
         # Convert HRU table to formatted string
         x = HRU.to_string(header=False, index=False, index_names=False).split('\n')
         vals = [',\t'.join(ele.split()) for ele in x]

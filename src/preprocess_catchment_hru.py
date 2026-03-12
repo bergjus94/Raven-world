@@ -2256,17 +2256,34 @@ class CatchmentProcessor:
 
         merged_df = pd.DataFrame(merged_rows)
 
+        # ── Build old-ID to merged-ID mapping ─────────────────────────
+        old_to_merged = {}
+        for _, row in keep.iterrows():
+            old_id = int(row[':ATTRIBUTES'])
+            old_to_merged[old_id] = old_id
+        for _key, grp in to_merge.groupby(group_cols, dropna=False):
+            merged_id = int(grp[':ATTRIBUTES'].min())
+            for old_id in grp[':ATTRIBUTES'].astype(int):
+                old_to_merged[old_id] = merged_id
+
         # ── Combine and re-number ───────────────────────────────────────
         result = pd.concat([keep, merged_df], ignore_index=True)
         # Drop helper columns
         result.drop(columns=['_elev_min', '_elev_max'], inplace=True)
         # Re-assign sequential IDs
         result = result.sort_values(':ATTRIBUTES').reset_index(drop=True)
+        old_ids_sorted = result[':ATTRIBUTES'].astype(int).tolist()
         result[':ATTRIBUTES'] = range(1, len(result) + 1)
+
+        # Final mapping: original HRU ID -> new sequential ID
+        merged_to_new = dict(zip(old_ids_sorted, range(1, len(result) + 1)))
+        old_to_new = {old_id: merged_to_new[mid]
+                      for old_id, mid in old_to_merged.items()
+                      if mid in merged_to_new}
 
         n_removed = len(hru_table) - len(result)
         self.logger.info(
-            f"Low-slope merge complete: {len(hru_table)} → {len(result)} HRUs "
+            f"Low-slope merge complete: {len(hru_table)} -> {len(result)} HRUs "
             f"({n_removed} removed)"
         )
 
@@ -2276,6 +2293,32 @@ class CatchmentProcessor:
             f.write(' '.join(result.columns) + '\n')
             for _, row in result.iterrows():
                 f.write(' '.join(map(str, row)) + '\n')
+
+        # ── Update HRU shapefile so GridWeights uses the merged set ─────
+        shp_path = self.get_path('HRU.shp')
+        if shp_path.exists():
+            hru_gdf = gpd.read_file(shp_path)
+            # Map old HRU IDs to new merged IDs
+            hru_gdf['HRU_ID'] = hru_gdf['HRU_ID'].map(old_to_new)
+            hru_gdf = hru_gdf.dropna(subset=['HRU_ID'])
+            hru_gdf['HRU_ID'] = hru_gdf['HRU_ID'].astype(int)
+            # Dissolve geometries for HRUs that share the same new ID
+            non_geom_cols = [c for c in hru_gdf.columns
+                            if c not in ('geometry', 'HRU_ID')]
+            hru_gdf = hru_gdf.dissolve(by='HRU_ID',
+                                       aggfunc={c: 'first' for c in non_geom_cols}
+                                       ).reset_index()
+            # Overwrite statistics columns with merged values
+            raven_to_stat = {'AREA': 'Area_km2', 'ELEVATION': 'Elev_Mean',
+                             'LATITUDE': 'Latitude', 'LONGITUDE': 'Longitude',
+                             'SLOPE': 'Slope_deg', 'ASPECT': 'Aspect_deg'}
+            for raven_col, stat_col in raven_to_stat.items():
+                if stat_col in hru_gdf.columns and raven_col in result.columns:
+                    id_to_val = dict(zip(result[':ATTRIBUTES'], result[raven_col]))
+                    hru_gdf[stat_col] = hru_gdf['HRU_ID'].map(id_to_val).fillna(
+                        hru_gdf[stat_col])
+            hru_gdf.to_file(shp_path, driver='ESRI Shapefile')
+            self.logger.info(f"Updated HRU shapefile: {len(hru_gdf)} features")
 
         return result
 
