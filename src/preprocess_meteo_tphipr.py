@@ -142,6 +142,17 @@ class TPHiPrAnalyzer(MeteoBase):
                 f"⚠️ TPHiPr ends {avail_end.date()} – later data unavailable"
             )
 
+        # Fill any missing days so Raven sees uniform daily time steps.
+        # Missing days are filled with 0 precipitation.
+        full_time = pd.date_range(avail_start, avail_end, freq='D')
+        n_missing = len(full_time) - len(ds.time)
+        if n_missing > 0:
+            self.logger.warning(
+                f"⚠️ {n_missing} missing day(s) in TPHiPr – filling with 0 mm/day"
+            )
+            ds = ds.reindex(time=full_time, fill_value=0.0)
+            self.logger.info(f"Reindexed to {len(full_time)} continuous daily steps")
+
         # Convert units mm/hr → mm/day if needed
         src_units = ds['prcp'].attrs.get('units', '')
         needs_conversion = any(
