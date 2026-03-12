@@ -802,6 +802,10 @@ class MOHYSEPreprocessor:
         forcing_data = {}
 
         # Rainfall block (potentially different weights/dims than temperature)
+        # TPHiPr has no elevation variable (high-res product, no lapse correction needed)
+        precip_elev_line = ("    :ElevationVarNameNC   elevation"
+                            if self.config.get('precip_source', '').upper() != 'TPHIPR'
+                            else "    # No ElevationVarNameNC for TPHiPr (high-res gridded product)")
         name, forcing_type, filename, var_name = precip_tuple
         forcing_data[name] = [
             f":GriddedForcing           {name}",
@@ -809,7 +813,7 @@ class MOHYSEPreprocessor:
             f"    :FileNameNC           ../data_obs/{filename}",
             f"    :VarNameNC            {var_name}",
             f"    :DimNamesNC           {precip_dim_names}",
-            "    :ElevationVarNameNC   elevation",
+            precip_elev_line,
             f"    {comment}:RainCorrection       {rain_corr}",
             f"    {comment}:SnowCorrection       {snow_corr}",
             f"    :RedirectToFile       {precip_weights_file}",

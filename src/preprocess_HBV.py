@@ -921,13 +921,17 @@ class HBVProcessor:
         forcing_data = {}
 
         # Rainfall forcing block (uses precip-specific weights and dim names)
+        # TPHiPr has no elevation variable (high-res product, no lapse correction needed)
+        precip_elev_line = ("    :ElevationVarNameNC   elevation"
+                            if self.config.get('precip_source', '').upper() != 'TPHIPR'
+                            else "    # No ElevationVarNameNC for TPHiPr (high-res gridded product)")
         forcing_data['Rainfall'] = [
             f":GriddedForcing           Rainfall",
             f"    :ForcingType          RAINFALL",
             f"    :FileNameNC           ../data_obs/{precip_file}",
             f"    :VarNameNC            {precip_var}",
             f"    :DimNamesNC           {precip_dim_names}",
-            "    :ElevationVarNameNC   elevation",
+            precip_elev_line,
             f"    {comment}:RainCorrection       {rain_corr}",
             f"    {comment}:SnowCorrection       {snow_corr}",
             f"    :RedirectToFile       {precip_weights_file}",

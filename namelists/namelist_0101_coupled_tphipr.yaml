@@ -1,5 +1,5 @@
 # =============================================================================
-# Namelist for gauge 0101 (coupled mode, ERA5 + TPHiPr precip)
+# Namelist for gauge 0101 (coupled mode, ERA5 + TPHiPr precip) - LOCAL TEST
 # =============================================================================
 
 gauge_id: '0101'
@@ -10,7 +10,7 @@ warm_up_date: '2015-06-22'
 
 model_type: 'HBV'
 template: true
-main_dir: '/home/jberg@giub.local/Raven_world'
+main_dir: '/home/jberg/OneDrive/Raven_worldwide'
 config_dir: 'test_march/03_model_setups_coupled_tphipr'
 debug: true
 
@@ -25,21 +25,21 @@ criteria:
 meteo_source: 'ERA5'
 
 precip_source: 'TPHiPr'
-tphipr_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/TPHiPr'
+tphipr_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/TPHiPr'
 
 future: false
 
 # =============================================================================
 # Paths (relative to main_dir or absolute)
 # =============================================================================
-meteo_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/Indus-Era5'
-meteo_har_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/HAR'
+meteo_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/Indus-Era5'
+meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
 shape_dir: '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp'
 raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
-glogem_dir: '01_data/GloGEM/Indus/TSLA'
+glogem_dir: '01_data/GloGEM/Indus/GMB'
 params_dir: '../src/config/default_params.yaml'
 
 # =============================================================================
@@ -64,9 +64,9 @@ calibration:
    metrics:
      primary: 'KGE'
      secondary: ['NSE', 'PBIAS', 'RMSE']
-   iterations: 3000
-   ngs: 15
+   iterations: 10
+   ngs: 2
    cali_end_date: '2019-12-31'
    vali_end_date: '2020-12-31'
 
-raven_executable: '/home/jberg@giub.local/RavenHydroFramework/build/Raven'
+raven_executable: '/home/jberg/RavenHydroFramework/build/Raven'
