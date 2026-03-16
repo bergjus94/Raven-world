@@ -74,6 +74,7 @@ class HBVProcessor:
         self.cali_end_date = namelist['cali_end_date']
         self.coupled = namelist.get('coupled', False)
         self._irrigation_variable = namelist.get('irrigation_variable', 'discharge').lower()
+        self._pet_method = namelist.get('pet_method', None)
         self.author = namelist.get('author', 'Justine Berg')
 
         # ✅ NEW: Meteorological data source (ERA5 or HAR)
@@ -772,6 +773,10 @@ class HBVProcessor:
         ✅ UPDATED: Also checks shared data_obs directory
         ✅ UPDATED: Checks per-subbasin directory first when subbasin_data_dir is given
         """
+        # Skip monthly PET data when using PET_OUDIN (computes PET from temperature internally)
+        if self._pet_method and self._pet_method.upper() == 'OUDIN':
+            return []
+
         # ✅ Choose file names based on meteo_source
         if self.meteo_source == 'HAR':
             temp_filename = 'har_monthly_temperature_averages.csv'
@@ -1333,8 +1338,8 @@ class HBVProcessor:
             "#Model Options": [
                 ":Routing             	    ROUTE_NONE",
                 ":CatchmentRoute      	    TRIANGULAR_UH",
-                ":Evaporation         	    PET_FROMMONTHLY",
-                ":OW_Evaporation      	    PET_FROMMONTHLY",
+                f":Evaporation         	    {'PET_OUDIN' if self._pet_method and self._pet_method.upper() == 'OUDIN' else 'PET_FROMMONTHLY'}",
+                f":OW_Evaporation      	    {'PET_OUDIN' if self._pet_method and self._pet_method.upper() == 'OUDIN' else 'PET_FROMMONTHLY'}",
                 ":SWRadiationMethod   	    SW_RAD_DEFAULT",
                 ":SWCloudCorrect      	    SW_CLOUD_CORR_NONE",
                 ":SWCanopyCorrect     	    SW_CANOPY_CORR_NONE",

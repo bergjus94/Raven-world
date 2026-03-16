@@ -70,6 +70,7 @@ class HYMODPreprocessor:
         self.cali_end_date = namelist['cali_end_date']
         self.coupled = namelist.get('coupled', False)
         self._irrigation_variable = namelist.get('irrigation_variable', 'discharge').lower()
+        self._pet_method = namelist.get('pet_method', None)
         self.author = namelist.get('author', 'Justine Berg')
         self.meteo_source = namelist.get('meteo_source', 'ERA5').upper()
 
@@ -642,6 +643,10 @@ class HYMODPreprocessor:
 
     def _get_monthly_data(self, subbasin_data_dir=None) -> List[str]:
         """Read and format monthly temperature and PET data if available."""
+        # Skip monthly PET data when using PET_OUDIN (computes PET from temperature internally)
+        if self._pet_method and self._pet_method.upper() == 'OUDIN':
+            return []
+
         if self.meteo_source == 'HAR':
             temp_filename = 'har_monthly_temperature_averages.csv'
             pet_filename = 'har_monthly_pet_averages.csv'
@@ -985,7 +990,7 @@ class HYMODPreprocessor:
                 ":SoilModel                  SOIL_MULTILAYER 2",
                 ":Routing                    ROUTE_NONE",
                 ":CatchmentRoute             GAMMA_UH",
-                ":Evaporation                PET_OUDIN",
+                f":Evaporation                {'PET_OUDIN' if self._pet_method and self._pet_method.upper() == 'OUDIN' else 'PET_OUDIN'}",
                 ":RainSnowFraction           RAINSNOW_DINGMAN",
                 ":PotentialMeltMethod        POTMELT_DEGREE_DAY",
                 ":OroTempCorrect             OROCORR_SIMPLELAPSE",

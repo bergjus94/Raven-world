@@ -14,6 +14,7 @@ import numpy as np
 #matplotlib.use('Agg')  # Use non-interactive backend to prevent image viewer
 import matplotlib.pyplot as plt
 from pathlib import Path
+import yaml
 
 #--------------------------------------------------------------------------------
 ################################### general #####################################
@@ -2201,29 +2202,39 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
                 if glogem_data is None:
                     print(f"  ⚠️  Could not load GloGEM data for {config_dir}")
                     continue
-                
+
                 # Filter GloGEM for validation period
                 glogem_mask = (glogem_data['date'] >= val_start) & (glogem_data['date'] <= val_end)
                 glogem_filtered = glogem_data[glogem_mask].copy()
-                
+
                 # Check which GloGEM columns are available
                 if 'snowmelt' not in glogem_filtered.columns or 'icemelt' not in glogem_filtered.columns:
                     print(f"  ⚠️  GloGEM data missing required columns for {config_dir}")
                     print(f"     Available columns: {glogem_filtered.columns.tolist()}")
                     continue
-                
+
                 # Calculate monthly regime for each component
                 glogem_filtered['month'] = glogem_filtered['date'].dt.month
-                
-                # Use NORMALIZED (catchment area) values for GloGEM - EXACT SAME AS YOUR WORKING FUNCTION
+
+                # Use NORMALIZED (catchment area) values for GloGEM
                 glacier_icemelt_regime = glogem_filtered.groupby('month')['icemelt_normalized'].mean()
                 glogem_snowmelt_regime = glogem_filtered.groupby('month')['snowmelt_normalized'].mean()
                 hbv_snowmelt_regime = hbv_snowmelt_df.groupby('month')[snowmelt_col].mean()
                 sim_regime = sim_data.groupby('month')['sim_Q_converted'].mean()
-                
-                # Total snowmelt = GloGEM snowmelt + HBV snowmelt - EXACT SAME AS YOUR WORKING FUNCTION
-                total_snowmelt_regime = glogem_snowmelt_regime.add(hbv_snowmelt_regime, fill_value=0)
-                
+
+                # Check if this is an icemelt-mode config
+                is_icemelt = multi_config.get('config_icemelt_mode', {}).get(config_dir, False)
+
+                if is_icemelt:
+                    # ICEMELT MODE: glacier HRUs are ROCK, so Raven already simulates
+                    # snowmelt on glacier areas. Do NOT add GloGEM snowmelt (would double-count).
+                    total_snowmelt_regime = hbv_snowmelt_regime
+                    print(f"  - Icemelt mode: using HBV snowmelt only (includes glacier-ROCK HRUs)")
+                else:
+                    # STANDARD COUPLED: glacier HRUs are MASKED_GLACIER, Raven does not
+                    # simulate snowmelt there. Add GloGEM snowmelt for glacier areas.
+                    total_snowmelt_regime = glogem_snowmelt_regime.add(hbv_snowmelt_regime, fill_value=0)
+
                 print(f"  - GloGEM ice melt mean: {glacier_icemelt_regime.mean():.4f} {unit_label}")
                 print(f"  - GloGEM snowmelt mean: {glogem_snowmelt_regime.mean():.4f} {unit_label}")
                 print(f"  - HBV snowmelt mean: {hbv_snowmelt_regime.mean():.4f} {unit_label}")
@@ -2340,13 +2351,17 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
     elif n_configs <= 9:
         n_rows, n_cols = 3, 3
         figsize = (20, 16)
+    elif n_configs <= 12:
+        n_rows, n_cols = 3, 4
+        figsize = (22, 16)
     else:
-        n_rows, n_cols = 4, 3
-        figsize = (20, 20)
-    
+        n_cols = 4
+        n_rows = (n_configs + n_cols - 1) // n_cols
+        figsize = (22, 5 * n_rows)
+
     # Create subplots
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True)
-    
+
     # Handle single subplot case
     if n_configs == 1:
         axes = np.array([axes])
@@ -2354,7 +2369,7 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
         axes = axes.flatten()
     else:
         axes = axes.flatten()
-    
+
     months = range(1, 13)
     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -3785,3 +3800,2245 @@ def check_temperature_netcdf_flipping(netcdf_path, sample_date=None):
         import traceback
         traceback.print_exc()
         return None
+
+
+#--------------------------------------------------------------------------------
+########################## configuration loader #################################
+#--------------------------------------------------------------------------------
+
+def load_configurations(yaml_path, gauge_id):
+    """
+    Load configuration registry and build multi_config dict for a given catchment.
+
+    Reads configurations.yaml, resolves each config's namelist, loads it to get
+    config_dir, main_dir, dates, etc., and returns a fully populated multi_config dict.
+
+    Parameters:
+    -----------
+    yaml_path : str or Path
+        Path to configurations.yaml
+    gauge_id : str
+        Gauge identifier (e.g., '0101')
+
+    Returns:
+    --------
+    dict
+        multi_config dictionary with keys: 'main_dir', 'gauge_id', 'model_type',
+        'start_date', 'end_date', 'cali_end_date', 'configs', 'config_colors',
+        'config_names', 'config_coupled', 'config_glacier_source', 'glogem_dir'
+    """
+
+    yaml_path = Path(yaml_path)
+    print(f"Loading configurations from: {yaml_path}")
+    print(f"Gauge ID: {gauge_id}")
+
+    # Load configurations registry
+    with open(yaml_path, 'r') as f:
+        registry = yaml.safe_load(f)
+
+    configurations = registry['configurations']
+    print(f"Found {len(configurations)} configurations in registry")
+
+    # main_dir from configurations.yaml takes priority (user-configurable)
+    main_dir_override = registry.get('main_dir')
+    if main_dir_override:
+        print(f"Using main_dir from configurations.yaml: {main_dir_override}")
+
+    # Determine namelist directory (same level as src/)
+    namelists_dir = yaml_path.parent.parent.parent / 'namelists_server'
+
+    # Build multi_config
+    configs = []
+    config_colors = {}
+    config_names = {}
+    config_coupled = {}
+    config_glacier_source = {}
+    config_icemelt_mode = {}
+
+    # Track shared settings from first successfully loaded namelist
+    main_dir = main_dir_override  # Use override if set, otherwise filled from first namelist
+    model_type = None
+    start_date = None
+    end_date = None
+    cali_end_date = None
+    glogem_dir = None
+
+    for cfg in configurations:
+        key = cfg['key']
+
+        # Resolve namelist path
+        if key == 'baseline':
+            namelist_path = namelists_dir / f'namelist_{gauge_id}.yaml'
+        else:
+            namelist_path = namelists_dir / f'namelist_{gauge_id}_{key}.yaml'
+
+        if not namelist_path.exists():
+            print(f"  WARNING: Namelist not found: {namelist_path} - skipping {key}")
+            continue
+
+        # Load namelist
+        with open(namelist_path, 'r') as f:
+            namelist = yaml.safe_load(f)
+
+        config_dir = namelist['config_dir']
+
+        # Store shared settings from first successful namelist
+        if model_type is None:
+            if main_dir is None:
+                main_dir = namelist['main_dir']
+            model_type = namelist.get('model_type', 'HBV')
+            start_date = namelist.get('start_date', '2016-06-22')
+            end_date = namelist.get('end_date', '2022-12-31')
+            cali_end_date = namelist.get('cali_end_date', '2020-12-31')
+            glogem_dir = namelist.get('glogem_dir')
+
+        configs.append(config_dir)
+        config_colors[config_dir] = cfg['color']
+        config_names[config_dir] = cfg['display_name']
+        config_coupled[config_dir] = cfg['coupled']
+        config_glacier_source[config_dir] = cfg['glacier_source']
+        config_icemelt_mode[config_dir] = cfg.get('icemelt_mode', False)
+
+        print(f"  + {cfg['display_name']:40s} -> {config_dir}")
+
+    if len(configs) == 0:
+        print("ERROR: No configurations were successfully loaded")
+        return None
+
+    multi_config = {
+        'main_dir': main_dir,
+        'gauge_id': gauge_id,
+        'model_type': model_type,
+        'start_date': start_date,
+        'end_date': end_date,
+        'cali_end_date': cali_end_date,
+        'configs': configs,
+        'config_colors': config_colors,
+        'config_names': config_names,
+        'config_coupled': config_coupled,
+        'config_glacier_source': config_glacier_source,
+        'config_icemelt_mode': config_icemelt_mode,
+        'glogem_dir': glogem_dir,
+    }
+
+    print(f"\nSuccessfully loaded {len(configs)} configurations")
+    return multi_config
+
+
+#--------------------------------------------------------------------------------
+######################### subplot layout helper #################################
+#--------------------------------------------------------------------------------
+
+def _calc_subplot_layout(n_configs):
+    """Calculate subplot grid layout and figure size for n configurations."""
+    if n_configs <= 2:
+        n_rows, n_cols = 1, n_configs
+        figsize = (8 * n_configs, 6)
+    elif n_configs <= 4:
+        n_rows, n_cols = 2, 2
+        figsize = (16, 12)
+    elif n_configs <= 6:
+        n_rows, n_cols = 2, 3
+        figsize = (20, 12)
+    elif n_configs <= 9:
+        n_rows, n_cols = 3, 3
+        figsize = (20, 16)
+    elif n_configs <= 12:
+        n_rows, n_cols = 3, 4
+        figsize = (22, 16)
+    else:
+        n_cols = 4
+        n_rows = (n_configs + n_cols - 1) // n_cols
+        figsize = (22, 5 * n_rows)
+    return n_rows, n_cols, figsize
+
+
+def _build_individual_config(multi_config, config_dir):
+    """Build an individual config dict from multi_config for a given config_dir."""
+    return {
+        'main_dir': multi_config['main_dir'],
+        'config_dir': config_dir,
+        'gauge_id': multi_config['gauge_id'],
+        'start_date': multi_config.get('start_date', '2000-01-01'),
+        'end_date': multi_config.get('end_date', '2020-12-31'),
+        'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
+        'model_type': multi_config.get('model_type', 'HBV'),
+        'coupled': multi_config.get('config_coupled', {}).get(config_dir, 'coupled' in config_dir.lower()),
+        'glogem_dir': multi_config.get('glogem_dir'),
+    }
+
+
+#--------------------------------------------------------------------------------
+##################### scatter plot subplots ######################################
+#--------------------------------------------------------------------------------
+
+def plot_streamflow_scatter_subplots(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot sim vs obs scatter for each configuration in separate subplots.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+
+    Returns:
+    --------
+    dict
+        Dictionary containing scatter statistics for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+
+    print(f"Creating streamflow scatter subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    # Load data for each config
+    for config_dir in configs:
+        individual_config = _build_individual_config(multi_config, config_dir)
+        try:
+            data = load_hydrograph_data(individual_config)
+            if data is None:
+                continue
+
+            start_dt = pd.to_datetime(validation_start)
+            end_dt = pd.to_datetime(validation_end)
+            mask = (data['date'] >= start_dt) & (data['date'] <= end_dt)
+            df = data[mask].dropna(subset=['obs_Q', 'sim_Q'])
+
+            if len(df) == 0:
+                continue
+
+            obs = df['obs_Q'].values
+            sim = df['sim_Q'].values
+
+            # Performance metrics
+            from scipy.stats import linregress
+            slope, intercept, r_value, p_value, std_err = linregress(obs, sim)
+            obs_mean = np.mean(obs)
+            nse = 1 - (np.sum((obs - sim) ** 2) / np.sum((obs - obs_mean) ** 2))
+            corr = np.corrcoef(sim, obs)[0, 1]
+            alpha = np.std(sim) / np.std(obs)
+            beta = np.mean(sim) / np.mean(obs)
+            kge = 1 - np.sqrt((corr - 1)**2 + (alpha - 1)**2 + (beta - 1)**2)
+
+            config_results[config_dir] = {
+                'obs': obs, 'sim': sim,
+                'r_squared': r_value**2, 'nse': nse, 'kge': kge,
+                'slope': slope, 'intercept': intercept,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: R2={r_value**2:.3f}, NSE={nse:.3f}, KGE={kge:.3f}")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    # Create subplot grid
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        obs = result['obs']
+        sim = result['sim']
+        color = result['color']
+
+        ax.scatter(obs, sim, alpha=0.4, s=15, c=color, edgecolors='none')
+
+        # 1:1 line
+        min_val = min(obs.min(), sim.min())
+        max_val = max(obs.max(), sim.max())
+        ax.plot([min_val, max_val], [min_val, max_val], 'k--', linewidth=1.5, zorder=10)
+
+        # Regression line
+        line_x = np.array([min_val, max_val])
+        ax.plot(line_x, result['slope'] * line_x + result['intercept'],
+                color='red', linewidth=1.5, alpha=0.7, zorder=9)
+
+        ax.set_title(result['name'], fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        # Metrics text
+        stats_text = f"R²={result['r_squared']:.3f}\nNSE={result['nse']:.3f}\nKGE={result['kge']:.3f}"
+        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+                fontsize=11, verticalalignment='top',
+                bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+
+        if i % n_cols == 0:
+            ax.set_ylabel('Simulated (m³/s)', fontsize=13, fontweight='bold')
+        if i >= (n_rows - 1) * n_cols:
+            ax.set_xlabel('Observed (m³/s)', fontsize=13, fontweight='bold')
+
+    # Hide unused subplots
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    plt.tight_layout()
+
+    save_path = plot_dir / f'streamflow_scatter_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved scatter subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+##################### residuals subplots ########################################
+#--------------------------------------------------------------------------------
+
+def plot_streamflow_residuals_subplots(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot streamflow residuals (Sim - Obs vs Obs) for each configuration in separate subplots.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+
+    Returns:
+    --------
+    dict
+        Dictionary containing residual statistics for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+
+    print(f"Creating streamflow residual subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    for config_dir in configs:
+        individual_config = _build_individual_config(multi_config, config_dir)
+        try:
+            data = load_hydrograph_data(individual_config)
+            if data is None:
+                continue
+
+            start_dt = pd.to_datetime(validation_start)
+            end_dt = pd.to_datetime(validation_end)
+            mask = (data['date'] >= start_dt) & (data['date'] <= end_dt)
+            df = data[mask].dropna(subset=['obs_Q', 'sim_Q'])
+
+            if len(df) == 0:
+                continue
+
+            obs = df['obs_Q'].values
+            residuals = df['sim_Q'].values - obs
+            bias = np.mean(residuals)
+            std_res = np.std(residuals)
+
+            config_results[config_dir] = {
+                'obs': obs, 'residuals': residuals,
+                'bias': bias, 'std': std_res,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: Bias={bias:+.3f}, Std={std_res:.3f}")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        obs = result['obs']
+        residuals = result['residuals']
+        color = result['color']
+        bias = result['bias']
+        std_res = result['std']
+
+        ax.scatter(obs, residuals, alpha=0.4, s=15, c=color, edgecolors='none')
+        ax.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax.axhline(y=bias, color='red', linestyle='-', linewidth=1.5, alpha=0.7)
+        ax.axhline(y=2*std_res, color='red', linestyle=':', linewidth=1, alpha=0.5)
+        ax.axhline(y=-2*std_res, color='red', linestyle=':', linewidth=1, alpha=0.5)
+
+        ax.set_title(result['name'], fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        stats_text = f"Bias={bias:+.2f}\nStd={std_res:.2f}"
+        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+                fontsize=11, verticalalignment='top',
+                bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+
+        if i % n_cols == 0:
+            ax.set_ylabel('Residual (m³/s)', fontsize=13, fontweight='bold')
+        if i >= (n_rows - 1) * n_cols:
+            ax.set_xlabel('Observed (m³/s)', fontsize=13, fontweight='bold')
+
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    plt.tight_layout()
+
+    save_path = plot_dir / f'streamflow_residuals_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved residual subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+################# precipitation partitioning subplots ###########################
+#--------------------------------------------------------------------------------
+
+def plot_precipitation_partitioning_subplots(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot precipitation partitioning (rainfall vs snowfall) for each configuration in separate subplots.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+
+    Returns:
+    --------
+    dict
+        Dictionary containing precip data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('start_date', '2000-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+
+    print(f"Creating precipitation partitioning subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    months = range(1, 13)
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    for config_dir in configs:
+        individual_config = _build_individual_config(multi_config, config_dir)
+        try:
+            # Load snowfall and rainfall data
+            snowfall_df = load_forcing_by_hrugroup(individual_config, 'SNOWFALL')
+            rainfall_df = load_forcing_by_hrugroup(individual_config, 'RAINFALL')
+
+            if snowfall_df is None or rainfall_df is None:
+                print(f"  Skipping {config_dir}: missing forcing data")
+                continue
+
+            # Merge
+            df = pd.merge(
+                snowfall_df.rename(columns={'NO_GLACIER': 'snowfall'}),
+                rainfall_df.rename(columns={'NO_GLACIER': 'rainfall'}),
+                on='date', how='inner'
+            )
+
+            # Filter period
+            start_dt = pd.to_datetime(validation_start)
+            end_dt = pd.to_datetime(validation_end)
+            mask = (df['date'] >= start_dt) & (df['date'] <= end_dt)
+            df_period = df[mask].copy()
+
+            if len(df_period) == 0:
+                continue
+
+            # Load area scaling
+            config_path = Path(multi_config['main_dir']) / config_dir
+            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            hru_shapefile = topo_dir / "HRU.shp"
+
+            area_fraction = 1.0
+            if hru_shapefile.exists():
+                import geopandas as gpd
+                hru_gdf = gpd.read_file(hru_shapefile)
+                total_area = hru_gdf['Area_km2'].sum()
+                if 'Landuse_Cl' in hru_gdf.columns:
+                    non_glacier_area = hru_gdf[~hru_gdf['Landuse_Cl'].isin([7, 8])]['Area_km2'].sum()
+                    area_fraction = non_glacier_area / total_area if total_area > 0 else 1.0
+
+            df_period['snowfall_scaled'] = df_period['snowfall'] * area_fraction
+            df_period['rainfall_scaled'] = df_period['rainfall'] * area_fraction
+            df_period['month'] = df_period['date'].dt.month
+
+            monthly_snow = df_period.groupby('month')['snowfall_scaled'].mean()
+            monthly_rain = df_period.groupby('month')['rainfall_scaled'].mean()
+
+            config_results[config_dir] = {
+                'monthly_snow': monthly_snow,
+                'monthly_rain': monthly_rain,
+                'area_fraction': area_fraction,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: mean precip={monthly_snow.mean() + monthly_rain.mean():.2f} mm/day")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        monthly_rain = result['monthly_rain']
+        monthly_snow = result['monthly_snow']
+
+        ax.bar(months, monthly_rain, color='steelblue', label='Rainfall', edgecolor='navy', linewidth=0.5)
+        ax.bar(months, monthly_snow, bottom=monthly_rain, color='lightcyan', label='Snowfall',
+               edgecolor='darkblue', linewidth=0.5)
+
+        ax.set_title(result['name'], fontsize=14, fontweight='bold')
+        ax.set_xticks(months)
+        ax.set_xticklabels(month_names, rotation=45, fontsize=10)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        if i == 0:
+            ax.legend(fontsize=11)
+        if i % n_cols == 0:
+            ax.set_ylabel('Precip (mm/day)', fontsize=13, fontweight='bold')
+
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.text(0.5, 0.02, 'Month', ha='center', fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0.04, 1, 1.0])
+
+    save_path = plot_dir / f'precipitation_partitioning_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved precipitation partitioning subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+##################### snowmelt regime subplots ##################################
+#--------------------------------------------------------------------------------
+
+def plot_snowmelt_regime_subplots(multi_config, validation_start=None, validation_end=None, unit='mm'):
+    """
+    Plot monthly snowmelt regime for each configuration in separate subplots.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+    unit : str, optional
+        Unit for display ('mm' for mm/day, 'm3' for m³/s)
+
+    Returns:
+    --------
+    dict
+        Dictionary containing snowmelt regime data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+
+    unit_label = 'mm/day' if unit == 'mm' else 'm³/s'
+
+    print(f"Creating snowmelt regime subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    months = range(1, 13)
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    for config_dir in configs:
+        individual_config = _build_individual_config(multi_config, config_dir)
+        try:
+            snowmelt_df = load_snowmelt_mass_loadings(individual_config, validation_start, validation_end, unit=unit)
+
+            if snowmelt_df is None:
+                print(f"  Skipping {config_dir}: no snowmelt data")
+                continue
+
+            snowmelt_col = 'snowmelt_mm_day' if unit == 'mm' and 'snowmelt_mm_day' in snowmelt_df.columns else 'snowmelt_m3s'
+            snowmelt_df['month'] = snowmelt_df['date'].dt.month
+            monthly_regime = snowmelt_df.groupby('month')[snowmelt_col].mean()
+
+            config_results[config_dir] = {
+                'monthly_regime': monthly_regime,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: peak={monthly_regime.max():.4f} {unit_label}")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        regime = result['monthly_regime']
+        color = result['color']
+
+        ax.plot(months, [regime.get(m, 0) for m in months], color=color, linewidth=2.5, marker='o', markersize=5)
+        ax.fill_between(months, 0, [regime.get(m, 0) for m in months], alpha=0.3, color=color)
+
+        ax.set_title(result['name'], fontsize=14, fontweight='bold')
+        ax.set_xticks(months)
+        ax.set_xticklabels(month_names, rotation=45, fontsize=10)
+        ax.grid(True, linestyle='--', alpha=0.7)
+
+        if i % n_cols == 0:
+            ax.set_ylabel(f'Snowmelt ({unit_label})', fontsize=13, fontweight='bold')
+
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.text(0.5, 0.02, 'Month', ha='center', fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0.04, 1, 1.0])
+
+    save_path = plot_dir / f'snowmelt_regime_subplots_{unit}_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved snowmelt regime subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+##################### glacier melt regime subplots ##############################
+#--------------------------------------------------------------------------------
+
+def plot_glacier_melt_regime_subplots(multi_config, validation_start=None, validation_end=None, unit='mm'):
+    """
+    Plot monthly glacier melt regime for each configuration in separate subplots.
+    Skips configurations with glacier_source='none' (baseline).
+    For coupled configs, uses GloGEM icemelt. For deltah configs, uses mass loadings.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+    unit : str, optional
+        Unit for display ('mm' for mm/day, 'm3' for m³/s)
+
+    Returns:
+    --------
+    dict
+        Dictionary containing glacier melt regime data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    config_glacier_source = multi_config.get('config_glacier_source', {})
+    model_type = multi_config.get('model_type', 'HBV')
+
+    unit_label = 'mm/day' if unit == 'mm' else 'm³/s'
+
+    print(f"Creating glacier melt regime subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    months = range(1, 13)
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    for config_dir in configs:
+        glacier_source = config_glacier_source.get(config_dir, 'none')
+
+        # Skip baseline (no glacier melt)
+        if glacier_source == 'none':
+            print(f"  Skipping {config_names.get(config_dir, config_dir)}: no glacier source")
+            continue
+
+        individual_config = _build_individual_config(multi_config, config_dir)
+
+        try:
+            if glacier_source == 'glogem':
+                # Coupled: use GloGEM icemelt
+                glogem_data = load_glogem_data(individual_config, unit=unit, plot=False)
+                if glogem_data is None:
+                    print(f"  Skipping {config_dir}: no GloGEM data")
+                    continue
+
+                val_start = pd.to_datetime(validation_start)
+                val_end = pd.to_datetime(validation_end)
+                glogem_mask = (glogem_data['date'] >= val_start) & (glogem_data['date'] <= val_end)
+                glogem_filtered = glogem_data[glogem_mask].copy()
+
+                if 'icemelt_normalized' not in glogem_filtered.columns:
+                    print(f"  Skipping {config_dir}: no icemelt_normalized column")
+                    continue
+
+                glogem_filtered['month'] = glogem_filtered['date'].dt.month
+                monthly_regime = glogem_filtered.groupby('month')['icemelt_normalized'].mean()
+
+            elif glacier_source == 'raven_deltah':
+                # DeltaH: use glacier melt mass loadings
+                config_path = Path(multi_config['main_dir']) / config_dir
+                glacier_file = config_path / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
+
+                if not glacier_file.exists():
+                    print(f"  Skipping {config_dir}: glacier melt file not found")
+                    continue
+
+                glacier_df = pd.read_csv(glacier_file)
+                glacier_df['date'] = pd.to_datetime(glacier_df['date'])
+
+                val_start = pd.to_datetime(validation_start)
+                val_end = pd.to_datetime(validation_end)
+                glacier_mask = (glacier_df['date'] >= val_start) & (glacier_df['date'] <= val_end)
+                glacier_filtered = glacier_df[glacier_mask].copy()
+
+                glacier_m3s_col = f"{gauge_id} m3/s"
+                if glacier_m3s_col not in glacier_filtered.columns:
+                    print(f"  Skipping {config_dir}: column '{glacier_m3s_col}' not found")
+                    continue
+
+                # Convert to mm/day if needed
+                if unit == 'mm':
+                    topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                    hru_shapefile = topo_dir / "HRU.shp"
+                    if hru_shapefile.exists():
+                        import geopandas as gpd
+                        hru_gdf = gpd.read_file(hru_shapefile)
+                        total_area_km2 = hru_gdf['Area_km2'].sum()
+                        conversion = 86400 / (total_area_km2 * 1000000) * 1000
+                        glacier_filtered['glacier_melt_converted'] = glacier_filtered[glacier_m3s_col] * conversion
+                    else:
+                        glacier_filtered['glacier_melt_converted'] = glacier_filtered[glacier_m3s_col]
+                else:
+                    glacier_filtered['glacier_melt_converted'] = glacier_filtered[glacier_m3s_col]
+
+                glacier_filtered['month'] = glacier_filtered['date'].dt.month
+                monthly_regime = glacier_filtered.groupby('month')['glacier_melt_converted'].mean()
+
+            config_results[config_dir] = {
+                'monthly_regime': monthly_regime,
+                'glacier_source': glacier_source,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: peak={monthly_regime.max():.4f} {unit_label} ({glacier_source})")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        regime = result['monthly_regime']
+        color = result['color']
+
+        ax.plot(months, [regime.get(m, 0) for m in months], color=color, linewidth=2.5, marker='o', markersize=5)
+        ax.fill_between(months, 0, [regime.get(m, 0) for m in months], alpha=0.3, color=color)
+
+        source_label = 'GloGEM' if result['glacier_source'] == 'glogem' else 'DeltaH'
+        ax.set_title(f"{result['name']} ({source_label})", fontsize=13, fontweight='bold')
+        ax.set_xticks(months)
+        ax.set_xticklabels(month_names, rotation=45, fontsize=10)
+        ax.grid(True, linestyle='--', alpha=0.7)
+
+        if i % n_cols == 0:
+            ax.set_ylabel(f'Glacier Melt ({unit_label})', fontsize=13, fontweight='bold')
+
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.text(0.5, 0.02, 'Month', ha='center', fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0.04, 1, 1.0])
+
+    save_path = plot_dir / f'glacier_melt_regime_subplots_{unit}_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved glacier melt regime subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+##################### water balance subplots ####################################
+#--------------------------------------------------------------------------------
+
+def plot_water_balance_subplots(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot annual water balance for each configuration in separate subplots.
+    Shows observed Q, simulated Q, precipitation, snowmelt, and glacier melt as bars.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+
+    Returns:
+    --------
+    dict
+        Dictionary containing water balance data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    model_type = multi_config.get('model_type', 'HBV')
+
+    print(f"Creating water balance subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    for config_dir in configs:
+        individual_config = _build_individual_config(multi_config, config_dir)
+
+        try:
+            # Load catchment area for unit conversion
+            config_path = Path(multi_config['main_dir']) / config_dir
+            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            hru_shapefile = topo_dir / "HRU.shp"
+
+            if not hru_shapefile.exists():
+                print(f"  Skipping {config_dir}: HRU shapefile not found")
+                continue
+
+            import geopandas as gpd
+            hru_gdf = gpd.read_file(hru_shapefile)
+            total_area_km2 = hru_gdf['Area_km2'].sum()
+            conversion_m3s_to_mm_day = 86400 / (total_area_km2 * 1000000) * 1000
+
+            # Load streamflow
+            data = load_hydrograph_data(individual_config)
+            if data is None:
+                continue
+
+            start_dt = pd.to_datetime(validation_start)
+            end_dt = pd.to_datetime(validation_end)
+            mask = (data['date'] >= start_dt) & (data['date'] <= end_dt)
+            df = data[mask].copy()
+
+            if len(df) == 0:
+                continue
+
+            df['obs_Q_mm'] = df['obs_Q'] * conversion_m3s_to_mm_day
+            df['sim_Q_mm'] = df['sim_Q'] * conversion_m3s_to_mm_day
+            df['year'] = df['date'].dt.year
+
+            annual = df.groupby('year').agg({
+                'obs_Q_mm': 'sum',
+                'sim_Q_mm': 'sum'
+            }).reset_index()
+
+            # Calculate means
+            mean_obs = annual['obs_Q_mm'].mean()
+            mean_sim = annual['sim_Q_mm'].mean()
+
+            # Load snowmelt
+            mean_snowmelt = 0
+            try:
+                snowmelt_df = load_snowmelt_mass_loadings(individual_config, validation_start, validation_end, unit='mm')
+                if snowmelt_df is not None and 'snowmelt_mm_day' in snowmelt_df.columns:
+                    snowmelt_df['year'] = snowmelt_df['date'].dt.year
+                    mean_snowmelt = snowmelt_df.groupby('year')['snowmelt_mm_day'].sum().mean()
+            except Exception:
+                pass
+
+            # Load glacier melt
+            mean_glacier_melt = 0
+            glacier_source = multi_config.get('config_glacier_source', {}).get(config_dir, 'none')
+            try:
+                if glacier_source == 'glogem':
+                    glogem_data = load_glogem_data(individual_config, unit='mm', plot=False)
+                    if glogem_data is not None and 'icemelt_normalized' in glogem_data.columns:
+                        glogem_mask = (glogem_data['date'] >= start_dt) & (glogem_data['date'] <= end_dt)
+                        glogem_filtered = glogem_data[glogem_mask].copy()
+                        glogem_filtered['year'] = glogem_filtered['date'].dt.year
+                        mean_glacier_melt = glogem_filtered.groupby('year')['icemelt_normalized'].sum().mean()
+                elif glacier_source == 'raven_deltah':
+                    glacier_file = config_path / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
+                    if glacier_file.exists():
+                        glacier_df = pd.read_csv(glacier_file)
+                        glacier_df['date'] = pd.to_datetime(glacier_df['date'])
+                        glacier_mask = (glacier_df['date'] >= start_dt) & (glacier_df['date'] <= end_dt)
+                        glacier_filtered = glacier_df[glacier_mask].copy()
+                        glacier_m3s_col = f"{gauge_id} m3/s"
+                        if glacier_m3s_col in glacier_filtered.columns:
+                            glacier_filtered['glacier_mm'] = glacier_filtered[glacier_m3s_col] * conversion_m3s_to_mm_day
+                            glacier_filtered['year'] = glacier_filtered['date'].dt.year
+                            mean_glacier_melt = glacier_filtered.groupby('year')['glacier_mm'].sum().mean()
+            except Exception:
+                pass
+
+            # Load precipitation
+            mean_precip = 0
+            try:
+                snowfall_df = load_forcing_by_hrugroup(individual_config, 'SNOWFALL')
+                rainfall_df = load_forcing_by_hrugroup(individual_config, 'RAINFALL')
+                if snowfall_df is not None and rainfall_df is not None:
+                    precip_df = pd.merge(
+                        snowfall_df.rename(columns={'NO_GLACIER': 'snowfall'}),
+                        rainfall_df.rename(columns={'NO_GLACIER': 'rainfall'}),
+                        on='date', how='inner'
+                    )
+                    precip_mask = (precip_df['date'] >= start_dt) & (precip_df['date'] <= end_dt)
+                    precip_period = precip_df[precip_mask].copy()
+
+                    # Scale by non-glacier fraction
+                    area_fraction = 1.0
+                    if 'Landuse_Cl' in hru_gdf.columns:
+                        non_glacier_area = hru_gdf[~hru_gdf['Landuse_Cl'].isin([7, 8])]['Area_km2'].sum()
+                        area_fraction = non_glacier_area / total_area_km2 if total_area_km2 > 0 else 1.0
+
+                    precip_period['total'] = (precip_period['snowfall'] + precip_period['rainfall']) * area_fraction
+                    precip_period['year'] = precip_period['date'].dt.year
+                    mean_precip = precip_period.groupby('year')['total'].sum().mean()
+            except Exception:
+                pass
+
+            config_results[config_dir] = {
+                'mean_obs_Q': mean_obs,
+                'mean_sim_Q': mean_sim,
+                'mean_snowmelt': mean_snowmelt,
+                'mean_glacier_melt': mean_glacier_melt,
+                'mean_precip': mean_precip,
+                'annual_data': annual,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: Q_obs={mean_obs:.0f}, Q_sim={mean_sim:.0f}, P={mean_precip:.0f}, Glacier={mean_glacier_melt:.0f} mm/yr")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        color = result['color']
+
+        components = ['Obs Q', 'Sim Q', 'Precip', 'Snowmelt', 'Glacier']
+        values = [result['mean_obs_Q'], result['mean_sim_Q'], result['mean_precip'], result['mean_snowmelt'], result['mean_glacier_melt']]
+        bar_colors = ['black', color, 'steelblue', 'deepskyblue', '#4292c6']
+
+        bars = ax.bar(components, values, color=bar_colors, edgecolor='black', linewidth=0.5)
+
+        # Add value labels
+        for bar, val in zip(bars, values):
+            if val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 5,
+                        f'{val:.0f}', ha='center', va='bottom', fontsize=10)
+
+        ax.set_title(result['name'], fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='x', rotation=30, labelsize=11)
+
+        if i % n_cols == 0:
+            ax.set_ylabel('mm/year', fontsize=13, fontweight='bold')
+
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    plt.tight_layout()
+
+    save_path = plot_dir / f'water_balance_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved water balance subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+############ hydrograph timeseries subplots (configs as rows) ###################
+#--------------------------------------------------------------------------------
+
+def plot_hydrograph_timeseries_subplots(multi_config, validation_start=None, validation_end=None,
+                                        random_seed=42, n_years=2):
+    """
+    Plot hydrograph time series with each configuration as a row and years as columns.
+    Observed streamflow in black, simulated in config color.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+    random_seed : int
+        Random seed for reproducible year selection
+    n_years : int
+        Number of years to plot as columns (default: 2)
+
+    Returns:
+    --------
+    dict
+        Dictionary with selected years and config results
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+
+    print(f"Creating hydrograph timeseries subplots (configs as rows) for {len(configs)} configurations")
+    print(f"  - Validation period: {validation_start} to {validation_end}")
+    print(f"  - Number of years (columns): {n_years}")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+
+    # First pass: load data and find common years
+    config_results = {}
+    available_years = None
+
+    for config_dir in configs:
+        individual_config = _build_individual_config(multi_config, config_dir)
+        try:
+            data = load_hydrograph_data(individual_config)
+            if data is None:
+                continue
+
+            val_mask = (data['date'] >= pd.to_datetime(validation_start)) & \
+                       (data['date'] <= pd.to_datetime(validation_end))
+            df_val = data[val_mask].copy()
+
+            if len(df_val) == 0:
+                continue
+
+            # Only include years with at least 30 days of data
+            year_counts = df_val['date'].dt.year.value_counts()
+            val_years = set(year_counts[year_counts >= 30].index)
+
+            config_results[config_dir] = {
+                'data': data,
+                'val_years': val_years,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: years {sorted(val_years)}")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    # Find years available in the majority of configs (>50%)
+    from collections import Counter
+    year_counter = Counter()
+    for result in config_results.values():
+        year_counter.update(result['val_years'])
+    threshold = len(config_results) * 0.5
+    available_years = {y for y, count in year_counter.items() if count >= threshold}
+
+    if not available_years or len(available_years) < n_years:
+        print(f"Not enough common years (need {n_years}). Found: {sorted(available_years) if available_years else 'None'}")
+        if available_years and len(available_years) > 0:
+            n_years = len(available_years)
+        else:
+            return None
+
+    # Select years from the middle of the validation period
+    sorted_years = sorted(available_years)
+    mid = len(sorted_years) // 2
+    # Take n_years centered around the middle
+    half = n_years // 2
+    start_idx = max(0, mid - half)
+    # Ensure we don't go past the end, but also avoid first/last years
+    if start_idx + n_years > len(sorted_years):
+        start_idx = len(sorted_years) - n_years
+    # Avoid picking the very first or last year if possible
+    if len(sorted_years) > n_years + 1:
+        start_idx = max(1, start_idx)
+        if start_idx + n_years >= len(sorted_years):
+            start_idx = len(sorted_years) - n_years - 1
+    selected_years = sorted_years[start_idx:start_idx + n_years]
+    print(f"\nSelected years (middle of validation): {selected_years}")
+
+    # Create figure: rows = configs, cols = years
+    n_configs = len(config_results)
+    fig, axes = plt.subplots(n_configs, n_years, figsize=(8 * n_years, 3.5 * n_configs),
+                              sharex='col', sharey=True)
+
+    # Handle edge cases for axes shape
+    if n_configs == 1 and n_years == 1:
+        axes = np.array([[axes]])
+    elif n_configs == 1:
+        axes = axes[np.newaxis, :]
+    elif n_years == 1:
+        axes = axes[:, np.newaxis]
+
+    for row_idx, (config_dir, result) in enumerate(config_results.items()):
+        data = result['data']
+        color = result['color']
+        name = result['name']
+
+        for col_idx, year in enumerate(selected_years):
+            ax = axes[row_idx, col_idx]
+
+            # Filter for this year within validation period
+            year_mask = (data['date'].dt.year == year) & \
+                        (data['date'] >= pd.to_datetime(validation_start)) & \
+                        (data['date'] <= pd.to_datetime(validation_end))
+            year_data = data[year_mask].copy()
+
+            if len(year_data) == 0:
+                ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
+                continue
+
+            # Plot observed
+            if 'obs_Q' in year_data.columns:
+                ax.plot(year_data['date'], year_data['obs_Q'], 'k-',
+                        linewidth=2, label='Observed', zorder=10)
+
+            # Plot simulated
+            if 'sim_Q' in year_data.columns:
+                ax.plot(year_data['date'], year_data['sim_Q'], '--',
+                        color=color, linewidth=2, label='Simulated', zorder=5)
+
+            ax.grid(True, linestyle='--', alpha=0.5, zorder=0)
+
+            # Column header (year) on top row
+            if row_idx == 0:
+                ax.set_title(f'{year}', fontsize=16, fontweight='bold')
+
+            # Row label (config name) on right side
+            if col_idx == n_years - 1:
+                ax.annotate(name, xy=(1.02, 0.5), xycoords='axes fraction',
+                           fontsize=12, fontweight='bold', va='center', rotation=-90)
+
+            # Y-axis label on leftmost column
+            if col_idx == 0:
+                ax.set_ylabel('Q (m³/s)', fontsize=12)
+
+            # Legend only on first cell
+            if row_idx == 0 and col_idx == 0:
+                ax.legend(loc='upper right', fontsize=10)
+
+            # Format x-axis dates
+            import matplotlib.dates as mdates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
+            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+
+    plt.tight_layout()
+    plt.subplots_adjust(right=0.92)  # Make room for row labels
+
+    save_path = plot_dir / f'hydrograph_timeseries_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved hydrograph timeseries subplots to: {save_path}")
+    plt.show()
+
+    return {'selected_years': selected_years, 'config_results': config_results}
+
+
+#--------------------------------------------------------------------------------
+########## catchment-average SWE timeseries (all configs overlay) ###############
+#--------------------------------------------------------------------------------
+
+def plot_swe_catchment_average_comparison(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot catchment-average SWE time series for all configurations overlaid on one plot.
+    Reads SWE directly from the ByHRUGroup CSV (AllHRUs column) to avoid load_swe_data issues.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+
+    Returns:
+    --------
+    dict
+        Dictionary containing SWE data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    model_type = multi_config.get('model_type', 'HBV')
+
+    print(f"Creating catchment-average SWE comparison for {len(configs)} configurations")
+    print(f"  - Validation period: {validation_start} to {validation_end}")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    val_start = pd.to_datetime(validation_start)
+    val_end = pd.to_datetime(validation_end)
+
+    for config_dir in configs:
+        try:
+            config_path = Path(multi_config['main_dir']) / config_dir
+            swe_file = config_path / f"catchment_{gauge_id}" / model_type / "output" / \
+                       f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
+
+            if not swe_file.exists():
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: SWE file not found")
+                continue
+
+            # Read the CSV - skip the units row (row 2)
+            df = pd.read_csv(swe_file, skiprows=[1])
+
+            # Parse dates from the second column (HRUGroup: or similar)
+            date_col = df.columns[1]
+            df['date'] = pd.to_datetime(df[date_col])
+
+            # Get the AllHRUs column (catchment-average SWE)
+            if 'AllHRUs' not in df.columns:
+                print(f"  Skipping {config_dir}: no AllHRUs column")
+                continue
+
+            df['swe'] = pd.to_numeric(df['AllHRUs'], errors='coerce')
+
+            # Filter for validation period
+            mask = (df['date'] >= val_start) & (df['date'] <= val_end)
+            df_val = df[mask][['date', 'swe']].dropna().copy()
+
+            if len(df_val) == 0:
+                print(f"  Skipping {config_dir}: no data in validation period")
+                continue
+
+            config_results[config_dir] = {
+                'date': df_val['date'].values,
+                'swe': df_val['swe'].values,
+                'mean_swe': df_val['swe'].mean(),
+                'max_swe': df_val['swe'].max(),
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: mean={df_val['swe'].mean():.1f} mm, max={df_val['swe'].max():.1f} mm")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    # Create overlay plot
+    fig, ax = plt.subplots(figsize=(18, 8))
+
+    for config_dir, result in config_results.items():
+        ax.plot(result['date'], result['swe'],
+                color=result['color'], linewidth=1.8, label=result['name'], alpha=0.85)
+
+    ax.set_xlabel('Date', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Snow Water Equivalent (mm)', fontsize=14, fontweight='bold')
+    ax.set_title(f'Catchment-Average SWE - All Configurations\nCatchment {gauge_id} ({validation_start} to {validation_end})',
+                 fontsize=16, fontweight='bold')
+    ax.grid(True, linestyle='--', alpha=0.5, zorder=0)
+    ax.legend(loc='upper right', fontsize=9, ncol=2)
+
+    # Format x-axis
+    import matplotlib.dates as mdates
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    fig.autofmt_xdate()
+
+    plt.tight_layout()
+
+    save_path = plot_dir / f'swe_catchment_average_comparison_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved catchment-average SWE comparison to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+##################### AET subplots ##############################################
+#--------------------------------------------------------------------------------
+
+def plot_aet_subplots(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot monthly actual evapotranspiration (AET) for each configuration in separate subplots.
+    AET is scaled by non-glacier area fraction.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for analysis period
+    validation_end : str, optional
+        End date for analysis period
+
+    Returns:
+    --------
+    dict
+        Dictionary containing AET data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    model_type = multi_config.get('model_type', 'HBV')
+
+    print(f"Creating AET subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    months = range(1, 13)
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    for config_dir in configs:
+        try:
+            config_path = Path(multi_config['main_dir']) / config_dir
+            output_dir = config_path / f"catchment_{gauge_id}" / model_type / "output"
+
+            # Load AET data
+            aet_file = output_dir / f"{gauge_id}_{model_type}_AET_Daily_Average_ByHRUGroup.csv"
+            if not aet_file.exists():
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: AET file not found")
+                continue
+
+            df = pd.read_csv(aet_file, skiprows=[1])
+            if 'HRUGroup:' in df.columns:
+                df = df.rename(columns={'HRUGroup:': 'date'})
+            else:
+                continue
+            df['date'] = pd.to_datetime(df['date'])
+
+            if 'NO_GLACIER' not in df.columns:
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: NO_GLACIER column missing")
+                continue
+
+            df = df.rename(columns={'NO_GLACIER': 'aet'})
+
+            # Load area scaling
+            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            hru_shapefile = topo_dir / "HRU.shp"
+
+            area_fraction = 1.0
+            total_area_km2 = 0.0
+            non_glacier_area_km2 = 0.0
+            if hru_shapefile.exists():
+                import geopandas as gpd
+                hru_gdf = gpd.read_file(hru_shapefile)
+                total_area_km2 = hru_gdf['Area_km2'].sum()
+                if 'Landuse_Cl' in hru_gdf.columns:
+                    non_glacier_area_km2 = hru_gdf[~hru_gdf['Landuse_Cl'].isin([7, 8])]['Area_km2'].sum()
+                    area_fraction = non_glacier_area_km2 / total_area_km2 if total_area_km2 > 0 else 1.0
+                else:
+                    non_glacier_area_km2 = total_area_km2
+
+            # Filter period
+            start_dt = pd.to_datetime(validation_start)
+            end_dt = pd.to_datetime(validation_end)
+            mask = (df['date'] >= start_dt) & (df['date'] <= end_dt)
+            df_period = df[mask].copy()
+
+            if len(df_period) == 0:
+                continue
+
+            # Scale AET
+            df_period['aet_scaled'] = df_period['aet'] * area_fraction
+            df_period['month'] = df_period['date'].dt.month
+            monthly_aet = df_period.groupby('month')['aet_scaled'].mean()
+
+            config_results[config_dir] = {
+                'monthly_aet': monthly_aet,
+                'area_fraction': area_fraction,
+                'mean_daily_aet': df_period['aet_scaled'].mean(),
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: mean AET={df_period['aet_scaled'].mean():.3f} mm/day")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        monthly_aet = result['monthly_aet']
+
+        ax.bar(months, [monthly_aet.get(m, 0) for m in months],
+               color='forestgreen', edgecolor='darkgreen', linewidth=0.5)
+
+        ax.set_title(result['name'], fontsize=14, fontweight='bold')
+        ax.set_xticks(months)
+        ax.set_xticklabels(month_names, rotation=45, fontsize=10)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # Add mean daily AET annotation
+        ax.text(0.98, 0.95, f"Mean: {result['mean_daily_aet']:.3f} mm/d\nArea frac: {result['area_fraction']:.2f}",
+                transform=ax.transAxes, ha='right', va='top', fontsize=9,
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        if i % n_cols == 0:
+            ax.set_ylabel('AET (mm/day)', fontsize=13, fontweight='bold')
+
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.suptitle(f'Monthly Mean AET (Scaled to Catchment Area) - Catchment {gauge_id}\n{validation_start} to {validation_end}',
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    save_path = plot_dir / f'aet_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved AET subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+################# precipitation and AET combined subplots #######################
+#--------------------------------------------------------------------------------
+
+def plot_precipitation_and_aet_combined_subplots(multi_config, validation_start=None, validation_end=None):
+    """
+    Plot monthly precipitation (stacked rain/snow) and AET side by side for each configuration.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for analysis period
+    validation_end : str, optional
+        End date for analysis period
+
+    Returns:
+    --------
+    dict
+        Dictionary containing precip+AET data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2010-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    model_type = multi_config.get('model_type', 'HBV')
+
+    print(f"Creating precipitation + AET combined subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    months = range(1, 13)
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    for config_dir in configs:
+        individual_config = _build_individual_config(multi_config, config_dir)
+        try:
+            # Load snowfall and rainfall
+            snowfall_df = load_forcing_by_hrugroup(individual_config, 'SNOWFALL')
+            rainfall_df = load_forcing_by_hrugroup(individual_config, 'RAINFALL')
+
+            if snowfall_df is None or rainfall_df is None:
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: missing forcing data")
+                continue
+
+            # Load AET data
+            config_path = Path(multi_config['main_dir']) / config_dir
+            output_dir = config_path / f"catchment_{gauge_id}" / model_type / "output"
+            aet_file = output_dir / f"{gauge_id}_{model_type}_AET_Daily_Average_ByHRUGroup.csv"
+
+            if not aet_file.exists():
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: AET file not found")
+                continue
+
+            aet_df = pd.read_csv(aet_file, skiprows=[1])
+            if 'HRUGroup:' in aet_df.columns:
+                aet_df = aet_df.rename(columns={'HRUGroup:': 'date'})
+            else:
+                continue
+            aet_df['date'] = pd.to_datetime(aet_df['date'])
+            if 'NO_GLACIER' not in aet_df.columns:
+                continue
+            aet_df = aet_df.rename(columns={'NO_GLACIER': 'aet'})
+
+            # Merge all datasets
+            df = pd.merge(
+                snowfall_df.rename(columns={'NO_GLACIER': 'snowfall'}),
+                rainfall_df.rename(columns={'NO_GLACIER': 'rainfall'}),
+                on='date', how='inner'
+            )
+            df = pd.merge(df, aet_df[['date', 'aet']], on='date', how='inner')
+
+            # Filter period
+            start_dt = pd.to_datetime(validation_start)
+            end_dt = pd.to_datetime(validation_end)
+            mask = (df['date'] >= start_dt) & (df['date'] <= end_dt)
+            df_period = df[mask].copy()
+
+            if len(df_period) == 0:
+                continue
+
+            # Load area scaling
+            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            hru_shapefile = topo_dir / "HRU.shp"
+
+            area_fraction = 1.0
+            if hru_shapefile.exists():
+                import geopandas as gpd
+                hru_gdf = gpd.read_file(hru_shapefile)
+                total_area = hru_gdf['Area_km2'].sum()
+                if 'Landuse_Cl' in hru_gdf.columns:
+                    non_glacier_area = hru_gdf[~hru_gdf['Landuse_Cl'].isin([7, 8])]['Area_km2'].sum()
+                    area_fraction = non_glacier_area / total_area if total_area > 0 else 1.0
+
+            # Scale values
+            df_period['snowfall_scaled'] = df_period['snowfall'] * area_fraction
+            df_period['rainfall_scaled'] = df_period['rainfall'] * area_fraction
+            df_period['aet_scaled'] = df_period['aet'] * area_fraction
+            df_period['month'] = df_period['date'].dt.month
+
+            monthly_snow = df_period.groupby('month')['snowfall_scaled'].mean()
+            monthly_rain = df_period.groupby('month')['rainfall_scaled'].mean()
+            monthly_aet = df_period.groupby('month')['aet_scaled'].mean()
+
+            config_results[config_dir] = {
+                'monthly_snow': monthly_snow,
+                'monthly_rain': monthly_rain,
+                'monthly_aet': monthly_aet,
+                'area_fraction': area_fraction,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            mean_precip = monthly_snow.mean() + monthly_rain.mean()
+            print(f"  + {config_names.get(config_dir, config_dir)}: precip={mean_precip:.3f}, AET={monthly_aet.mean():.3f} mm/day")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No configurations processed successfully")
+        return None
+
+    n_configs = len(config_results)
+    n_rows, n_cols, figsize = _calc_subplot_layout(n_configs)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    if n_configs == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.array(axes).flatten()
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        ax = axes[i]
+        monthly_rain = result['monthly_rain']
+        monthly_snow = result['monthly_snow']
+        monthly_aet = result['monthly_aet']
+
+        bar_width = 0.35
+        x_pos = np.arange(1, 13)
+
+        # Precipitation bars (stacked)
+        ax.bar(x_pos - bar_width/2, [monthly_rain.get(m, 0) for m in months], bar_width,
+               color='steelblue', label='Rainfall', edgecolor='navy', linewidth=0.5)
+        ax.bar(x_pos - bar_width/2, [monthly_snow.get(m, 0) for m in months], bar_width,
+               bottom=[monthly_rain.get(m, 0) for m in months],
+               color='lightcyan', label='Snowfall', edgecolor='darkblue', linewidth=0.5)
+
+        # AET bars
+        ax.bar(x_pos + bar_width/2, [monthly_aet.get(m, 0) for m in months], bar_width,
+               color='forestgreen', label='AET', edgecolor='darkgreen', linewidth=0.5)
+
+        ax.set_title(result['name'], fontsize=14, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(month_names, rotation=45, fontsize=10)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        if i == 0:
+            ax.legend(fontsize=9)
+        if i % n_cols == 0:
+            ax.set_ylabel('Water Flux (mm/day)', fontsize=13, fontweight='bold')
+
+    for i in range(n_configs, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.suptitle(f'Monthly Precipitation and AET (Scaled to Catchment Area) - Catchment {gauge_id}\n{validation_start} to {validation_end}',
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    save_path = plot_dir / f'precipitation_aet_combined_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved precipitation + AET combined subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+################# GloGEM vs observed regime subplots #############################
+#--------------------------------------------------------------------------------
+
+def plot_glogem_vs_observed_regime_subplots(multi_config, validation_start=None, validation_end=None,
+                                             min_data_threshold=0.95):
+    """
+    Plot GloGEM catchment-average melt regime vs observed runoff for each coupled configuration.
+    Each subplot shows 2-panel: total GloGEM vs observed bars, and stacked GloGEM components.
+    Skips non-coupled configs (baseline, deltah) since they don't have GloGEM data.
+
+    Parameters:
+    -----------
+    multi_config : dict
+        Multi-configuration dictionary
+    validation_start : str, optional
+        Start date for analysis period
+    validation_end : str, optional
+        End date for analysis period
+    min_data_threshold : float, optional
+        Minimum fraction of valid data per year (default: 0.95)
+
+    Returns:
+    --------
+    dict
+        Dictionary containing GloGEM vs observed regime data for each configuration
+    """
+
+    if validation_start is None:
+        validation_start = multi_config.get('start_date', '2000-01-01')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2020-12-31')
+
+    gauge_id = multi_config['gauge_id']
+    configs = multi_config['configs']
+    config_colors = multi_config['config_colors']
+    config_names = multi_config['config_names']
+    config_coupled = multi_config.get('config_coupled', {})
+
+    print(f"Creating GloGEM vs observed regime subplots for {len(configs)} configurations")
+
+    plot_dir = create_multi_plot_dir(multi_config)
+    config_results = {}
+
+    month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    start = pd.to_datetime(validation_start)
+    end = pd.to_datetime(validation_end)
+
+    for config_dir in configs:
+        # Only process coupled configs (they have GloGEM data)
+        if not config_coupled.get(config_dir, False):
+            print(f"  Skipping {config_names.get(config_dir, config_dir)}: not coupled (no GloGEM data)")
+            continue
+
+        individual_config = _build_individual_config(multi_config, config_dir)
+
+        try:
+            # Load GloGEM data
+            glogem_df = load_glogem_data(individual_config, unit='mm', plot=False)
+            if glogem_df is None:
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: no GloGEM data")
+                continue
+
+            glogem_df = glogem_df[(glogem_df['date'] >= start) & (glogem_df['date'] <= end)].copy()
+
+            # Load observed runoff
+            hydro_df = load_hydrograph_data(individual_config)
+            if hydro_df is None or 'obs_Q' not in hydro_df.columns:
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: no observed data")
+                continue
+
+            hydro_df = hydro_df[(hydro_df['date'] >= start) & (hydro_df['date'] <= end)].copy()
+
+            # Get catchment area for Q conversion
+            config_path = Path(multi_config['main_dir']) / config_dir
+            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            hru_shapefile = topo_dir / "HRU.shp"
+
+            if not hru_shapefile.exists():
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: HRU shapefile not found")
+                continue
+
+            import geopandas as gpd
+            hru_gdf = gpd.read_file(hru_shapefile)
+            catchment_area_km2 = hru_gdf['Area_km2'].sum()
+
+            # Convert Q from m3/s to mm/day
+            conversion_factor = 86400.0 / (catchment_area_km2 * 1e6) * 1000.0
+            hydro_df['obs_Q_mm'] = hydro_df['obs_Q'] * conversion_factor
+
+            # Merge
+            merged_df = pd.merge(
+                glogem_df[['date', 'glacier_melt_normalized', 'icemelt_normalized',
+                           'snowmelt_normalized', 'rainfall_normalized']],
+                hydro_df[['date', 'obs_Q_mm']],
+                on='date', how='inner'
+            )
+
+            if len(merged_df) == 0:
+                continue
+
+            merged_df['year'] = merged_df['date'].dt.year
+            merged_df['month'] = merged_df['date'].dt.month
+
+            # Filter years by data availability
+            valid_years = []
+            for year in sorted(merged_df['year'].unique()):
+                year_start = max(pd.Timestamp(f"{year}-01-01"), start)
+                year_end = min(pd.Timestamp(f"{year}-12-31"), end)
+                expected_days = (year_end - year_start).days + 1
+                year_data = merged_df[merged_df['year'] == year]
+                glogem_avail = year_data['glacier_melt_normalized'].notna().sum() / expected_days
+                obs_avail = year_data['obs_Q_mm'].notna().sum() / expected_days
+                if glogem_avail >= min_data_threshold and obs_avail >= min_data_threshold:
+                    valid_years.append(year)
+
+            if not valid_years:
+                print(f"  Skipping {config_names.get(config_dir, config_dir)}: no valid years")
+                continue
+
+            merged_filtered = merged_df[merged_df['year'].isin(valid_years)].copy()
+
+            # Monthly regime
+            monthly_regime = merged_filtered.groupby('month').agg({
+                'glacier_melt_normalized': 'mean',
+                'icemelt_normalized': 'mean',
+                'snowmelt_normalized': 'mean',
+                'rainfall_normalized': 'mean',
+                'obs_Q_mm': 'mean'
+            }).reset_index()
+
+            # Annual totals
+            days_per_month = [31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            monthly_regime['days'] = monthly_regime['month'].apply(lambda m: days_per_month[m-1])
+            glogem_total = (monthly_regime['glacier_melt_normalized'] * monthly_regime['days']).sum()
+            obs_total = (monthly_regime['obs_Q_mm'] * monthly_regime['days']).sum()
+            ratio = glogem_total / obs_total if obs_total > 0 else float('nan')
+
+            config_results[config_dir] = {
+                'monthly_regime': monthly_regime,
+                'glogem_total': glogem_total,
+                'obs_total': obs_total,
+                'ratio': ratio,
+                'valid_years': valid_years,
+                'color': config_colors.get(config_dir, 'C0'),
+                'name': config_names.get(config_dir, config_dir),
+            }
+            print(f"  + {config_names.get(config_dir, config_dir)}: GloGEM={glogem_total:.0f}, Obs={obs_total:.0f} mm/yr, ratio={ratio:.2%}")
+
+        except Exception as e:
+            print(f"  Error processing {config_dir}: {e}")
+            continue
+
+    if len(config_results) == 0:
+        print("No coupled configurations processed successfully")
+        return None
+
+    # Each config gets 2 rows (GloGEM vs obs, component breakdown)
+    n_configs = len(config_results)
+    n_cols = min(n_configs, 4)
+    n_rows = (n_configs + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows * 2, n_cols, figsize=(6 * n_cols, 5 * n_rows * 2))
+
+    if n_rows * 2 == 1 and n_cols == 1:
+        axes = np.array([[axes]])
+    elif n_rows * 2 == 1:
+        axes = axes[np.newaxis, :]
+    elif n_cols == 1:
+        axes = axes[:, np.newaxis]
+
+    for i, (config_dir, result) in enumerate(config_results.items()):
+        col = i % n_cols
+        row_base = (i // n_cols) * 2
+        ax1 = axes[row_base, col]
+        ax2 = axes[row_base + 1, col]
+
+        regime = result['monthly_regime']
+        x = regime['month']
+
+        # Panel 1: GloGEM total vs observed
+        width = 0.35
+        ax1.bar(x - width/2, regime['glacier_melt_normalized'], width,
+                label='GloGEM Total', color='steelblue', alpha=0.8)
+        ax1.bar(x + width/2, regime['obs_Q_mm'], width,
+                label='Observed', color='coral', alpha=0.8)
+
+        ax1.set_title(result['name'], fontsize=13, fontweight='bold')
+        ax1.set_xticks(range(1, 13))
+        ax1.set_xticklabels(month_labels, fontsize=8, rotation=45)
+        ax1.grid(axis='y', alpha=0.3, linestyle='--')
+        ax1.set_ylabel('mm/day', fontsize=11)
+
+        stats_text = f"GloGEM: {result['glogem_total']:.0f}\nObs: {result['obs_total']:.0f}\nRatio: {result['ratio']:.0%}"
+        ax1.text(0.98, 0.95, stats_text, transform=ax1.transAxes,
+                 fontsize=8, va='top', ha='right',
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+        if i == 0:
+            ax1.legend(fontsize=8, loc='upper left')
+
+        # Panel 2: GloGEM components (stacked)
+        icemelt = regime['icemelt_normalized'].values
+        snowmelt = regime['snowmelt_normalized'].values
+        rain = regime['rainfall_normalized'].values
+
+        ax2.bar(x, icemelt, color='#4292c6', alpha=0.85, label='Ice Melt')
+        ax2.bar(x, snowmelt, bottom=icemelt, color='#9ecae1', alpha=0.85, label='Snow Melt')
+        ax2.bar(x, rain, bottom=icemelt + snowmelt, color='#74c476', alpha=0.85, label='Rain')
+
+        ax2.set_xticks(range(1, 13))
+        ax2.set_xticklabels(month_labels, fontsize=8, rotation=45)
+        ax2.grid(axis='y', alpha=0.3, linestyle='--')
+        ax2.set_ylabel('mm/day', fontsize=11)
+
+        if i == 0:
+            ax2.legend(fontsize=8, loc='upper left')
+
+    # Hide unused subplots
+    for i in range(n_configs, n_rows * n_cols):
+        col = i % n_cols
+        row_base = (i // n_cols) * 2
+        axes[row_base, col].set_visible(False)
+        axes[row_base + 1, col].set_visible(False)
+
+    fig.suptitle(f'GloGEM vs Observed Runoff Regime (Coupled Configs) - Catchment {gauge_id}\n{validation_start} to {validation_end}',
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    save_path = plot_dir / f'glogem_vs_observed_regime_subplots_{gauge_id}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved GloGEM vs observed regime subplots to: {save_path}")
+    plt.show()
+
+    return config_results
+
+
+#--------------------------------------------------------------------------------
+##################### orchestrator ##############################################
+#--------------------------------------------------------------------------------
+
+def run_complete_multi_postprocessing(configurations_yaml_path, gauge_id,
+                                      validation_start=None, validation_end=None,
+                                      skip_errors=True, unit='mm'):
+    """
+    Run complete multi-configuration postprocessing analysis.
+
+    Loads all configurations from the YAML registry and generates all comparison
+    plots for the specified catchment.
+
+    Parameters:
+    -----------
+    configurations_yaml_path : str or Path
+        Path to configurations.yaml
+    gauge_id : str
+        Gauge identifier (e.g., '0101')
+    validation_start : str, optional
+        Start date for validation period
+    validation_end : str, optional
+        End date for validation period
+    skip_errors : bool, optional
+        If True, continue even if individual plot functions fail (default: True)
+    unit : str, optional
+        Unit for regime plots ('mm' or 'm3'), default 'mm'
+
+    Returns:
+    --------
+    dict
+        Dictionary with results from each plot function and error summary
+    """
+
+    import time
+    start_time = time.time()
+
+    print("=" * 80)
+    print("RUNNING COMPLETE MULTI-CONFIGURATION POSTPROCESSING")
+    print("=" * 80)
+
+    # Step 1: Load configurations
+    multi_config = load_configurations(configurations_yaml_path, gauge_id)
+    if multi_config is None:
+        print("ERROR: Failed to load configurations")
+        return None
+
+    # Override validation dates if provided
+    if validation_start is None:
+        validation_start = multi_config.get('cali_end_date', '2020-12-31')
+    if validation_end is None:
+        validation_end = multi_config.get('end_date', '2022-12-31')
+
+    print(f"\nValidation period: {validation_start} to {validation_end}")
+    print(f"Number of configurations: {len(multi_config['configs'])}")
+    print("=" * 80 + "\n")
+
+    results = {}
+    errors = []
+
+    def run_function(func_name, func, *args, **kwargs):
+        print(f"\n{'=' * 80}")
+        print(f"Running: {func_name}")
+        print(f"{'=' * 80}")
+        try:
+            result = func(*args, **kwargs)
+            print(f"  {func_name} completed successfully")
+            return result
+        except Exception as e:
+            error_msg = f"  ERROR in {func_name}: {str(e)}"
+            print(error_msg)
+            if not skip_errors:
+                raise
+            errors.append({'function': func_name, 'error': str(e)})
+            import traceback
+            traceback.print_exc()
+            return None
+
+    # ========================================================================
+    # 1. STREAMFLOW COMPARISONS (overlay plots)
+    # ========================================================================
+    print("\n" + "#" * 80)
+    print("# 1. STREAMFLOW ANALYSIS")
+    print("#" * 80)
+
+    results['hydrological_regime_comparison'] = run_function(
+        'plot_hydrological_regime_comparison',
+        plot_hydrological_regime_comparison,
+        multi_config, validation_start, validation_end
+    )
+
+    results['hydrological_regime_subplots'] = run_function(
+        'plot_hydrological_regime_subplots',
+        plot_hydrological_regime_subplots,
+        multi_config, validation_start, validation_end, unit
+    )
+
+    results['hydrograph_timeseries_comparison'] = run_function(
+        'plot_hydrograph_timeseries_comparison',
+        plot_hydrograph_timeseries_comparison,
+        multi_config, validation_start, validation_end
+    )
+
+    results['hydrograph_timeseries_subplots'] = run_function(
+        'plot_hydrograph_timeseries_subplots',
+        plot_hydrograph_timeseries_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    results['streamflow_scatter_subplots'] = run_function(
+        'plot_streamflow_scatter_subplots',
+        plot_streamflow_scatter_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    results['streamflow_residuals_subplots'] = run_function(
+        'plot_streamflow_residuals_subplots',
+        plot_streamflow_residuals_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    results['streamflow_metrics_comparison'] = run_function(
+        'plot_streamflow_metrics_comparison',
+        plot_streamflow_metrics_comparison,
+        multi_config, validation_start, validation_end
+    )
+
+    # ========================================================================
+    # 2. SWE ANALYSIS
+    # ========================================================================
+    print("\n" + "#" * 80)
+    print("# 2. SNOW WATER EQUIVALENT (SWE) ANALYSIS")
+    print("#" * 80)
+
+    results['swe_timeseries_comparison'] = run_function(
+        'plot_swe_timeseries_comparison',
+        plot_swe_timeseries_comparison,
+        multi_config, validation_start, validation_end
+    )
+
+    results['swe_elevation_bands_comparison'] = run_function(
+        'plot_swe_elevation_bands_comparison',
+        plot_swe_elevation_bands_comparison,
+        multi_config, validation_start, validation_end
+    )
+
+    results['swe_catchment_average_comparison'] = run_function(
+        'plot_swe_catchment_average_comparison',
+        plot_swe_catchment_average_comparison,
+        multi_config, validation_start, validation_end
+    )
+
+    # ========================================================================
+    # 3. PRECIPITATION ANALYSIS
+    # ========================================================================
+    print("\n" + "#" * 80)
+    print("# 3. PRECIPITATION ANALYSIS")
+    print("#" * 80)
+
+    results['precipitation_partitioning_subplots'] = run_function(
+        'plot_precipitation_partitioning_subplots',
+        plot_precipitation_partitioning_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    results['aet_subplots'] = run_function(
+        'plot_aet_subplots',
+        plot_aet_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    results['precipitation_aet_combined_subplots'] = run_function(
+        'plot_precipitation_and_aet_combined_subplots',
+        plot_precipitation_and_aet_combined_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    # ========================================================================
+    # 4. SNOWMELT AND GLACIER MELT ANALYSIS
+    # ========================================================================
+    print("\n" + "#" * 80)
+    print("# 4. SNOWMELT AND GLACIER MELT ANALYSIS")
+    print("#" * 80)
+
+    results['snowmelt_regime_subplots'] = run_function(
+        'plot_snowmelt_regime_subplots',
+        plot_snowmelt_regime_subplots,
+        multi_config, validation_start, validation_end, unit
+    )
+
+    results['glacier_melt_regime_subplots'] = run_function(
+        'plot_glacier_melt_regime_subplots',
+        plot_glacier_melt_regime_subplots,
+        multi_config, validation_start, validation_end, unit
+    )
+
+    results['streamflow_glogem_snowmelt_regime_subplots'] = run_function(
+        'plot_streamflow_glogem_snowmelt_regime_subplots',
+        plot_streamflow_glogem_snowmelt_regime_subplots,
+        multi_config, validation_start, validation_end, unit
+    )
+
+    results['glogem_vs_observed_regime_subplots'] = run_function(
+        'plot_glogem_vs_observed_regime_subplots',
+        plot_glogem_vs_observed_regime_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    # ========================================================================
+    # 5. WATER BALANCE
+    # ========================================================================
+    print("\n" + "#" * 80)
+    print("# 5. WATER BALANCE ANALYSIS")
+    print("#" * 80)
+
+    results['water_balance_subplots'] = run_function(
+        'plot_water_balance_subplots',
+        plot_water_balance_subplots,
+        multi_config, validation_start, validation_end
+    )
+
+    # ========================================================================
+    # 6. PARAMETER AND STORAGE ANALYSIS
+    # ========================================================================
+    print("\n" + "#" * 80)
+    print("# 6. PARAMETER AND STORAGE ANALYSIS")
+    print("#" * 80)
+
+    results['parameter_boxplots_comparison'] = run_function(
+        'plot_parameter_boxplots_comparison',
+        plot_parameter_boxplots_comparison,
+        multi_config
+    )
+
+    results['storage_timeseries_comparison'] = run_function(
+        'plot_storage_timeseries_comparison',
+        plot_storage_timeseries_comparison,
+        multi_config, validation_start, validation_end
+    )
+
+    # ========================================================================
+    # SUMMARY
+    # ========================================================================
+    elapsed = time.time() - start_time
+
+    print("\n" + "=" * 80)
+    print("MULTI-CONFIGURATION POSTPROCESSING COMPLETE")
+    print("=" * 80)
+    print(f"Catchment: {gauge_id}")
+    print(f"Validation: {validation_start} to {validation_end}")
+    print(f"Configurations: {len(multi_config['configs'])}")
+    print(f"Time elapsed: {elapsed:.1f} seconds")
+
+    n_success = sum(1 for v in results.values() if v is not None)
+    n_total = len(results)
+    n_failed = len(errors)
+
+    print(f"\nPlots: {n_success}/{n_total} succeeded, {n_failed} failed")
+
+    if errors:
+        print(f"\nFailed plots:")
+        for err in errors:
+            print(f"  - {err['function']}: {err['error'][:80]}")
+
+    print("=" * 80)
+
+    results['_errors'] = errors
+    results['_multi_config'] = multi_config
+    return results

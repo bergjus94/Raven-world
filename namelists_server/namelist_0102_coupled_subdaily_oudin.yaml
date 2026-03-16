@@ -1,5 +1,6 @@
 # =============================================================================
-# Namelist for gauge 0102 (uncoupled, ERA5 forcing, DeltaH + subdaily melt, aspect HRUs)
+# Namelist for gauge 0102 (coupled subdaily icemelt + OUDIN PET)
+# coupled + irrigation_variable='icemelt' + subdaily melt + PET_OUDIN
 # =============================================================================
 
 gauge_id: '0102'
@@ -11,12 +12,14 @@ warm_up_date: '1978-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg@giub.local/Raven_world'
-config_dir: 'test_march/03_model_setups_deltah_subdaily_aspect'
+config_dir: 'test_march/03_model_setups_coupled_subdaily_oudin'
 debug: true
 
-coupled: false
-glacier_method: 'DeltaH'
+coupled: true
+irrigation_variable: 'icemelt'
+glogem_model: 'gfdl-esm4'
 subdaily_method: 'SUBDAILY_HOURLY_MELT'
+pet_method: 'OUDIN'
 
 nconnect: 'multiple'
 criteria:
@@ -38,8 +41,7 @@ raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
-ice_thickness_dir: '01_data/topo/glacier_outlines/composite_thickness_RGI60-14'
-glogem_dir: '01_data/GloGEM/Indus/TSLA'
+glogem_dir: '01_data/GloGEM/Indus/GMB'
 params_dir: '../src/config/default_params.yaml'
 
 # =============================================================================
@@ -64,7 +66,7 @@ calibration:
    metrics:
      primary: 'KGE'
      secondary: ['NSE', 'PBIAS', 'RMSE']
-   iterations: 3
+   iterations: 3000
    ngs: 15
    cali_end_date: '1999-12-31'
    vali_end_date: '2014-12-31'

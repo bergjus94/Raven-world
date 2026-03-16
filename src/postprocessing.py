@@ -2220,6 +2220,30 @@ def load_glogem_data(config, unit='mm', plot=True):
             'melt_small': glogem_filtered['melt_small']
         })
         
+        # Fallback for icemelt mode: if _catchment columns are all zero but _all
+        # columns have data, compute glacier fraction from clipped_glacier.shp
+        if (result_df['icemelt_normalized'].abs().sum() == 0 and
+                result_df['icemelt'].abs().sum() > 0):
+            import geopandas as gpd
+            topo_dir_path = config_dir / f"catchment_{gauge_id}" / "topo_files"
+            glacier_shp = topo_dir_path / "clipped_glacier.shp"
+            hru_shp = topo_dir_path / "HRU.shp"
+            if glacier_shp.exists() and hru_shp.exists():
+                glacier_gdf = gpd.read_file(glacier_shp)
+                hru_gdf = gpd.read_file(hru_shp)
+                area_col = 'Area_km2' if 'Area_km2' in hru_gdf.columns else 'area'
+                total_area = hru_gdf[area_col].sum()
+                # Use geometry area (not 'Area' attribute which stores original RGI
+                # polygon areas and is larger than rasterized HRU-based glacier area)
+                glacier_gdf_proj = glacier_gdf.to_crs(glacier_gdf.estimate_utm_crs())
+                glacier_area = glacier_gdf_proj.geometry.area.sum() / 1e6  # m² -> km²
+                fraction = glacier_area / total_area if total_area > 0 else 0
+                print(f"  ⚠ Catchment-normalized columns are zero (icemelt mode)")
+                print(f"    Computing glacier fraction from clipped_glacier.shp geometry: {fraction*100:.2f}%")
+                for comp in ['icemelt', 'snowmelt', 'rainfall', 'glacier_melt']:
+                    src_col = comp if comp != 'rainfall' else 'rainfall'
+                    result_df[f'{comp}_normalized'] = result_df[src_col] * fraction
+
         print(f"  ✓ Successfully loaded catchment-averaged GloGEM data")
         print(f"  - Date range: {result_df['date'].min()} to {result_df['date'].max()}")
         print(f"\n  Mean values (glacier area - all glaciers):")

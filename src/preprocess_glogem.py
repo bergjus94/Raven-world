@@ -585,31 +585,54 @@ class GloGEMProcessor:
         
         # Get glacier HRU areas from HRU shapefile
         glacier_hrus = hru_gdf[hru_gdf['Glacier_Cl'].notna()].copy()
-        
+
         all_glacier_area_km2 = 0.0
         large_glacier_area_km2 = 0.0
         small_glacier_area_km2 = 0.0
-        
-        for idx, row in glacier_hrus.iterrows():
-            hru_area = row[area_col]
-            glacier_id_str = row['Glacier_Cl']
-            all_glacier_area_km2 += hru_area
-            
-            # Determine if this HRU contains large or small glaciers
-            # by checking the first glacier ID in the pipe-separated list
-            if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
-                id_list = glacier_id_str.split('|')
-                first_glacier_id = id_list[0].replace(rgi_region_code + '.', '') if rgi_region_code else id_list[0]
-                if first_glacier_id in glacier_categories['large']:
-                    large_glacier_area_km2 += hru_area
-                else:
-                    small_glacier_area_km2 += hru_area
-            elif isinstance(glacier_id_str, str):
-                glacier_id = glacier_id_str.replace(rgi_region_code + '.', '') if rgi_region_code else glacier_id_str
-                if glacier_id in glacier_categories['large']:
-                    large_glacier_area_km2 += hru_area
-                else:
-                    small_glacier_area_km2 += hru_area
+
+        if len(glacier_hrus) == 0:
+            # Icemelt mode: glacier pixels are ROCK (Landuse_Cl=5), so Glacier_Cl is absent.
+            # Fall back to clipped_glacier.shp and compute area from GEOMETRY (not the
+            # 'Area' attribute, which stores original RGI polygon areas before clipping
+            # and is larger than the rasterized HRU-based area used by standard coupled configs).
+            glacier_shp_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "clipped_glacier.shp"
+            if glacier_shp_path.exists():
+                glacier_gdf = gpd.read_file(glacier_shp_path)
+                # Project to UTM for accurate area calculation, then convert m² to km²
+                glacier_gdf_proj = glacier_gdf.to_crs(glacier_gdf.estimate_utm_crs())
+                for idx, row in glacier_gdf_proj.iterrows():
+                    area_km2 = row.geometry.area / 1e6  # m² -> km²
+                    rgi_id = row.get('RGIId', '')
+                    all_glacier_area_km2 += area_km2
+                    short_id = rgi_id.replace(rgi_region_code + '.', '') if rgi_region_code and isinstance(rgi_id, str) else rgi_id
+                    if short_id in glacier_categories.get('large', set()):
+                        large_glacier_area_km2 += area_km2
+                    else:
+                        small_glacier_area_km2 += area_km2
+                self.logger.info(f"  Icemelt mode: computed glacier area from clipped_glacier.shp geometry ({len(glacier_gdf)} glaciers)")
+            else:
+                self.logger.warning(f"  No Glacier_Cl in HRUs and no clipped_glacier.shp found — glacier fraction will be 0")
+        else:
+            for idx, row in glacier_hrus.iterrows():
+                hru_area = row[area_col]
+                glacier_id_str = row['Glacier_Cl']
+                all_glacier_area_km2 += hru_area
+
+                # Determine if this HRU contains large or small glaciers
+                # by checking the first glacier ID in the pipe-separated list
+                if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
+                    id_list = glacier_id_str.split('|')
+                    first_glacier_id = id_list[0].replace(rgi_region_code + '.', '') if rgi_region_code else id_list[0]
+                    if first_glacier_id in glacier_categories['large']:
+                        large_glacier_area_km2 += hru_area
+                    else:
+                        small_glacier_area_km2 += hru_area
+                elif isinstance(glacier_id_str, str):
+                    glacier_id = glacier_id_str.replace(rgi_region_code + '.', '') if rgi_region_code else glacier_id_str
+                    if glacier_id in glacier_categories['large']:
+                        large_glacier_area_km2 += hru_area
+                    else:
+                        small_glacier_area_km2 += hru_area
         
         # Calculate glacier fractions
         fraction_all = all_glacier_area_km2 / total_catchment_area_km2 if total_catchment_area_km2 > 0 else 0
