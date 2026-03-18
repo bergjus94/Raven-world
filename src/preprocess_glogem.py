@@ -439,140 +439,124 @@ class GloGEMProcessor:
 
     def create_catchment_averaged_melt(self) -> pd.DataFrame:
         """
-        Create catchment-averaged, area-weighted glacier data for ALL glaciers, LARGE glaciers, and SMALL glaciers.
-        ✅ UPDATED: Calculates 3 separate weighted averages (all, large >=2km², small <2km²)
-        
-        Process ALL components: icemelt, snowmelt, rain, and total melt
-        
-        Process:
-        1. Load individual glacier data for each component (id, date, q)
-        2. Weight each glacier's values by its actual area in catchment
-        3. Calculate 3 area-weighted averages: 
-           - All glaciers: sum(value_i * area_i) / sum(area_i)
-           - Large glaciers (>=2km²): same but only for large glaciers
-           - Small glaciers (<2km²): same but only for small glaciers
-        4. Save as GloGEM_catchment_averaged.csv
-        
+        Create catchment-averaged, area-weighted glacier data for ALL glaciers,
+        LARGE glaciers (>=2 km²), and SMALL glaciers (<2 km²).
+
+        Reads directly from GloGEM NetCDF files and computes weighted averages
+        using vectorized numpy operations — no intermediate CSV roundtrip.
+
         Returns
         -------
         pd.DataFrame
-            DataFrame with catchment-averaged data (date, component_all, component_large, component_small)
+            DataFrame with catchment-averaged data
+            (date, {component}_{all|large|small|all_catchment|...})
         """
         self.logger.info("Creating catchment-averaged glacier data (ALL, LARGE, SMALL)...")
-        
-        # Output path for the new file
+
+        # Output path
         topo_dir = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files"
         output_path = topo_dir / 'GloGEM_catchment_averaged.csv'
-        
+
         # Check if it already exists
         if output_path.exists():
             self.logger.info(f"✅ Catchment-averaged file already exists: {output_path}")
             self.logger.info("   Loading existing file...")
             return pd.read_csv(output_path, parse_dates=['date'])
-        
-        # Get glacier IDs by category
+
+        # Get glacier IDs by category and area map
         glacier_ids_needed, rgi_region_code, glacier_categories = self._get_glacier_ids_from_catchment()
-        
         area_map = self._load_area_map()
         self.logger.info(f"Loaded {len(area_map)} glacier areas from mapping CSV")
-        
-        # Calculate total areas by category
+
         area_all = sum(area_map.get(gid, 0.0) for gid in glacier_categories['all'])
         area_large = sum(area_map.get(gid, 0.0) for gid in glacier_categories['large'])
         area_small = sum(area_map.get(gid, 0.0) for gid in glacier_categories['small'])
-        
         self.logger.info(f"Total glacier area: {area_all:.2f} km²")
-        self.logger.info(f"  - Large glaciers (>=2 km²): {area_large:.2f} km² ({len(glacier_categories['large'])} glaciers)")
-        self.logger.info(f"  - Small glaciers (<2 km²): {area_small:.2f} km² ({len(glacier_categories['small'])} glaciers)")
-        
-        # Define components to process
+        self.logger.info(f"  - Large (>=2 km²): {area_large:.2f} km² ({len(glacier_categories['large'])} glaciers)")
+        self.logger.info(f"  - Small (<2 km²): {area_small:.2f} km² ({len(glacier_categories['small'])} glaciers)")
+
+        # Map component keys to NetCDF variable names
         components = {
-            'icemelt': topo_dir / 'GloGEM_icemelt.csv',
-            'snowmelt': topo_dir / 'GloGEM_snowmelt.csv',
-            'rain': topo_dir / 'GloGEM_rain.csv',
-            'melt': topo_dir / 'GloGEM_melt.csv'
+            'icemelt':  'Icemelt',
+            'snowmelt': 'Snowmelt',
+            'rain':     'Rain',
+            'melt':     'Discharge',
         }
-        
-        # Check which files exist
-        missing_files = []
-        for comp, filepath in components.items():
-            if not filepath.exists():
-                missing_files.append(comp)
-        
-        if missing_files:
-            self.logger.error(f"Missing component files: {missing_files}")
-            self.logger.error("Please run process_glogem_files() first.")
-            return pd.DataFrame()
-        
-        # Process each component
+
+        start = pd.to_datetime(self.start_date)
+        end = pd.to_datetime(self.end_date)
+
         all_daily_weighted = None
-        
-        for component, filepath in components.items():
-            self.logger.info(f"Processing {component}...")
-            
-            # Load the individual glacier data
-            comp_df = pd.read_csv(filepath, dtype={'id': str})
-            comp_df['date'] = pd.to_datetime(comp_df['date'])
-            
-            self.logger.info(f"  Loaded {len(comp_df)} glacier-day records")
-            
-            # Add areas to dataframe
-            comp_df['area_km2'] = comp_df['id'].map(area_map)
-            
-            # Filter out glaciers without area information
-            before_filter = len(comp_df)
-            comp_df = comp_df[comp_df['area_km2'].notna()].copy()
-            after_filter = len(comp_df)
-            
-            if before_filter > after_filter:
-                self.logger.warning(f"  Removed {before_filter - after_filter} records without area information")
-            
-            # Classify glaciers as large or small
-            comp_df['glacier_size'] = comp_df['id'].apply(
-                lambda x: 'large' if x in glacier_categories['large'] else 'small'
-            )
-            
-            # ✅ Calculate 3 area-weighted averages: ALL, LARGE, SMALL
-            def calc_weighted_avg(group):
-                total_area = group['area_km2'].sum()
-                if total_area > 0:
-                    return (group['q'] * group['area_km2']).sum() / total_area
-                return 0.0
-            
-            # ALL glaciers
-            daily_all = comp_df.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
-            daily_all.columns = ['date', f'{component}_all']
-            
-            # LARGE glaciers
-            comp_large = comp_df[comp_df['glacier_size'] == 'large']
-            if not comp_large.empty:
-                daily_large = comp_large.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
-                daily_large.columns = ['date', f'{component}_large']
-            else:
-                daily_large = pd.DataFrame({'date': daily_all['date'], f'{component}_large': 0.0})
-            
-            # SMALL glaciers
-            comp_small = comp_df[comp_df['glacier_size'] == 'small']
-            if not comp_small.empty:
-                daily_small = comp_small.groupby('date').apply(calc_weighted_avg, include_groups=False).reset_index()
-                daily_small.columns = ['date', f'{component}_small']
-            else:
-                daily_small = pd.DataFrame({'date': daily_all['date'], f'{component}_small': 0.0})
-            
-            # Merge all three categories
-            daily_weighted = daily_all.merge(daily_large, on='date', how='outer').merge(daily_small, on='date', how='outer')
-            
-            self.logger.info(f"  ✓ Calculated area-weighted {component}")
-            self.logger.info(f"    Mean (all glaciers): {daily_weighted[f'{component}_all'].mean():.3f} mm/day")
-            self.logger.info(f"    Mean (large glaciers): {daily_weighted[f'{component}_large'].mean():.3f} mm/day")
-            self.logger.info(f"    Mean (small glaciers): {daily_weighted[f'{component}_small'].mean():.3f} mm/day")
-            
-            # Merge with master dataframe
+
+        for comp_key, nc_component in components.items():
+            nc_path = self._get_netcdf_path(nc_component)
+            if not nc_path.exists():
+                self.logger.warning(f"NetCDF not found: {nc_path} — skipping {comp_key}")
+                continue
+
+            self.logger.info(f"Processing {comp_key} from {nc_path.name}...")
+
+            ds = xr.open_dataset(nc_path)
+            var_name = nc_component.lower()
+            all_times = pd.to_datetime(ds.time.values)
+            all_glacier_ids = ds.glacier_id.values.astype(str)
+
+            # Filter to matching glaciers and time range
+            glacier_mask = np.isin(all_glacier_ids, list(glacier_ids_needed))
+            time_mask = (all_times >= start) & (all_times <= end)
+            matched_ids = all_glacier_ids[glacier_mask]
+
+            if matched_ids.size == 0 or time_mask.sum() == 0:
+                self.logger.warning(f"  No matching data for {comp_key}")
+                ds.close()
+                continue
+
+            self.logger.info(f"  Glaciers: {matched_ids.size}/{len(glacier_ids_needed)}, days: {time_mask.sum()}")
+
+            # Load the subset: shape (n_times, n_glaciers) — single read
+            data = ds[var_name].values[np.ix_(np.where(time_mask)[0], np.where(glacier_mask)[0])]
+            dates = all_times[time_mask]
+            ds.close()
+
+            # Replace NaN with 0
+            np.nan_to_num(data, copy=False, nan=0.0)
+
+            # Build area weight vectors (aligned with matched_ids axis)
+            areas = np.array([area_map.get(gid, 0.0) for gid in matched_ids])
+            large_mask = np.array([gid in glacier_categories['large'] for gid in matched_ids])
+            small_mask = ~large_mask
+
+            def _weighted_mean(data_2d, weights):
+                """Vectorized area-weighted mean along glacier axis."""
+                total_w = weights.sum()
+                if total_w == 0:
+                    return np.zeros(data_2d.shape[0])
+                return (data_2d * weights[np.newaxis, :]).sum(axis=1) / total_w
+
+            avg_all   = _weighted_mean(data, areas)
+            avg_large = _weighted_mean(data[:, large_mask], areas[large_mask])
+            avg_small = _weighted_mean(data[:, small_mask], areas[small_mask])
+
+            daily = pd.DataFrame({
+                'date': dates,
+                f'{comp_key}_all':   avg_all,
+                f'{comp_key}_large': avg_large,
+                f'{comp_key}_small': avg_small,
+            })
+
+            self.logger.info(f"  ✓ {comp_key}: mean(all)={avg_all.mean():.3f}, mean(large)={avg_large.mean():.3f}, mean(small)={avg_small.mean():.3f} mm/day")
+
             if all_daily_weighted is None:
-                all_daily_weighted = daily_weighted
+                all_daily_weighted = daily
             else:
-                all_daily_weighted = pd.merge(all_daily_weighted, daily_weighted, on='date', how='outer')
-        
+                all_daily_weighted = all_daily_weighted.merge(daily, on='date', how='outer')
+
+            del data  # free memory
+
+        if all_daily_weighted is None:
+            self.logger.error("No components were processed")
+            return pd.DataFrame()
+
         # Sort by date
         all_daily_weighted = all_daily_weighted.sort_values('date').reset_index(drop=True)
         
@@ -1855,41 +1839,36 @@ class GloGEMProcessor:
             }
         
         # ===== NORMAL PROCESSING =====
-        
+
         results = {}
-        
-        # 1. Process GloGEM NetCDF files (creates individual glacier CSVs)
-        self.logger.info("\n1. Processing GloGEM NetCDF files...")
-        glogem_df = self.process_glogem_files()
-        results['glogem_data'] = glogem_df
-        
-        # 2. Create catchment-averaged melt file
-        self.logger.info("\n2. Creating catchment-averaged glacier melt file...")
+
+        # 1. Create catchment-averaged melt file (reads directly from NetCDF)
+        self.logger.info("\n1. Creating catchment-averaged glacier melt file...")
         catchment_avg_df = self.create_catchment_averaged_melt()
         results['catchment_averaged_melt'] = catchment_avg_df
-        
-        # 3. Create irrigation NetCDF
-        self.logger.info("\n3. Creating irrigation NetCDF...")
+        results['glogem_data'] = pd.DataFrame()  # per-glacier CSVs no longer created by default
+
+        # 2. Create irrigation NetCDF (reads directly from NetCDF)
+        self.logger.info("\n2. Creating irrigation NetCDF...")
         irrigation_ds = self.create_irrigation_netcdf(force_reprocess=force_reprocess)
         results['irrigation_netcdf'] = irrigation_ds
         
-        # 4. Create irrigation grid weights
-        self.logger.info("\n4. Creating irrigation grid weights...")
+        # 3. Create irrigation grid weights
+        self.logger.info("\n3. Creating irrigation grid weights...")
         self.create_irrigation_gridweights()
-        
-        # 5. Validate glacier IDs
-        self.logger.info("\n5. Validating glacier IDs...")
+
+        # 4. Validate glacier IDs
+        self.logger.info("\n4. Validating glacier IDs...")
         validation = self.validate_glacier_ids()
         results['validation'] = validation
-        
-        # 6. Create comparison plots with observed streamflow
-        self.logger.info("\n6. Creating glacier runoff vs observed streamflow plots...")
+
+        # 5. Create comparison plots with observed streamflow
+        self.logger.info("\n5. Creating glacier runoff vs observed streamflow plots...")
         self.plot_glacier_runoff_vs_observed()
         
         self.logger.info("\n" + "="*60)
         self.logger.info("GloGEM PROCESSING COMPLETE")
         self.logger.info("="*60)
-        self.logger.info(f"✅ GloGEM melt data: {len(glogem_df)} individual glacier records")
         self.logger.info(f"✅ Catchment-averaged melt: {len(catchment_avg_df)} daily records")
         self.logger.info(f"✅ Irrigation NetCDF created")
         self.logger.info(f"✅ Grid weights created")

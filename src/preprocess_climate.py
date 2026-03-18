@@ -484,9 +484,10 @@ class _DownscalerBase:
                 daily = year_da.resample(valid_time="1D").min()  - 273.15
             elif variable_type == "temp_max":
                 daily = year_da.resample(valid_time="1D").max()  - 273.15
-            else:  # precip: sum hours, m → mm
-                daily = year_da.resample(valid_time="1D").sum() * 1000.0
-                daily = daily.clip(min=0)
+            else:  # precip: deaccumulate hourly, then sum to daily, m → mm
+                hourly = year_da.diff(dim="valid_time", label="upper")
+                hourly = hourly.clip(min=0)  # handle forecast restart negatives
+                daily = hourly.resample(valid_time="1D").sum() * 1000.0
 
             yearly.append(daily)
             self.logger.debug(f"  Raw ERA5 loaded: {year}  ({len(daily.valid_time)} days)")
@@ -544,9 +545,40 @@ class _DownscalerBase:
             if rename:
                 da = da.rename(rename)
 
-            processed_end = pd.Timestamp(da.time.values[-1])
-            want_end      = end if end is not None else self.train_end
+            processed_start = pd.Timestamp(da.time.values[0])
+            processed_end   = pd.Timestamp(da.time.values[-1])
+            want_start      = start if start is not None else self.train_start
+            want_end        = end if end is not None else self.train_end
 
+            # Extend backward if processed file starts after training start
+            if want_start < processed_start and self.meteo_dir is not None:
+                ext_start = want_start.year
+                ext_end   = processed_start.year - 1
+                self.logger.info(
+                    f"  ERA5 processed file starts {processed_start.date()}; "
+                    f"extending backward from raw files {ext_start}–{ext_end} ..."
+                )
+                tgt_lat = da["latitude"].values
+                tgt_lon = da["longitude"].values
+                extension = self._load_era5_from_raw(
+                    variable_type, ext_start, ext_end, tgt_lat, tgt_lon
+                )
+                if extension is not None:
+                    da = xr.concat(
+                        [extension, da.load()], dim="time"
+                    ).sortby("time")
+                    new_start = pd.Timestamp(da.time.values[0])
+                    self.logger.info(
+                        f"  ERA5 extended back to {new_start.date()} "
+                        f"({len(da.time)} days total)"
+                    )
+                else:
+                    self.logger.warning(
+                        "  Raw ERA5 backward extension failed; training limited to "
+                        f"{processed_start.date()}"
+                    )
+
+            # Extend forward if processed file ends before training end
             if want_end > processed_end and self.meteo_dir is not None:
                 ext_start = processed_end.year + 1
                 ext_end   = want_end.year
@@ -660,13 +692,13 @@ class _DownscalerBase:
         era5_var = _ERA5_OUTPUT_VAR[variable_type]
         da       = da.rename(era5_var)
 
-        # Standardise dim names to (latitude, longitude, time)
+        # Standardise dim names to (lat, lon, time) — matching ERA5-Land convention
         rename = {}
         for d in da.dims:
-            if d in ("lat", "y") and d != "latitude":
-                rename[d] = "latitude"
-            elif d in ("lon", "x") and d != "longitude":
-                rename[d] = "longitude"
+            if d in ("latitude", "y") and d != "lat":
+                rename[d] = "lat"
+            elif d in ("longitude", "x") and d != "lon":
+                rename[d] = "lon"
         if rename:
             da = da.rename(rename)
 
@@ -690,8 +722,8 @@ class _DownscalerBase:
 
         da.attrs.pop("coordinates", None)
 
-        # Ensure standard dimension order (time, latitude, longitude)
-        target_dims = [d for d in ("time", "latitude", "longitude") if d in da.dims]
+        # Ensure standard dimension order (time, lat, lon)
+        target_dims = [d for d in ("time", "lat", "lon") if d in da.dims]
         if list(da.dims) != target_dims:
             da = da.transpose(*target_dims)
 
@@ -702,7 +734,7 @@ class _DownscalerBase:
         if era5_elev is not None:
             elev_clean = era5_elev.drop_vars(
                 [c for c in era5_elev.coords
-                 if c not in ("latitude", "longitude")],
+                 if c not in ("lat", "lon", "latitude", "longitude")],
                 errors="ignore",
             )
             ds["elevation"] = elev_clean
@@ -722,7 +754,7 @@ class _DownscalerBase:
         if "elevation" in ds:
             encoding["elevation"] = {"zlib": True, "complevel": 4,
                                      "dtype": "float32", "_FillValue": None}
-        for coord in ("latitude", "longitude"):
+        for coord in ("lat", "lon", "latitude", "longitude"):
             if coord in ds:
                 encoding[coord] = {"_FillValue": None}
 
@@ -740,6 +772,19 @@ class _DownscalerBase:
             for k, v in list(obj.attrs.items()):
                 if isinstance(v, str) and not v.isascii():
                     obj.attrs[k] = _ascii_safe(v)
+
+        # Fill missing leap days (noleap → standard calendar conversion)
+        if "time" in ds.dims:
+            times = pd.DatetimeIndex(ds.time.values)
+            full_idx = pd.date_range(times[0], times[-1], freq="D")
+            n_missing = len(full_idx.difference(times))
+            if n_missing > 0:
+                self.logger.info(
+                    f"  Interpolating {n_missing} missing leap days "
+                    f"(noleap→standard)"
+                )
+                ds = ds.reindex(time=full_idx)
+                ds = ds.interpolate_na(dim="time", method="linear")
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"  Saving {out_path.name} ...")

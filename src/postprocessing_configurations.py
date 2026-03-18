@@ -22,27 +22,41 @@ import yaml
 
 def create_multi_plot_dir(multi_config):
     """
-    Create plot directory for multi-configuration analysis in the main directory.
-    
+    Create plot directory for multi-configuration analysis.
+    Placed alongside the config folders by finding their common directory prefix.
+
     Parameters:
     -----------
     multi_config : dict
         Multi-configuration dictionary
-        
+
     Returns:
     --------
     Path
         Path to the multi-configuration plot directory
     """
-    
+
     main_dir = Path(multi_config['main_dir'])
     gauge_id = multi_config['gauge_id']
-    
-    # Create plot directory in main_dir (where all config folders are)
-    plot_dir = main_dir / f"multi_config_plots_catchment_{gauge_id}"
-    plot_dir.mkdir(exist_ok=True)
-    
-    print(f"Created multi-configuration plot directory: {plot_dir}")
+    configs = multi_config['configs']
+
+    # Find common prefix directory of all config_dirs
+    # e.g., ['chandra_1/03_model_setups', 'chandra_1/03_model_setups_glogem']
+    #        → common prefix = 'chandra_1'
+    if configs:
+        common = Path(configs[0]).parts
+        for cfg in configs[1:]:
+            parts = Path(cfg).parts
+            common = common[:len(parts)]
+            common = tuple(c for c, p in zip(common, parts) if c == p)
+        common_prefix = Path(*common) if common else Path('.')
+    else:
+        common_prefix = Path('.')
+
+    plot_dir = main_dir / common_prefix / f"multi_config_plots_catchment_{gauge_id}"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Plot directory: {plot_dir}")
     return plot_dir
 
 #--------------------------------------------------------------------------------
@@ -3844,8 +3858,15 @@ def load_configurations(yaml_path, gauge_id):
     if main_dir_override:
         print(f"Using main_dir from configurations.yaml: {main_dir_override}")
 
-    # Determine namelist directory (same level as src/)
-    namelists_dir = yaml_path.parent.parent.parent / 'namelists_server'
+    # Determine namelist directory: use registry override or default (namelists_server/)
+    namelists_dir_override = registry.get('namelists_dir')
+    if namelists_dir_override:
+        namelists_dir = Path(namelists_dir_override)
+        if not namelists_dir.is_absolute():
+            namelists_dir = yaml_path.parent.parent.parent / namelists_dir
+        print(f"Using namelists_dir from configurations.yaml: {namelists_dir}")
+    else:
+        namelists_dir = yaml_path.parent.parent.parent / 'namelists_server'
 
     # Build multi_config
     configs = []

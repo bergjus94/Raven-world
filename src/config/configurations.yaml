@@ -1,5 +1,5 @@
 # =============================================================================
-# Central registry of all 15 model configurations
+# Central registry of model configurations
 # Used by postprocessing_configurations.py for multi-config comparisons
 # =============================================================================
 # Top-level settings:
@@ -10,106 +10,105 @@
 #   display_name:   descriptive name for plot legends/titles
 #   color:          hex color for consistent plotting
 #   coupled:        boolean (determines which contribution plots apply)
-#   glacier_source: 'glogem' | 'raven_deltah' | 'none'
+#   glacier_source: 'glogem' | 'none'
+#   icemelt_mode:   true for icemelt configs (glacier HRUs are ROCK)
 # =============================================================================
 
 # Set this to the folder that contains all configuration output folders
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'
 
 configurations:
+  # === UNCOUPLED (Raven internal glacier model) ===
   - key: 'baseline'
-    display_name: 'ERA5 Baseline'
+    display_name: 'HBV'
     color: '#1f77b4'
     coupled: false
     glacier_source: 'none'
 
-  - key: 'coupled'
-    display_name: 'ERA5 Coupled'
+  - key: 'subdaily'
+    display_name: 'HBV Subdaily'
+    color: '#aec7e8'
+    coupled: false
+    glacier_source: 'none'
+
+  - key: 'icimod'
+    display_name: 'HBV ICIMOD'
+    color: '#9467bd'
+    coupled: false
+    glacier_source: 'none'
+
+  - key: 'har'
+    display_name: 'HBV HAR'
+    color: '#d62728'
+    coupled: false
+    glacier_source: 'none'
+
+  - key: 'subdaily_aspect'
+    display_name: 'HBV Subdaily Aspect'
+    color: '#98df8a'
+    coupled: false
+    glacier_source: 'none'
+
+  - key: 'oudin'
+    display_name: 'HBV Oudin'
+    color: '#c5b0d5'
+    coupled: false
+    glacier_source: 'none'
+
+  # === COUPLED (GloGEM external glacier model) ===
+  - key: 'glogem'
+    display_name: 'HBV GloGEM'
     color: '#ff7f0e'
     coupled: true
     glacier_source: 'glogem'
 
-  - key: 'coupled_aspect'
-    display_name: 'ERA5 Coupled Aspect'
-    color: '#e6ab02'
-    coupled: true
-    glacier_source: 'glogem'
-
-  - key: 'coupled_gmb'
-    display_name: 'ERA5 Coupled GMB'
-    color: '#2ca02c'
-    coupled: true
-    glacier_source: 'glogem'
-
-  - key: 'coupled_har'
-    display_name: 'HAR Coupled'
-    color: '#d62728'
-    coupled: true
-    glacier_source: 'glogem'
-
-  - key: 'coupled_icimod'
-    display_name: 'ERA5 Coupled ICIMOD'
-    color: '#9467bd'
-    coupled: true
-    glacier_source: 'glogem'
-
-  - key: 'coupled_tphipr'
-    display_name: 'ERA5 Coupled TPHiPr'
-    color: '#8c564b'
-    coupled: true
-    glacier_source: 'glogem'
-
-  - key: 'coupled_subdaily'
-    display_name: 'ERA5 Coupled Subdaily'
+  - key: 'glogem_subdaily'
+    display_name: 'HBV GloGEM Subdaily'
     color: '#e377c2'
     coupled: true
     glacier_source: 'glogem'
 
-  - key: 'coupled_subdaily_icemelt'
-    display_name: 'ERA5 Coupled Subdaily Icemelt'
-    color: '#7f7f7f'
+  - key: 'glogem_icimod'
+    display_name: 'HBV GloGEM ICIMOD'
+    color: '#ff9896'
     coupled: true
     glacier_source: 'glogem'
-    icemelt_mode: true
 
-  - key: 'coupled_subdaily_icimod_gmb'
-    display_name: 'ERA5 Coupled Subdaily ICIMOD+GMB'
+  - key: 'glogem_har'
+    display_name: 'HBV GloGEM HAR'
     color: '#bcbd22'
     coupled: true
     glacier_source: 'glogem'
 
-  - key: 'coupled_subdaily_oudin'
-    display_name: 'ERA5 Coupled Subdaily Oudin'
+  - key: 'glogem_subdaily_aspect'
+    display_name: 'HBV GloGEM Subdaily Aspect'
     color: '#17becf'
     coupled: true
     glacier_source: 'glogem'
 
-  - key: 'deltah'
-    display_name: 'ERA5 DeltaH'
-    color: '#aec7e8'
-    coupled: false
-    glacier_source: 'raven_deltah'
+  - key: 'glogem_oudin'
+    display_name: 'HBV GloGEM Oudin'
+    color: '#e6ab02'
+    coupled: true
+    glacier_source: 'glogem'
 
-  - key: 'deltah_subdaily'
-    display_name: 'ERA5 DeltaH Subdaily'
-    color: '#ffbb78'
-    coupled: false
-    glacier_source: 'raven_deltah'
+  - key: 'glogem_gmb'
+    display_name: 'HBV GloGEM GMB'
+    color: '#2ca02c'
+    coupled: true
+    glacier_source: 'glogem'
 
-  - key: 'deltah_subdaily_aspect'
-    display_name: 'ERA5 DeltaH Subdaily Aspect'
-    color: '#98df8a'
-    coupled: false
-    glacier_source: 'raven_deltah'
+  # === ICEMELT (GloGEM icemelt injection, glacier HRUs as ROCK) ===
+  - key: 'icemelt'
+    display_name: 'HBV Icemelt'
+    color: '#8c564b'
+    coupled: true
+    glacier_source: 'glogem'
+    icemelt_mode: true
 
-  - key: 'deltah_subdaily_icimod'
-    display_name: 'ERA5 DeltaH Subdaily ICIMOD'
-    color: '#ff9896'
-    coupled: false
-    glacier_source: 'raven_deltah'
-
-  - key: 'deltah_subdaily_tphipr'
-    display_name: 'ERA5 DeltaH Subdaily TPHiPr'
-    color: '#c5b0d5'
-    coupled: false
-    glacier_source: 'raven_deltah'
+  - key: 'icemelt_subdaily'
+    display_name: 'HBV Icemelt Subdaily'
+    color: '#7f7f7f'
+    coupled: true
+    glacier_source: 'glogem'
+    icemelt_mode: true

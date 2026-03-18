@@ -1,17 +1,17 @@
 # =============================================================================
-# Namelist for gauge 0101 (coupled, GloGEM TSLA, HAR forcing, ICIMOD landuse)
+# Namelist for gauge 0102 (coupled, GloGEM GMB)
 # =============================================================================
 
-gauge_id: '0101'
-start_date: '2016-06-22'
-end_date: '2022-12-31'
-cali_end_date: '2020-12-31'
-warm_up_date: '2015-06-22'
+gauge_id: '0102'
+start_date: '1980-01-01'
+end_date: '2014-12-31'
+cali_end_date: '1999-12-31'
+warm_up_date: '1978-01-01'
 
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg@giub.local/Raven_world'
-config_dir: 'chandra_1/03_model_setups_glogem_har'
+config_dir: 'test_config_all/03_model_setups_glogem_gmb'
 debug: true
 
 coupled: true
@@ -22,7 +22,7 @@ criteria:
   - elevation
   - landuse
 
-meteo_source: 'HAR'
+meteo_source: 'ERA5'
 future: false
 
 # =============================================================================
@@ -35,7 +35,7 @@ raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
 stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
-glogem_dir: '01_data/GloGEM/Indus/TSLA'
+glogem_dir: '01_data/GloGEM/Indus/GMB'
 params_dir: '../src/config/default_params.yaml'
 
 # =============================================================================
@@ -60,9 +60,9 @@ calibration:
    metrics:
      primary: 'KGE'
      secondary: ['NSE', 'PBIAS', 'RMSE']
-   iterations: 3000
+   iterations: 5000
    ngs: 15
-   cali_end_date: '2020-12-31'
-   vali_end_date: '2022-12-31'
+   cali_end_date: '1999-12-31'
+   vali_end_date: '2014-12-31'
 
 raven_executable: '/home/jberg@giub.local/RavenHydroFramework/build/Raven'

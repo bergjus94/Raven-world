@@ -1,5 +1,5 @@
 # =============================================================================
-# Namelist for gauge 0102
+# Namelist for Chandra basin (gauge 0102)
 # =============================================================================
 
 gauge_id: '0102'
@@ -12,11 +12,10 @@ warm_up_date: '1978-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg@giub.local/Raven_world'
-config_dir: 'test_march/03_model_setups'
+config_dir: 'test_config_all/03_model_setups'
 debug: true
 
 # --- Glacier coupling ---
-# glacier_dir: always used (when set) for RGI-based glacier HRU delineation
 # coupled: true  → GloGEM handles glacier melt externally; HRUs = MASKED_GLACIER (class 8),
 #                   Raven glacier processes INACTIVE (requires glogem_dir)
 # coupled: false → Raven handles glacier melt internally; HRUs = GLACIER (class 7),
@@ -45,7 +44,7 @@ meteo_source: 'ERA5'
 # Optional: override precipitation with TPHiPr (~3 km gridded product)
 # Temperatures stay from meteo_source; only precip is replaced.
 #precip_source: 'TPHiPr'
-#tphipr_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/TPHiPr'
+#tphipr_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/TPHiPr'
 
 # --- Climate projections (future runs) ---
 future: false
@@ -53,7 +52,7 @@ future: false
 # CORDEX regional climate projections (CMIP5-era RCM downscaling)
 # Requires future: true. QDM bias-corrects CORDEX to ERA5-Land grid.
 # Training period default: 1980-2005 (CORDEX historical intersected with ERA5-Land)
-#cordex_dir: '/home/jberg@giub.local/Raven_world/01_data/CORDEX'
+#cordex_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/CORDEX'
 #cordex_models:
 #  - SMHI-RCA_MPIESM
 #cordex_scenarios:
@@ -67,7 +66,7 @@ future: false
 # Requires future: true. QDM bias-corrects CMIP6 to ERA5-Land grid.
 # Training period default: 1980-2014 (CMIP6 historical ends 2014)
 # Available ISIMIP3b models: GFDL-ESM4, IPSL-CM6A-LR, MPI-ESM1-2-HR, MRI-ESM2-0, UKESM1-0-LL
-#cmip6_dir: '/home/jberg@giub.local/Raven_world/01_data/CMIP6'
+#cmip6_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/CMIP6'
 #cmip6_models:
 #  - GFDL-ESM4
 #cmip6_scenarios:
@@ -81,7 +80,8 @@ future: false
 # Uncomment to enable nested multi-subbasin routing.
 # Each entry needs: id, gauge_id, name, gauged (0/1), reach_length ('_AUTO' or meters), profile
 #subbasins:
-#  - {id: 1, gauge_id: '0102', name: 'Main', gauged: 1, reach_length: '_AUTO', profile: 'NONE'}
+#  - {id: 1, gauge_id: '0102', name: 'Chandra_main', gauged: 1, reach_length: '_AUTO', profile: 'NONE'}
+#  - {id: 2, gauge_id: '0102', name: 'Sub_upstream',  gauged: 0, reach_length: '_AUTO', profile: 'NONE'}
 
 # --- GloGEM glacier model settings (only used when coupled: true, i.e. external glacier melt) ---
 #basin_name: 'Indus'
@@ -124,8 +124,8 @@ calibration:
    metrics:
      primary: 'KGE'           # Primary metric: 'KGE', 'NSE', 'PBIAS', 'RMSE'
      secondary: ['NSE', 'PBIAS', 'RMSE']
-   iterations: 3000
-   ngs: 15
+   iterations: 5000             # Number of SCE-UA iterations
+   ngs: 15                    # Number of complexes in SCE-UA
    cali_end_date: '1999-12-31'
    vali_end_date: '2014-12-31'
 

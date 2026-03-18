@@ -556,9 +556,9 @@ class CatchmentProcessor:
         2: {20, 30, 90},   # Open    (Shrubland, Grassland, Herbaceous wetland)
         3: {40},           # Crop    (Cropland)
         4: {50},           # Built   (Built-up)
-        5: {70},      # Rock    (Snow & Ice, Moss & lichen)
+        5: {70, 100},      # Rock    (Snow & Ice, Moss & lichen)
         6: {80},           # Water   (Permanent water bodies)
-        9: {60, 100},           # Bare open (Bare / sparse vegetation)
+        9: {60},           # Bare open (Bare / sparse vegetation)
     }
 
     # ICIMOD HKH Land Cover 2021 → Raven classes

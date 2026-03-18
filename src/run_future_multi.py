@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""
+Run future climate projections for multiple CMIP6 / GloGEM models.
+
+For each climate model:
+  1. Download CMIP6 data (if needed)
+  2. Generate a temporary namelist with model-specific settings
+  3. Run create_input_files.py (CMIP6 downscaling + GloGEM + Raven files)
+  4. Run Raven forward
+  5. Move output to model-specific subfolder
+
+All models share the same topo_files, HRU, grid weights, calibrated params.
+Model-specific files: CMIP6 forcing NetCDFs, irrigation.nc, .rvt, Raven output.
+
+Usage:
+    python src/run_future_multi.py namelists_server/namelist_0101_glogem_subdaily_future.yaml
+    python src/run_future_multi.py namelist.yaml --skip-download
+    python src/run_future_multi.py namelist.yaml --models GFDL-ESM4 IPSL-CM6A-LR
+"""
+
+import sys
+import argparse
+import shutil
+import subprocess
+import time
+import logging
+import tempfile
+from pathlib import Path
+from datetime import datetime
+
+import yaml
+
+script_dir = Path(__file__).parent.absolute()
+project_dir = script_dir.parent
+
+# All 5 ISIMIP3b models (matching GloGEM)
+ALL_MODELS = [
+    "GFDL-ESM4",
+    "IPSL-CM6A-LR",
+    "MPI-ESM1-2-HR",
+    "MRI-ESM2-0",
+    "UKESM1-0-LL",
+]
+
+# Mapping: CMIP6 model ID (upper) → GloGEM model ID (lower)
+GLOGEM_MODEL_ID = {
+    "GFDL-ESM4": "gfdl-esm4",
+    "IPSL-CM6A-LR": "ipsl-cm6a-lr",
+    "MPI-ESM1-2-HR": "mpi-esm1-2-hr",
+    "MRI-ESM2-0": "mri-esm2-0",
+    "UKESM1-0-LL": "ukesm1-0-ll",
+}
+
+
+def setup_logging(debug=False, log_file=None):
+    level = logging.DEBUG if debug else logging.INFO
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=handlers,
+    )
+    return logging.getLogger(__name__)
+
+
+def generate_model_namelist(base_nml_path, model_id, tmp_dir):
+    """Generate a temporary namelist for a specific climate model."""
+    with open(base_nml_path) as f:
+        nml = yaml.safe_load(f)
+
+    glogem_id = GLOGEM_MODEL_ID[model_id]
+
+    # Update model-specific fields
+    nml["glogem_model"] = glogem_id
+    nml["cmip6_models"] = [model_id]
+
+    tmp_path = Path(tmp_dir) / f"namelist_future_{model_id}.yaml"
+    with open(tmp_path, "w") as f:
+        yaml.dump(nml, f, default_flow_style=False, sort_keys=False)
+
+    return tmp_path, nml
+
+
+def run_single_model(base_nml_path, model_id, skip_download=False,
+                     force=False, bbox=None, verbose=False):
+    """Run the full future pipeline for one climate model."""
+    logger = logging.getLogger(__name__)
+    logger.info("=" * 70)
+    logger.info(f"  MODEL: {model_id}  (GloGEM: {GLOGEM_MODEL_ID[model_id]})")
+    logger.info("=" * 70)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # Generate model-specific namelist
+        tmp_nml_path, nml = generate_model_namelist(base_nml_path, model_id, tmp_dir)
+        logger.info(f"  Temporary namelist: {tmp_nml_path}")
+
+        main_dir = Path(nml["main_dir"])
+        config_dir = nml.get("config_dir", "")
+        gauge_id = str(nml["gauge_id"])
+        model_type = nml["model_type"]
+        catchment_dir = main_dir / config_dir / f"catchment_{gauge_id}"
+
+        # Step 1: Download CMIP6 (if needed)
+        if not skip_download:
+            cmip6_dir = nml.get("cmip6_dir", "01_data/CMIP6")
+            if not Path(cmip6_dir).is_absolute():
+                cmip6_dir = str(main_dir / cmip6_dir)
+
+            model_data_dir = Path(cmip6_dir) / model_id
+            if model_data_dir.exists():
+                logger.info(f"  CMIP6 data already exists: {model_data_dir}")
+            else:
+                logger.info(f"  Downloading CMIP6 data for {model_id}...")
+                download_script = project_dir / "downloads" / "download_cmip6.py"
+                cmd = [
+                    sys.executable, str(download_script),
+                    "--models", model_id,
+                    "--experiments", "historical", "ssp126",
+                    "--output-dir", cmip6_dir,
+                ]
+                if bbox:
+                    cmd.extend(["--bbox", *[str(b) for b in bbox]])
+                try:
+                    process = subprocess.run(
+                        cmd, check=True, capture_output=True, text=True,
+                        timeout=3600,
+                    )
+                    logger.info(f"  CMIP6 download complete for {model_id}")
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"  CMIP6 download failed for {model_id}")
+                    logger.error(e.stdout[-500:] if e.stdout else "")
+                    return False
+                except subprocess.TimeoutExpired:
+                    logger.error(f"  CMIP6 download timed out for {model_id}")
+                    return False
+
+        # Step 2: Create input files (downscaling + GloGEM + Raven files)
+        logger.info(f"  Creating input files for {model_id}...")
+        create_script = script_dir / "create_input_files.py"
+        cmd = [sys.executable, str(create_script), str(tmp_nml_path)]
+        if force:
+            cmd.append("--force")
+
+        try:
+            process = subprocess.run(
+                cmd, check=True, capture_output=True, text=True,
+                timeout=1800,
+            )
+            logger.info(f"  Input creation complete for {model_id}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"  Input creation failed for {model_id}")
+            logger.error(e.stdout[-1000:] if e.stdout else "")
+            return False
+
+        # Step 3: Fix leap days in CMIP6 files (noleap → standard)
+        logger.info(f"  Fixing leap days for {model_id}...")
+        _fix_leap_days(catchment_dir / "data_obs", model_id)
+
+        # Step 4: Run Raven forward
+        logger.info(f"  Running Raven for {model_id}...")
+        model_dir = catchment_dir / model_type
+        output_dir = model_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        model_file = model_dir / f"{gauge_id}_{model_type}"
+        raven_exe = nml.get("raven_executable", "Raven")
+
+        cmd = [str(raven_exe), str(model_file), "-o", str(output_dir) + "/"]
+        try:
+            start = time.time()
+            process = subprocess.run(
+                cmd, check=True, capture_output=True, text=True,
+                timeout=600,
+            )
+            duration = time.time() - start
+            logger.info(f"  Raven completed in {duration:.1f}s for {model_id}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"  Raven failed for {model_id}")
+            logger.error(e.stderr[-500:] if e.stderr else "")
+            return False
+
+        # Step 5: Move output to model-specific subfolder
+        model_output_dir = output_dir / GLOGEM_MODEL_ID[model_id]
+        model_output_dir.mkdir(parents=True, exist_ok=True)
+
+        for f in output_dir.glob(f"{gauge_id}_{model_type}_*"):
+            if f.is_file():
+                dest = model_output_dir / f.name
+                shutil.move(str(f), str(dest))
+                logger.info(f"  Moved: {f.name} → {model_output_dir.name}/")
+
+        # Also keep a copy of the .rvt for reference
+        rvt_file = model_dir / f"{gauge_id}_{model_type}.rvt"
+        if rvt_file.exists():
+            shutil.copy2(str(rvt_file), str(model_output_dir / rvt_file.name))
+
+        logger.info(f"  {model_id} complete! Output: {model_output_dir}")
+        return True
+
+
+def _fix_leap_days(data_obs_dir, model_id):
+    """Interpolate missing leap days in CMIP6 NetCDF files."""
+    import xarray as xr
+    import pandas as pd
+
+    logger = logging.getLogger(__name__)
+
+    for pattern in [f"cmip6_{model_id}_ssp126_*.nc", f"cmip6_{model_id}_historical_*.nc"]:
+        for f in sorted(data_obs_dir.glob(pattern)):
+            ds = xr.open_dataset(f)
+            var = list(ds.data_vars)[0]
+            da = ds[var].load()
+            ds.close()
+
+            times = pd.DatetimeIndex(da.time.values)
+            full_idx = pd.date_range(times[0], times[-1], freq="D")
+            missing = full_idx.difference(times)
+
+            if len(missing) > 0:
+                da_reindexed = da.reindex(time=full_idx)
+                da_filled = da_reindexed.interpolate_na(dim="time", method="linear")
+                ds_out = da_filled.to_dataset(name=var)
+                ds_out[var].attrs = da.attrs
+
+                # Preserve elevation if present
+                ds_orig = xr.open_dataset(f)
+                if "elevation" in ds_orig:
+                    ds_out["elevation"] = ds_orig["elevation"].load()
+                ds_orig.close()
+
+                tmp = str(f) + ".tmp"
+                ds_out.to_netcdf(tmp)
+                shutil.move(tmp, str(f))
+                logger.info(f"    Fixed {len(missing)} leap days in {f.name}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Run future climate projections for multiple CMIP6 models",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run all 5 models
+  python src/run_future_multi.py namelists_server/namelist_0101_glogem_subdaily_future.yaml
+
+  # Run specific models only
+  python src/run_future_multi.py namelist.yaml --models IPSL-CM6A-LR MRI-ESM2-0
+
+  # Skip download (data already exists)
+  python src/run_future_multi.py namelist.yaml --skip-download
+        """,
+    )
+
+    parser.add_argument("namelist", type=str, help="Base future namelist YAML")
+    parser.add_argument(
+        "--models", nargs="+", default=None,
+        help=f"Models to run (default: all). Choices: {ALL_MODELS}",
+    )
+    parser.add_argument("--skip-download", action="store_true")
+    parser.add_argument("--force", "-f", action="store_true",
+                        help="Force reprocessing of existing files")
+    parser.add_argument(
+        "--bbox", type=float, nargs=4,
+        metavar=("LON_MIN", "LON_MAX", "LAT_MIN", "LAT_MAX"),
+        default=[37.5, 67.5, 30.0, 82.0],
+    )
+    parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument("--log-file", type=str)
+
+    args = parser.parse_args()
+
+    namelist_path = Path(args.namelist)
+    if not namelist_path.exists():
+        print(f"Error: Namelist not found: {namelist_path}")
+        sys.exit(1)
+
+    models = args.models or ALL_MODELS
+
+    # Validate model names
+    for m in models:
+        if m not in ALL_MODELS:
+            print(f"Error: Unknown model '{m}'. Valid: {ALL_MODELS}")
+            sys.exit(1)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = args.log_file or f"future_multi_{timestamp}.log"
+    logger = setup_logging(args.verbose, log_file)
+
+    logger.info("=" * 70)
+    logger.info("MULTI-MODEL FUTURE CLIMATE PROJECTIONS")
+    logger.info("=" * 70)
+    logger.info(f"Base namelist: {namelist_path}")
+    logger.info(f"Models to run: {models}")
+    logger.info(f"Log file: {log_file}")
+
+    workflow_start = time.time()
+    results = {}
+
+    for model_id in models:
+        model_start = time.time()
+        ok = run_single_model(
+            namelist_path, model_id,
+            skip_download=args.skip_download,
+            force=args.force,
+            bbox=args.bbox,
+            verbose=args.verbose,
+        )
+        duration = time.time() - model_start
+        results[model_id] = {"success": ok, "duration": duration}
+
+    # Summary
+    total_duration = time.time() - workflow_start
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("MULTI-MODEL SUMMARY")
+    logger.info("=" * 70)
+    for model_id, res in results.items():
+        status = "SUCCESS" if res["success"] else "FAILED"
+        logger.info(f"  {model_id:20s}  {status}  ({res['duration']/60:.1f} min)")
+    logger.info(f"  {'TOTAL':20s}  {total_duration/60:.1f} min")
+
+    n_ok = sum(1 for r in results.values() if r["success"])
+    n_total = len(results)
+    logger.info(f"\n  {n_ok}/{n_total} models completed successfully")
+
+    sys.exit(0 if n_ok == n_total else 1)
+
+
+if __name__ == "__main__":
+    main()
