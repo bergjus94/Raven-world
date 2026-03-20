@@ -1238,69 +1238,144 @@ class CatchmentDelineator:
         print(f"\n{'='*60}")
 
 
+# =============================================================================
+# Predefined regions
+# =============================================================================
+REGIONS = {
+    "upper_indus": {
+        "label": "Upper Indus Basin",
+        "bbox": (67.5, 30.0, 82.0, 37.5),
+        "country": "Pakistan",
+        "stations": "Indus_stations.shp",
+        "constraint": "constraint_catchment_Indus.shp",
+    },
+    "western_himalaya": {
+        "label": "Western Indian Himalaya (Kashmir to Uttarakhand)",
+        "bbox": (72.5, 28.5, 81.0, 37.0),
+        "country": "India",
+        "stations": None,
+        "constraint": None,
+    },
+    "nepal": {
+        "label": "Nepal Himalaya",
+        "bbox": (80.0, 26.3, 88.2, 30.5),
+        "country": "Nepal",
+        "stations": None,
+        "constraint": None,
+    },
+}
+
+
 def main():
-    """Main function"""
-    
-    base_dir = "/home/jberg@giub.local/Raven-world/Catchment_delineation"
-    stations_file_pakistan = "/home/jberg@giub.local/Raven_world/01_data/topo/gauging_stations/Indus_stations.shp"
-    constraint_shapefile = "/home/jberg@giub.local/Raven_world/01_data/topo/gauging_stations/constraint_catchment_Indus.shp"
-    
-    # Upper Indus Basin bounding box
-    upper_indus_bbox = (
-        67.5,  # West
-        30.0,  # South
-        82.0,  # East
-        37.5   # North
+    """Main function with region selection via CLI."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Catchment delineation with predefined or custom bounding boxes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Predefined regions:
+  {chr(10).join(f'  {k:20s} {v["label"]}  bbox={v["bbox"]}' for k, v in REGIONS.items())}
+
+Examples:
+  python catchment_delineation.py --region upper_indus
+  python catchment_delineation.py --region western_himalaya --stations CWC_stations_pre2015.gpkg
+  python catchment_delineation.py --bbox 72.5 28.5 81.0 37.0 --country India --stations stations.shp
+        """,
     )
-    
+
+    parser.add_argument("--region", type=str, choices=list(REGIONS.keys()),
+                        help="Predefined region name")
+    parser.add_argument("--bbox", type=float, nargs=4,
+                        metavar=("WEST", "SOUTH", "EAST", "NORTH"),
+                        help="Custom bounding box (overrides --region bbox)")
+    parser.add_argument("--base-dir", type=str,
+                        default="/home/jberg/Raven-world/Catchment_delineation",
+                        help="Base directory for outputs")
+    parser.add_argument("--stations", type=str, default=None,
+                        help="Path to gauge stations file (shapefile or geopackage)")
+    parser.add_argument("--constraint", type=str, default=None,
+                        help="Path to constraint shapefile")
+    parser.add_argument("--country", type=str, default=None,
+                        help="Country label (overrides --region country)")
+
+    args = parser.parse_args()
+
+    # Resolve region config
+    if args.region:
+        region = REGIONS[args.region]
+        bbox = args.bbox or region["bbox"]
+        country = args.country or region["country"]
+        stations_file = args.stations
+        constraint_file = args.constraint
+        # Fall back to region defaults for stations/constraint if not given
+        if stations_file is None and region["stations"]:
+            default_stations = Path(args.base_dir) / region["stations"]
+            if default_stations.exists():
+                stations_file = str(default_stations)
+        if constraint_file is None and region["constraint"]:
+            default_constraint = Path(args.base_dir) / region["constraint"]
+            if default_constraint.exists():
+                constraint_file = str(default_constraint)
+        label = region["label"]
+    elif args.bbox:
+        bbox = tuple(args.bbox)
+        country = args.country or "Custom"
+        stations_file = args.stations
+        constraint_file = args.constraint
+        label = f"Custom region ({bbox[0]:.1f}W, {bbox[1]:.1f}S, {bbox[2]:.1f}E, {bbox[3]:.1f}N)"
+    else:
+        parser.error("Must specify --region or --bbox")
+        return
+
     try:
-        print("\n" + "🏔️ "*40)
-        print("UPPER INDUS BASIN DELINEATION")
-        print("🏔️ "*40)
-        
-        delineator_indus = CatchmentDelineator(
-            base_dir=base_dir, 
-            country="Pakistan",
-            bbox=upper_indus_bbox,
-            constraint_shapefile=constraint_shapefile
+        print("\n" + "=" * 70)
+        print(f"CATCHMENT DELINEATION: {label}")
+        print("=" * 70)
+
+        delineator = CatchmentDelineator(
+            base_dir=args.base_dir,
+            country=country,
+            bbox=bbox,
+            constraint_shapefile=constraint_file,
         )
-        
-        if Path(stations_file_pakistan).exists():
-            stations_gdf = delineator_indus.load_gauge_stations(stations_file=stations_file_pakistan)
-        
+
+        if stations_file and Path(stations_file).exists():
+            stations_gdf = delineator.load_gauge_stations(stations_file=stations_file)
+        else:
+            if stations_file:
+                print(f"Warning: stations file not found: {stations_file}")
+
         # Download DEM
-        dem_path = delineator_indus.download_srtm_in_chunks(chunk_size_degrees=1.5)
+        dem_path = delineator.download_srtm_in_chunks(chunk_size_degrees=1.5)
         if dem_path is None:
-            print("❌ DEM download failed")
+            print("DEM download failed")
             return
-        
+
         # Process DEM
-        processed_dem = delineator_indus.preprocess_dem()
-        
+        processed_dem = delineator.preprocess_dem()
+
         # Calculate flow
-        flow_dir, flow_acc = delineator_indus.calculate_flow_accumulation()
-        
+        flow_dir, flow_acc = delineator.calculate_flow_accumulation()
+
         # Snap outlets with manual raster-based approach
-        if hasattr(delineator_indus, 'stations_gdf'):
-            snapped_outlets = delineator_indus.snap_outlets_to_streams(
-                search_radius_pixels=100,   # ~3km maximum search radius
-                min_flow_acc=10000,         # ~9 km² contributing area at 30m
-                progressive=True            # Stop at smallest radius with valid stream
+        if hasattr(delineator, 'stations_gdf'):
+            snapped_outlets = delineator.snap_outlets_to_streams(
+                search_radius_pixels=100,
+                min_flow_acc=10000,
+                progressive=True,
             )
-            
+
             # Delineate with raster-based pour points
-            catchments = delineator_indus.delineate_catchments(
-                use_raster_pourpoints=True  # More reliable for large DEMs
+            catchments = delineator.delineate_catchments(
+                use_raster_pourpoints=True,
             )
-            
+
             if catchments is not None:
-                print(f"\n🎉 SUCCESS! Delineated {len(catchments)} Upper Indus catchments")
-            
-            # Diagnose any failed stations
-            # Example: delineator_indus.diagnose_station(104)
-    
+                print(f"\nSUCCESS! Delineated {len(catchments)} catchments for {label}")
+
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
         import traceback
         traceback.print_exc()
 
