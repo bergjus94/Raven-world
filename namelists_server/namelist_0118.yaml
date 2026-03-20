@@ -1,12 +1,12 @@
 # =============================================================================
-# Namelist for Chandra basin (gauge 0130)
+# Namelist for Chandra basin (gauge 0118)
 # =============================================================================
 
-gauge_id: '0130'
-start_date: '1980-01-01'
-end_date: '2019-12-31'
-cali_end_date: '2002-12-31'
-warm_up_date: '1978-01-01'
+gauge_id: '0118'
+start_date: '1985-01-01'
+end_date: '1997-12-31'
+cali_end_date: '1992-12-31'
+warm_up_date: '1983-01-01'
 
 # Model type: 'HBV', 'HYMOD', 'HMETS', 'MOHYSE'
 model_type: 'HBV'
@@ -80,8 +80,8 @@ future: false
 # Uncomment to enable nested multi-subbasin routing.
 # Each entry needs: id, gauge_id, name, gauged (0/1), reach_length ('_AUTO' or meters), profile
 #subbasins:
-#  - {id: 1, gauge_id: '0130', name: 'Chandra_main', gauged: 1, reach_length: '_AUTO', profile: 'NONE'}
-#  - {id: 2, gauge_id: '0130', name: 'Sub_upstream',  gauged: 0, reach_length: '_AUTO', profile: 'NONE'}
+#  - {id: 1, gauge_id: '0118', name: 'Chandra_main', gauged: 1, reach_length: '_AUTO', profile: 'NONE'}
+#  - {id: 2, gauge_id: '0118', name: 'Sub_upstream',  gauged: 0, reach_length: '_AUTO', profile: 'NONE'}
 
 # --- GloGEM glacier model settings (only used when coupled: true, i.e. external glacier melt) ---
 #basin_name: 'Indus'
@@ -126,7 +126,7 @@ calibration:
      secondary: ['NSE', 'PBIAS', 'RMSE']
    iterations: 5000             # Number of SCE-UA iterations
    ngs: 15                    # Number of complexes in SCE-UA
-   cali_end_date: '2002-12-31'
-   vali_end_date: '2019-12-31'
+   cali_end_date: '1992-12-31'
+   vali_end_date: '1997-12-31'
 
 raven_executable: '/home/jberg@giub.local/RavenHydroFramework/build/Raven'
