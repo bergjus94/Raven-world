@@ -1,8 +1,8 @@
 # =============================================================================
-# Namelist for gauge 0101 (coupled, GloGEM TSLA, subdaily melt) — FUTURE RUN
+# Namelist for gauge 0121 (coupled, GloGEM TSLA, subdaily melt) — FUTURE RUN
 # =============================================================================
 
-gauge_id: '0101'
+gauge_id: '0121'
 start_date: '1981-01-01'
 end_date: '2100-09-30'
 warm_up_date: '1980-01-01'
@@ -54,7 +54,7 @@ stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
 glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
 glogem_dir: '01_data/GloGEM/Indus/TSLA'
-params_dir: '../src/config/calibrated_params_glogem_subdaily_0101.yaml'
+params_dir: '../src/config/calibrated_params_glogem_subdaily_0121.yaml'
 
 # =============================================================================
 # Forcing file templates (populated by meteo preprocessors)
