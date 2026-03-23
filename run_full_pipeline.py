@@ -706,9 +706,21 @@ Examples:
     log_file = args.log_file or f"pipeline_{gauge_id}_{timestamp}.log"
     logger = setup_logging(args.verbose, log_file)
 
+    # Detect if this is a future namelist (has future: true and cmip6_models)
+    is_future_namelist = nml.get('future', False) and 'cmip6_models' in nml
+
     # Resolve future projections config (namelist + CLI overrides)
-    future_proj = nml.get('future_projections', {})
-    future_enabled = future_proj.get('enabled', False) and not args.skip_future
+    if is_future_namelist:
+        # Future namelist passed directly — build future_proj from its contents
+        future_proj = {
+            'enabled': True,
+            'models': nml.get('cmip6_models', FUTURE_DEFAULTS['models']),
+            'scenarios': [s for s in nml.get('cmip6_scenarios', ['ssp126']) if s != 'historical'],
+        }
+        future_enabled = not args.skip_future
+    else:
+        future_proj = nml.get('future_projections', {})
+        future_enabled = future_proj.get('enabled', False) and not args.skip_future
 
     if future_enabled:
         # CLI overrides
@@ -723,6 +735,8 @@ Examples:
     logger.info(f"Started: {datetime.now()}")
     logger.info(f"Namelist: {namelist_path}")
     logger.info(f"Gauge: {gauge_id}, Model: {model_type}")
+    if is_future_namelist:
+        logger.info(f"Mode: FUTURE NAMELIST (skipping calibration, using existing params)")
     logger.info(f"Future projections: {'ENABLED' if future_enabled else 'DISABLED'}")
     if future_enabled:
         logger.info(f"  Models: {future_proj.get('models', FUTURE_DEFAULTS['models'])}")
@@ -733,70 +747,113 @@ Examples:
     phase_results = {}
 
     try:
-        # Phase 1: Create input files
-        if not args.skip_preprocessing:
-            ok = phase1_create_inputs(
-                namelist_path, nml, force=args.force,
-                future_proj=future_proj if future_enabled else None,
-                logger=logger,
-            )
-            phase_results['Phase 1: Input Files'] = ok
-            if not ok:
-                logger.error("Phase 1 failed. Stopping.")
-                _print_summary(phase_results, time.time() - workflow_start, logger)
-                sys.exit(1)
-        else:
-            logger.info("Skipping Phase 1 (--skip-preprocessing)")
-            phase_results['Phase 1: Input Files'] = True
+        if is_future_namelist and future_enabled:
+            # =================================================================
+            # FUTURE NAMELIST MODE: skip Phases 1-4, run Phases 5-6 directly
+            # =================================================================
 
-        # Phase 2: Calibration
-        if not args.skip_calibration:
-            ok = phase2_calibrate(
-                namelist_path, nml,
-                iterations=args.iterations, ngs=args.ngs, logger=logger,
-            )
-            phase_results['Phase 2: Calibration'] = ok
-            if not ok:
-                logger.error("Phase 2 failed. Stopping.")
-                _print_summary(phase_results, time.time() - workflow_start, logger)
-                sys.exit(1)
-        else:
-            logger.info("Skipping Phase 2 (--skip-calibration)")
-            phase_results['Phase 2: Calibration'] = True
-
-        # Phases 3-6: Future projections
-        if future_enabled:
-            # Phase 3: Convert params
-            calibrated_yaml = phase3_convert_params(nml, logger=logger)
+            # Phase 3: Convert params (still needed if YAML doesn't exist yet)
+            # Derive the historical config_dir by stripping _future suffix
+            hist_nml = copy.deepcopy(nml)
+            hist_config_dir = nml.get('config_dir', '').replace('_future', '')
+            hist_nml['config_dir'] = hist_config_dir
+            # Recover historical dates from namelist for header comment
+            calibrated_yaml = phase3_convert_params(hist_nml, logger=logger)
             phase_results['Phase 3: Params YAML'] = calibrated_yaml is not None
             if calibrated_yaml is None:
-                logger.error("Phase 3 failed. Stopping.")
+                logger.error("Phase 3 failed — no calibrated params found.")
+                logger.error("  Run calibration first, or check that VERIFIED_best_params.csv exists in")
+                logger.error(f"  {Path(nml['main_dir']) / hist_config_dir}")
                 _print_summary(phase_results, time.time() - workflow_start, logger)
                 sys.exit(1)
 
-            # Phase 4: Generate future namelist
-            future_namelist = phase4_generate_future_namelist(
-                namelist_path, nml, calibrated_yaml, future_proj, logger=logger,
-            )
-            phase_results['Phase 4: Future Namelist'] = future_namelist is not None
-            if future_namelist is None:
-                logger.error("Phase 4 failed. Stopping.")
-                _print_summary(phase_results, time.time() - workflow_start, logger)
-                sys.exit(1)
+            # Phase 4: Skip — future namelist already provided
+            logger.info("Skipping Phase 4 (future namelist provided directly)")
+            phase_results['Phase 4: Future Namelist'] = True
 
             # Phase 5: Future runs
             models = future_proj.get('models', FUTURE_DEFAULTS['models'])
             ok = phase5_future_runs(
-                future_namelist, models=models,
+                namelist_path, models=models,
                 skip_download=args.skip_download,
                 force=args.force, bbox=args.bbox,
                 verbose=args.verbose, logger=logger,
             )
             phase_results['Phase 5: Future Runs'] = ok
 
-            # Phase 6: Ensemble plot (even if some models failed)
+            # Phase 6: Ensemble plot
             ok6 = phase6_ensemble_diagnostics(nml, future_proj, logger=logger)
             phase_results['Phase 6: Ensemble Plot'] = ok6
+
+        else:
+            # =================================================================
+            # HISTORICAL NAMELIST MODE: full pipeline Phases 1-6
+            # =================================================================
+
+            # Phase 1: Create input files
+            if not args.skip_preprocessing:
+                ok = phase1_create_inputs(
+                    namelist_path, nml, force=args.force,
+                    future_proj=future_proj if future_enabled else None,
+                    logger=logger,
+                )
+                phase_results['Phase 1: Input Files'] = ok
+                if not ok:
+                    logger.error("Phase 1 failed. Stopping.")
+                    _print_summary(phase_results, time.time() - workflow_start, logger)
+                    sys.exit(1)
+            else:
+                logger.info("Skipping Phase 1 (--skip-preprocessing)")
+                phase_results['Phase 1: Input Files'] = True
+
+            # Phase 2: Calibration
+            if not args.skip_calibration:
+                ok = phase2_calibrate(
+                    namelist_path, nml,
+                    iterations=args.iterations, ngs=args.ngs, logger=logger,
+                )
+                phase_results['Phase 2: Calibration'] = ok
+                if not ok:
+                    logger.error("Phase 2 failed. Stopping.")
+                    _print_summary(phase_results, time.time() - workflow_start, logger)
+                    sys.exit(1)
+            else:
+                logger.info("Skipping Phase 2 (--skip-calibration)")
+                phase_results['Phase 2: Calibration'] = True
+
+            # Phases 3-6: Future projections
+            if future_enabled:
+                # Phase 3: Convert params
+                calibrated_yaml = phase3_convert_params(nml, logger=logger)
+                phase_results['Phase 3: Params YAML'] = calibrated_yaml is not None
+                if calibrated_yaml is None:
+                    logger.error("Phase 3 failed. Stopping.")
+                    _print_summary(phase_results, time.time() - workflow_start, logger)
+                    sys.exit(1)
+
+                # Phase 4: Generate future namelist
+                future_namelist = phase4_generate_future_namelist(
+                    namelist_path, nml, calibrated_yaml, future_proj, logger=logger,
+                )
+                phase_results['Phase 4: Future Namelist'] = future_namelist is not None
+                if future_namelist is None:
+                    logger.error("Phase 4 failed. Stopping.")
+                    _print_summary(phase_results, time.time() - workflow_start, logger)
+                    sys.exit(1)
+
+                # Phase 5: Future runs
+                models = future_proj.get('models', FUTURE_DEFAULTS['models'])
+                ok = phase5_future_runs(
+                    future_namelist, models=models,
+                    skip_download=args.skip_download,
+                    force=args.force, bbox=args.bbox,
+                    verbose=args.verbose, logger=logger,
+                )
+                phase_results['Phase 5: Future Runs'] = ok
+
+                # Phase 6: Ensemble plot (even if some models failed)
+                ok6 = phase6_ensemble_diagnostics(nml, future_proj, logger=logger)
+                phase_results['Phase 6: Ensemble Plot'] = ok6
 
         # Summary
         total_duration = time.time() - workflow_start
