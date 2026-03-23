@@ -156,11 +156,11 @@ MODEL_REGISTRY = {
         "notes":           "IPSL-CM6A-LR; ISIMIP3b model.",
     },
     "MPI-ESM1-2-HR": {
-        "cds_model":       "mpi_esm1_2_hr",
+        "cds_model":       "mpi_esm1_2_lr",
         "cds_institution": "mpi-m",
         "ensemble":        "r1i1p1f1",
         "experiments":     ["historical", "ssp126", "ssp370", "ssp585"],
-        "notes":           "MPI-ESM1-2-HR; ISIMIP3b model.",
+        "notes":           "MPI-ESM1-2-HR GloGEM; CDS uses LR for ssp (HR not available).",
     },
     "MRI-ESM2-0": {
         "cds_model":       "mri_esm2_0",
@@ -362,6 +362,46 @@ def download_variable(
         # Close source chunks after concat (lazy-load safety)
         for ds in all_chunks:
             ds.close()
+
+        # Convert non-standard calendars (360_day, noleap) to standard
+        # MUST happen before time trimming — 360-day calendars don't have Dec 31
+        if hasattr(merged.time.values[0], "calendar"):
+            cal = getattr(merged.time.values[0], "calendar", "standard")
+        elif hasattr(merged, "time"):
+            cal = merged.time.encoding.get("calendar", "standard")
+        else:
+            cal = "standard"
+
+        if cal not in ("standard", "gregorian", "proleptic_gregorian"):
+            print(f"   Converting calendar '{cal}' → standard ...")
+            import cftime
+            import pandas as pd
+            times_cf = merged.time.values
+
+            if "360" in cal:
+                # 360-day calendar: 12 months × 30 days each
+                # Map to real calendar by distributing days proportionally
+                std_times = []
+                import calendar as cal_mod
+                for t in times_cf:
+                    year, month = t.year, t.month
+                    day_360 = t.day  # 1–30 in 360-day calendar
+                    real_days = cal_mod.monthrange(year, month)[1]
+                    # Scale day: day_360/30 * real_days, clamped to [1, real_days]
+                    real_day = max(1, min(real_days, round(day_360 / 30.0 * real_days)))
+                    std_times.append(pd.Timestamp(year=year, month=month, day=real_day))
+                new_index = pd.DatetimeIndex(std_times)
+                # Drop duplicates that arise from day-mapping collisions
+                merged = merged.assign_coords(time=new_index)
+                _, unique_idx = np.unique(merged.time.values, return_index=True)
+                merged = merged.isel(time=sorted(unique_idx))
+            else:
+                # noleap / 365_day: just convert cftime → pandas Timestamp
+                std_times = []
+                for t in times_cf:
+                    std_times.append(pd.Timestamp(year=t.year, month=t.month,
+                                                  day=t.day, hour=t.hour))
+                merged = merged.assign_coords(time=pd.DatetimeIndex(std_times))
 
         # Trim time axis to [historical_start, historical_end]
         if experiment == "historical":
