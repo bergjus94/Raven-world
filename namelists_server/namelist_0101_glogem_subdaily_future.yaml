@@ -13,7 +13,7 @@ model_type: 'HBV'
 template: false
 cali_end_date: '2100-09-30'
 main_dir: '/home/jberg/OneDrive/Raven_worldwide'
-config_dir: 'chandra_1/03_model_setups_glogem_subdaily_future'
+config_dir: 'test_config_all/03_model_setups_glogem_subdaily_future'
 debug: true
 
 coupled: true

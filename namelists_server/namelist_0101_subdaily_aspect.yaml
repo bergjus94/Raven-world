@@ -11,7 +11,7 @@ warm_up_date: '2015-06-22'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg@giub.local/Raven_world'
-config_dir: 'chandra_1/03_model_setups_subdaily_aspect'
+config_dir: 'test_config_all/03_model_setups_subdaily_aspect'
 debug: true
 
 coupled: false

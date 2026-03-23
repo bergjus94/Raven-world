@@ -156,7 +156,7 @@ def create_cross_catchment_plot_dir(yaml_path):
     with open(yaml_path, 'r') as f:
         registry = yaml.safe_load(f)
     main_dir = Path(registry['main_dir'])
-    plot_dir = main_dir / 'chandra_1' / 'cross_catchment_plots'
+    plot_dir = main_dir / 'cross_catchment_plots'
     plot_dir.mkdir(parents=True, exist_ok=True)
     return plot_dir
 
@@ -167,8 +167,8 @@ def create_cross_catchment_plot_dir(yaml_path):
 
 def plot_performance_heatmap(catchment_results, config_registry, plot_dir):
     """
-    Heatmap with catchments on y-axis, configs on x-axis.
-    Two panels: KGE and NSE. Cells annotated with values.
+    Separate heatmaps for KGE and NSE.
+    Catchments on y-axis, configs on x-axis. Cells annotated with values.
     """
     catchment_ids = list(catchment_results.keys())
     config_keys = [c['key'] for c in config_registry]
@@ -198,13 +198,21 @@ def plot_performance_heatmap(catchment_results, config_registry, plot_dir):
     y_labels = [catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids]
     x_labels = [config_names[k] for k in config_keys_valid]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(14, len(config_keys_valid) * 1.5), max(5, len(catchment_ids) * 1.5)))
-
-    for ax, matrix, title, cmap in [
-        (ax1, kge_matrix, 'KGE', 'RdYlGn'),
-        (ax2, nse_matrix, 'NSE', 'RdYlGn'),
+    for matrix, metric_name, filename in [
+        (kge_matrix, 'KGE', 'cross_catchment_heatmap_KGE.png'),
+        (nse_matrix, 'NSE', 'cross_catchment_heatmap_NSE.png'),
     ]:
-        im = ax.imshow(matrix, cmap=cmap, aspect='auto', vmin=-0.5, vmax=1.0)
+        # Compute color scale from actual data range
+        valid_vals = matrix[~np.isnan(matrix)]
+        if len(valid_vals) == 0:
+            continue
+        vmin = max(np.floor(valid_vals.min() * 10) / 10, -1.0)
+        vmax = min(np.ceil(valid_vals.max() * 10) / 10, 1.0)
+
+        fig, ax = plt.subplots(figsize=(max(12, len(config_keys_valid) * 1.2),
+                                        max(4, len(catchment_ids) * 1.0)))
+
+        im = ax.imshow(matrix, cmap='RdYlGn', aspect='auto', vmin=vmin, vmax=vmax)
 
         # Annotate cells
         for i in range(matrix.shape[0]):
@@ -213,7 +221,8 @@ def plot_performance_heatmap(catchment_results, config_registry, plot_dir):
                 if np.isnan(val):
                     ax.text(j, i, '—', ha='center', va='center', fontsize=9, color='gray')
                 else:
-                    color = 'white' if val < 0.2 else 'black'
+                    # Choose text color for readability
+                    color = 'white' if val < (vmin + (vmax - vmin) * 0.3) else 'black'
                     ax.text(j, i, f'{val:.2f}', ha='center', va='center', fontsize=9,
                             fontweight='bold', color=color)
 
@@ -229,16 +238,15 @@ def plot_performance_heatmap(catchment_results, config_registry, plot_dir):
         ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
         ax.set_yticks(range(len(y_labels)))
         ax.set_yticklabels(y_labels, fontsize=10)
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        fig.colorbar(im, ax=ax, shrink=0.6, label=title)
+        ax.set_title(f'{metric_name} Across Catchments and Configurations',
+                     fontsize=14, fontweight='bold')
+        fig.colorbar(im, ax=ax, shrink=0.8, label=metric_name)
 
-    fig.suptitle('Performance Metrics Across Catchments and Configurations',
-                 fontsize=15, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_heatmap.png'
-    fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Saved: {save_path}")
+        plt.tight_layout()
+        save_path = plot_dir / filename
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved: {save_path}")
 
 
 #--------------------------------------------------------------------------------
