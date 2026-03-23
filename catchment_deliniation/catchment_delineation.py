@@ -1251,7 +1251,7 @@ REGIONS = {
     },
     "western_himalaya": {
         "label": "Western Indian Himalaya (Kashmir to Uttarakhand)",
-        "bbox": (72.5, 28.5, 81.0, 37.0),
+        "bbox": (72.5, 28.5, 83.0, 37.0),
         "country": "India",
         "stations": None,
         "constraint": None,

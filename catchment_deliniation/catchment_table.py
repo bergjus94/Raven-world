@@ -367,15 +367,21 @@ def print_summary_statistics(table):
 
 def main():
     """Main execution function"""
-    
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Create catchment overview table with glacier coverage')
+    parser.add_argument('catchment_dir', help='Directory containing all_catchment_*.shp files')
+    parser.add_argument('-o', '--output', default=None,
+                        help='Output CSV path (default: catchment_overview_table.csv in catchment_dir)')
+    args = parser.parse_args()
+
     print("="*80)
     print("CATCHMENT OVERVIEW TABLE GENERATOR")
     print("="*80)
-    
-    # Configuration - Update these paths for your server
-    catchment_dir = "/home/jberg@giub.local/Catchment_delineation/gauging_stations/catchment_delineation_data"
-    
-    # RGI glacier data directories
+
+    catchment_dir = args.catchment_dir
+
+    # RGI glacier data directories (fixed paths on server)
     rgi_regions = [
         (
             "/home/jberg@giub.local/Raven_world/01_data/topo/glacier_outline/nsidc0770_14.rgi60.SouthAsiaWest",
@@ -386,9 +392,9 @@ def main():
             "15_rgi60_SouthAsiaEast.shp"
         )
     ]
-    
-    output_csv = "/home/jberg@giub.local/Catchment_delineation/catchment_overview_table.csv"
-    
+
+    output_csv = args.output if args.output else str(Path(catchment_dir).parent / "catchment_overview_table.csv")
+
     try:
         # Step 1: Load all catchment shapefiles
         catchments = load_all_catchments(catchment_dir)
