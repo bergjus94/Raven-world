@@ -67,6 +67,7 @@ def setup_logging(debug=False, log_file=None):
 
 def generate_model_namelist(base_nml_path, model_id, tmp_dir):
     """Generate a temporary namelist for a specific climate model."""
+    base_nml_path = Path(base_nml_path)
     with open(base_nml_path) as f:
         nml = yaml.safe_load(f)
 
@@ -75,6 +76,13 @@ def generate_model_namelist(base_nml_path, model_id, tmp_dir):
     # Update model-specific fields
     nml["glogem_model"] = glogem_id
     nml["cmip6_models"] = [model_id]
+
+    # Resolve relative params_dir to absolute (temp namelist lives in /tmp/)
+    params_dir = nml.get("params_dir", "")
+    if params_dir and not Path(params_dir).is_absolute():
+        resolved = (base_nml_path.parent / params_dir).resolve()
+        if resolved.exists():
+            nml["params_dir"] = str(resolved)
 
     tmp_path = Path(tmp_dir) / f"namelist_future_{model_id}.yaml"
     with open(tmp_path, "w") as f:
@@ -151,16 +159,22 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
             logger.info(f"  Input creation complete for {model_id}")
         except subprocess.CalledProcessError as e:
             logger.error(f"  Input creation failed for {model_id}")
-            logger.error(e.stdout[-1000:] if e.stdout else "")
+            logger.error(e.stdout[-2000:] if e.stdout else "")
+            if e.stderr:
+                logger.error(e.stderr[-1000:])
             return False
 
         # Step 3: Fix leap days in CMIP6 files (noleap → standard)
         logger.info(f"  Fixing leap days for {model_id}...")
         _fix_leap_days(catchment_dir / "data_obs", model_id)
 
-        # Step 4: Run Raven forward
-        logger.info(f"  Running Raven for {model_id}...")
+        # Step 4: Add output options + transport tracers to .rvi
         model_dir = catchment_dir / model_type
+        _add_rvi_output_options(model_dir / f"{gauge_id}_{model_type}.rvi",
+                                nml.get("coupled", False), logger)
+
+        # Step 5: Run Raven forward
+        logger.info(f"  Running Raven for {model_id}...")
         output_dir = model_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -181,7 +195,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
             logger.error(e.stderr[-500:] if e.stderr else "")
             return False
 
-        # Step 5: Move output to model-specific subfolder
+        # Step 6: Move output to model-specific subfolder
         model_output_dir = output_dir / GLOGEM_MODEL_ID[model_id]
         model_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -198,6 +212,107 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
 
         logger.info(f"  {model_id} complete! Output: {model_output_dir}")
         return True
+
+
+def _add_rvi_output_options(rvi_path, coupled, logger):
+    """Add output options and transport tracers to .rvi file if missing.
+
+    During calibration these are intentionally left out for speed, so they
+    need to be injected before any forward (future) run.
+    """
+    rvi_path = Path(rvi_path)
+    if not rvi_path.exists():
+        logger.warning(f"  .rvi not found: {rvi_path}")
+        return
+
+    with open(rvi_path) as f:
+        lines = f.readlines()
+
+    # Check if output options are already present
+    content = "".join(lines)
+    if ":EvaluationMetrics" in content:
+        logger.info(f"  .rvi already has output options, skipping injection")
+        return
+
+    output_options = [
+        "  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE\n",
+        "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE SNOW BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE PRECIP BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE PRECIP BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE ATMOSPHERE BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE ATMOSPHERE BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE SOIL[0] BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE SOIL[1] BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE AET BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE AET BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_BASIN\n",
+        "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE TEMP_AVE BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE TEMP_AVE BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE POTENTIAL_MELT BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE POTENTIAL_MELT BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE RAINFALL BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE RAINFALL BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE SNOWFALL BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE SNOWFALL BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_HRU_GROUP\n",
+        "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_BASIN\n",
+        "  :CustomOutput DAILY AVERAGE Between:SNOW.And.ATMOSPHERE BY_HRU\n",
+        "  :CustomOutput DAILY AVERAGE Between:SNOW.And.ATMOSPHERE BY_HRU_GROUP\n",
+        "  :WriteMassLoadings\n",
+    ]
+
+    if coupled:
+        transport_tracers = [
+            "\n#Transport for Snowmelt and Glacier Melt Tracking (Coupled Mode)\n",
+            "\n",
+            ":Transport SNOWMELT TRACER\n",
+            ":FixedConcentration SNOWMELT SNOW 1.0\n",
+            "\n",
+            ":Transport GLACIERMELT_ALL TRACER\n",
+            ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
+            "\n",
+            ":Transport GLACIERMELT_SMALL TRACER\n",
+            ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER\n",
+            "\n",
+            ":Transport GLACIERMELT_LARGE TRACER\n",
+            ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
+        ]
+    else:
+        transport_tracers = [
+            "\n#Transport for Snowmelt and Glacier Melt Tracking (Non-Coupled Mode)\n",
+            "\n",
+            ":Transport SNOWMELT TRACER\n",
+            ":FixedConcentration SNOWMELT SNOW 1.0\n",
+            "\n",
+            ":Transport GLACIERMELT_ALL TRACER\n",
+            ":FixedConcentration GLACIERMELT_ALL GLACIER 1.0\n",
+        ]
+
+    # Find #Output Options line and insert after it
+    new_lines = []
+    inserted = False
+    for line in lines:
+        new_lines.append(line)
+        if "#Output Options" in line and not inserted:
+            inserted = True
+            new_lines.extend(output_options)
+            new_lines.extend(transport_tracers)
+
+    if not inserted:
+        new_lines.append("\n#Output Options\n")
+        new_lines.extend(output_options)
+        new_lines.extend(transport_tracers)
+
+    with open(rvi_path, "w") as f:
+        f.writelines(new_lines)
+
+    logger.info(f"  Injected output options + transport tracers into .rvi")
 
 
 def _fix_leap_days(data_obs_dir, model_id):
