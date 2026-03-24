@@ -787,6 +787,18 @@ Examples:
             ok6 = phase6_ensemble_diagnostics(nml, future_proj, logger=logger)
             phase_results['Phase 6: Ensemble Plot'] = ok6
 
+            # Phase 7: Full future postprocessing
+            try:
+                from postprocessing_future import run_future_postprocessing
+                logger.info("=" * 70)
+                logger.info("PHASE 7: FUTURE ENSEMBLE POSTPROCESSING")
+                logger.info("=" * 70)
+                run_future_postprocessing(str(namelist_path), skip_errors=True)
+                phase_results['Phase 7: Future Postprocessing'] = True
+            except Exception as e:
+                logger.error(f"Phase 7 failed: {e}")
+                phase_results['Phase 7: Future Postprocessing'] = False
+
         else:
             # =================================================================
             # HISTORICAL NAMELIST MODE: full pipeline Phases 1-6
@@ -856,6 +868,19 @@ Examples:
                 # Phase 6: Ensemble plot (even if some models failed)
                 ok6 = phase6_ensemble_diagnostics(nml, future_proj, logger=logger)
                 phase_results['Phase 6: Ensemble Plot'] = ok6
+
+                # Phase 7: Full future postprocessing
+                try:
+                    from postprocessing_future import run_future_postprocessing
+                    logger.info("=" * 70)
+                    logger.info("PHASE 7: FUTURE ENSEMBLE POSTPROCESSING")
+                    logger.info("=" * 70)
+                    # Use the future namelist for postprocessing
+                    run_future_postprocessing(str(future_namelist), skip_errors=True)
+                    phase_results['Phase 7: Future Postprocessing'] = True
+                except Exception as e:
+                    logger.error(f"Phase 7 failed: {e}")
+                    phase_results['Phase 7: Future Postprocessing'] = False
 
         # Summary
         total_duration = time.time() - workflow_start
