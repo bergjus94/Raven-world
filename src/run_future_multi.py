@@ -157,7 +157,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
         try:
             process = subprocess.run(
                 cmd, check=True, capture_output=True, text=True,
-                timeout=1800,
+                timeout=7200,  # 2 hours (scipy regridding can be slow)
             )
             logger.info(f"  Input creation complete for {model_id}")
         except subprocess.CalledProcessError as e:
