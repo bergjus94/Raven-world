@@ -71,6 +71,66 @@ except ImportError:
     xe = None
     _XESMF_AVAILABLE = False
 
+from scipy.interpolate import RegularGridInterpolator
+
+
+class _ScipyBilinearRegridder:
+    """Drop-in replacement for xe.Regridder using scipy bilinear interpolation.
+
+    Works on standard rectilinear lat/lon grids (CMIP6).  Accepts and returns
+    xarray DataArrays so the calling code doesn't need to change.
+    """
+
+    def __init__(self, src_ds, tgt_ds, logger=None):
+        # Target coordinates (ERA5-Land)
+        self._tgt_lat = tgt_ds["latitude"].values if "latitude" in tgt_ds else tgt_ds["lat"].values
+        self._tgt_lon = tgt_ds["longitude"].values if "longitude" in tgt_ds else tgt_ds["lon"].values
+        self._logger = logger
+        # Build meshgrid of target points
+        lon_grid, lat_grid = np.meshgrid(self._tgt_lon, self._tgt_lat)
+        self._tgt_points = np.column_stack([lat_grid.ravel(), lon_grid.ravel()])
+
+    def __call__(self, da: xr.DataArray) -> xr.DataArray:
+        # Normalise dim names
+        rename_in = {}
+        if "latitude" in da.dims:
+            rename_in["latitude"] = "lat"
+        if "longitude" in da.dims:
+            rename_in["longitude"] = "lon"
+        if rename_in:
+            da = da.rename(rename_in)
+
+        src_lat = da["lat"].values
+        src_lon = da["lon"].values
+
+        # Handle time dimension
+        if "time" in da.dims:
+            out_data = np.empty((len(da.time), len(self._tgt_lat), len(self._tgt_lon)))
+            for i in range(len(da.time)):
+                values = da.isel(time=i).values
+                interp = RegularGridInterpolator(
+                    (src_lat, src_lon), values,
+                    method="linear", bounds_error=False, fill_value=None,
+                )
+                out_data[i] = interp(self._tgt_points).reshape(len(self._tgt_lat), len(self._tgt_lon))
+            return xr.DataArray(
+                out_data,
+                dims=["time", "lat", "lon"],
+                coords={"time": da.time, "lat": self._tgt_lat, "lon": self._tgt_lon},
+            )
+        else:
+            values = da.values
+            interp = RegularGridInterpolator(
+                (src_lat, src_lon), values,
+                method="linear", bounds_error=False, fill_value=None,
+            )
+            out_data = interp(self._tgt_points).reshape(len(self._tgt_lat), len(self._tgt_lon))
+            return xr.DataArray(
+                out_data,
+                dims=["lat", "lon"],
+                coords={"lat": self._tgt_lat, "lon": self._tgt_lon},
+            )
+
 try:
     # xsdba is the standalone package split from xclim >= 0.60
     from xsdba import QuantileDeltaMapping
@@ -1455,9 +1515,9 @@ class CMIP6Downscaler(_DownscalerBase):
         force_reprocess: bool = False,
     ) -> None:
         if not _XESMF_AVAILABLE:
-            raise ImportError(
-                "xesmf is required for CMIP6 regridding.\n"
-                "  conda install -c conda-forge xesmf"
+            import logging
+            logging.getLogger(__name__).info(
+                "xesmf not available — using scipy bilinear interpolation for CMIP6 regridding"
             )
         if not _XCLIM_AVAILABLE:
             raise ImportError(
@@ -1476,12 +1536,10 @@ class CMIP6Downscaler(_DownscalerBase):
         self.cmip6_dir = Path(cmip6_dir)
         self.logger.info(f"  CMIP6 dir   : {self.cmip6_dir}")
 
-    def _build_regridder(self, da_sample: xr.DataArray) -> "xe.Regridder":
+    def _build_regridder(self, da_sample: xr.DataArray):
         """
-        Build xesmf bilinear regridder from standard lat/lon CMIP6 grid to ERA5.
-
-        CMIP6 data uses standard 1-D lat/lon coordinates — simpler than
-        CORDEX rotated-pole, no 2-D auxiliary coordinate handling needed.
+        Build bilinear regridder from standard lat/lon CMIP6 grid to ERA5.
+        Uses xesmf if available, otherwise falls back to scipy interpolation.
         """
         tgt = self._get_era5_target_grid()
 
@@ -1490,7 +1548,7 @@ class CMIP6Downscaler(_DownscalerBase):
         else:
             one_step = da_sample
 
-        # Ensure lat/lon are named 'lat'/'lon' for xesmf
+        # Ensure lat/lon are named 'lat'/'lon'
         rename = {}
         if "latitude" in one_step.dims and "lat" not in one_step.dims:
             rename["latitude"] = "lat"
@@ -1499,16 +1557,20 @@ class CMIP6Downscaler(_DownscalerBase):
         if rename:
             one_step = one_step.rename(rename)
 
-        src_ds = one_step.to_dataset(name="_v")
-
-        regridder = xe.Regridder(
-            src_ds, tgt,
-            method            = "bilinear",
-            extrap_method     = "nearest_s2d",
-            ignore_degenerate = True,
-        )
-        self.logger.debug("xesmf bilinear regridder built (CMIP6 standard lat/lon).")
-        return regridder
+        if _XESMF_AVAILABLE:
+            src_ds = one_step.to_dataset(name="_v")
+            regridder = xe.Regridder(
+                src_ds, tgt,
+                method            = "bilinear",
+                extrap_method     = "nearest_s2d",
+                ignore_degenerate = True,
+            )
+            self.logger.debug("xesmf bilinear regridder built (CMIP6 standard lat/lon).")
+            return regridder
+        else:
+            regridder = _ScipyBilinearRegridder(one_step, tgt, logger=self.logger)
+            self.logger.debug("scipy bilinear regridder built (CMIP6 standard lat/lon).")
+            return regridder
 
     def _load_source_orog_on_era5(self) -> Optional[xr.DataArray]:
         """Return CMIP6 orography (m) regridded to the ERA5-Land grid."""
