@@ -117,9 +117,19 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                 cmip6_dir = str(main_dir / cmip6_dir)
 
             model_data_dir = Path(cmip6_dir) / model_id
-            if model_data_dir.exists():
-                logger.info(f"  CMIP6 data already exists: {model_data_dir}")
+            # Check that all required files exist, not just the directory
+            required_files = [
+                model_data_dir / exp / f"{var}.nc"
+                for exp in ["historical", "ssp126"]
+                for var in ["tas", "tasmax", "tasmin", "pr"]
+            ]
+            all_present = model_data_dir.exists() and all(f.exists() for f in required_files)
+            if all_present:
+                logger.info(f"  CMIP6 data already exists: {model_data_dir} (8/8 files)")
             else:
+                missing = [f.name for f in required_files if not f.exists()]
+                if missing:
+                    logger.info(f"  Missing CMIP6 files for {model_id}: {missing}")
                 logger.info(f"  Downloading CMIP6 data for {model_id}...")
                 download_script = project_dir / "downloads" / "download_cmip6.py"
                 cmd = [
