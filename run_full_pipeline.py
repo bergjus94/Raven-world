@@ -527,7 +527,9 @@ def phase6_ensemble_diagnostics(nml, future_proj, logger=None):
 
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
-    config_dir = nml.get('config_dir', '02_model_setups') + '_future'
+    config_dir = nml.get('config_dir', '02_model_setups')
+    if not config_dir.endswith('_future'):
+        config_dir = config_dir + '_future'
     main_dir = Path(nml['main_dir'])
 
     output_dir = main_dir / config_dir / f"catchment_{gauge_id}" / model_type / 'output'

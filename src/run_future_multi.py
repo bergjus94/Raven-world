@@ -138,7 +138,10 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                     logger.info(f"  CMIP6 download complete for {model_id}")
                 except subprocess.CalledProcessError as e:
                     logger.error(f"  CMIP6 download failed for {model_id}")
-                    logger.error(e.stdout[-500:] if e.stdout else "")
+                    if e.stdout:
+                        logger.error(f"  STDOUT: {e.stdout[-2000:]}")
+                    if e.stderr:
+                        logger.error(f"  STDERR: {e.stderr[-2000:]}")
                     return False
                 except subprocess.TimeoutExpired:
                     logger.error(f"  CMIP6 download timed out for {model_id}")
