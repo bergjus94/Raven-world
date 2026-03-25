@@ -1053,9 +1053,13 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
     if abs_max == 0:
         abs_max = 0.1
 
-    fig, (ax_bar, ax_heat) = plt.subplots(
-        2, 1, figsize=(max(12, n_factors * 1.5), max(6, n_catch * 0.8 + 3)),
-        gridspec_kw={'height_ratios': [1, 3]}, sharex=True)
+    from matplotlib.gridspec import GridSpec
+    fig = plt.figure(figsize=(max(12, n_factors * 1.5), max(6, n_catch * 0.8 + 3)))
+    gs = GridSpec(2, 2, figure=fig, height_ratios=[1, 3],
+                  width_ratios=[1, 0.03], hspace=0.05)
+    ax_bar = fig.add_subplot(gs[0, 0])
+    ax_heat = fig.add_subplot(gs[1, 0], sharex=ax_bar)
+    cax = fig.add_subplot(gs[1, 1])
 
     # Top bar: mean ΔKGE per factor (signed, colored by direction)
     mean_deltas = []
@@ -1105,7 +1109,8 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
     ax_heat.set_xticklabels(x_labels, rotation=45, ha='right')
     ax_heat.set_yticks(range(n_catch))
     ax_heat.set_yticklabels(y_labels)
-    fig.colorbar(im, ax=[ax_bar, ax_heat], shrink=0.8, label='Mean ΔKGE')
+    fig.colorbar(im, cax=cax, label='Mean ΔKGE')
+    plt.setp(ax_bar.get_xticklabels(), visible=False)
 
     plt.tight_layout()
     save_path = plot_dir / 'cross_catchment_factor_importance.png'
