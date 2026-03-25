@@ -617,10 +617,8 @@ def plot_subdaily_effect(catchment_results, config_registry, plot_dir):
     catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
 
     pairs = [
-        ('baseline', 'subdaily', 'ERA5 Daily → Subdaily'),
+        ('baseline', 'subdaily', 'Uncoupled Daily → Subdaily'),
         ('glogem', 'glogem_subdaily', 'GloGEM Daily → Subdaily'),
-        ('icimod', 'subdaily_aspect', 'ICIMOD → Subdaily Aspect'),
-        ('glogem_icimod', 'glogem_subdaily_aspect', 'GloGEM ICIMOD → Subdaily Aspect'),
         ('icemelt', 'icemelt_subdaily', 'Icemelt Daily → Subdaily'),
     ]
 
@@ -681,15 +679,102 @@ def plot_subdaily_effect(catchment_results, config_registry, plot_dir):
 ############# Plot 5c: Meteorological Forcing Comparison ########################
 #--------------------------------------------------------------------------------
 
-def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
+def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel='KGE'):
     """
-    Grouped bar chart comparing KGE across meteorological forcing datasets
-    (ERA5 vs HAR vs TPHiPr), for both uncoupled and coupled configurations.
+    Boxplot comparing KGE across grouped configurations.
+    Each box shows the spread across catchments for one config.
+    Individual catchment points overlaid as colored dots.
     """
     catchment_ids = list(catchment_results.keys())
+    catch_colors = {gid: catchment_results[gid]['catchment_info']['color'] for gid in catchment_ids}
     catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
 
-    # Groups: (group_label, [(config_key, forcing_label), ...])
+    # Filter to groups/configs that have data
+    valid_groups = []
+    for group_label, configs in groups:
+        valid_configs = []
+        for key, config_label in configs:
+            for gid in catchment_ids:
+                if key in catchment_results[gid]['metrics']:
+                    valid_configs.append((key, config_label))
+                    break
+        if valid_configs:
+            valid_groups.append((group_label, valid_configs))
+
+    if not valid_groups:
+        print(f"No data for {filename}")
+        return
+
+    # Build flat lists
+    x_labels = []
+    config_key_list = []
+    box_data = []
+    group_colors = {'Uncoupled': '#aec7e8', 'Coupled (GloGEM)': '#ffbb78',
+                    'Daily': '#aec7e8', 'Subdaily': '#ffbb78'}
+
+    for group_label, configs in valid_groups:
+        for key, config_label in configs:
+            x_labels.append(f"{config_label}\n({group_label})")
+            config_key_list.append(key)
+            vals = [catchment_results[gid]['metrics'][key]['KGE']
+                    for gid in catchment_ids
+                    if key in catchment_results[gid]['metrics']]
+            box_data.append(vals)
+
+    n_items = len(config_key_list)
+    fig, ax = plt.subplots(figsize=(max(10, n_items * 1.8), 7))
+
+    bp = ax.boxplot(box_data, patch_artist=True, widths=0.5,
+                    medianprops=dict(color='black', linewidth=2))
+
+    # Color boxes by group
+    box_idx = 0
+    for group_label, configs in valid_groups:
+        color = group_colors.get(group_label, '#d9d9d9')
+        for _ in configs:
+            bp['boxes'][box_idx].set_facecolor(color)
+            bp['boxes'][box_idx].set_alpha(0.5)
+            box_idx += 1
+
+    # Overlay individual catchment points
+    for i, key in enumerate(config_key_list):
+        for gid in catchment_ids:
+            m = catchment_results[gid]['metrics'].get(key)
+            if m:
+                ax.scatter(i + 1, m['KGE'], color=catch_colors[gid],
+                           s=60, zorder=5, edgecolors='black', linewidth=0.5)
+
+    # Legend for catchments
+    legend_handles = [plt.Line2D([0], [0], marker='o', color='w',
+                                  markerfacecolor=catch_colors[gid],
+                                  markeredgecolor='black', markersize=8,
+                                  label=catch_names[gid])
+                      for gid in catchment_ids]
+    ax.legend(handles=legend_handles, title='Catchment', loc='best')
+
+    ax.set_xticks(range(1, n_items + 1))
+    ax.set_xticklabels(x_labels, rotation=45, ha='right')
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
+
+    # Add vertical separators between groups
+    cumulative = 0
+    for gi, (group_label, configs) in enumerate(valid_groups):
+        if gi > 0:
+            ax.axvline(x=cumulative + 0.5, color='gray', linestyle='--',
+                       linewidth=1, alpha=0.5)
+        cumulative += len(configs)
+
+    plt.tight_layout()
+    save_path = plot_dir / filename
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
+    """Boxplot comparing KGE across meteorological forcing datasets."""
     groups = [
         ('Uncoupled', [
             ('baseline', 'ERA5'),
@@ -702,74 +787,8 @@ def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
             ('glogem_tphipr', 'TPHiPr'),
         ]),
     ]
-
-    # Filter to groups/forcings that have data
-    valid_groups = []
-    for group_label, forcings in groups:
-        valid_forcings = []
-        for key, forcing_label in forcings:
-            for gid in catchment_ids:
-                if key in catchment_results[gid]['metrics']:
-                    valid_forcings.append((key, forcing_label))
-                    break
-        if valid_forcings:
-            valid_groups.append((group_label, valid_forcings))
-
-    if not valid_groups:
-        print("No meteorological forcing comparison data available")
-        return
-
-    # Build flat list of x-positions with group separators
-    forcing_colors = {'ERA5': '#1f77b4', 'HAR': '#d62728', 'TPHiPr': '#843c39'}
-    x_labels = []
-    x_group_labels = []
-    config_key_list = []
-    forcing_label_list = []
-
-    for group_label, forcings in valid_groups:
-        for key, forcing_label in forcings:
-            x_labels.append(f"{forcing_label}\n({group_label})")
-            x_group_labels.append(group_label)
-            config_key_list.append(key)
-            forcing_label_list.append(forcing_label)
-
-    n_items = len(config_key_list)
-    n_catchments = len(catchment_ids)
-    bar_width = 0.8 / n_catchments
-    x = np.arange(n_items)
-
-    fig, ax = plt.subplots(figsize=(max(10, n_items * 2), 7))
-
-    for i, gid in enumerate(catchment_ids):
-        vals = []
-        for key in config_key_list:
-            m = catchment_results[gid]['metrics'].get(key)
-            vals.append(m['KGE'] if m else np.nan)
-
-        offset = (i - n_catchments / 2 + 0.5) * bar_width
-        catch_color = catchment_results[gid]['catchment_info']['color']
-        ax.bar(x + offset, vals, bar_width, color=catch_color,
-               edgecolor='black', linewidth=0.5, label=catch_names[gid])
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels)
-    ax.set_ylabel('KGE')
-    ax.legend(title='Catchment')
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
-
-    # Add vertical separators between groups
-    cumulative = 0
-    for gi, (group_label, forcings) in enumerate(valid_groups):
-        if gi > 0:
-            ax.axvline(x=cumulative - 0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-        cumulative += len(forcings)
-
-    plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_meteo_forcing.png'
-    fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Saved: {save_path}")
+    _plot_grouped_boxplot(catchment_results, groups, plot_dir,
+                          'cross_catchment_meteo_forcing.png')
 
 
 #--------------------------------------------------------------------------------
@@ -777,15 +796,7 @@ def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
 #--------------------------------------------------------------------------------
 
 def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir):
-    """
-    Grouped bar chart comparing KGE across coupling methods:
-    uncoupled (Raven internal), TSLA, GMB, and icemelt,
-    for daily and subdaily timesteps.
-    """
-    catchment_ids = list(catchment_results.keys())
-    catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
-
-    # Groups: (group_label, [(config_key, method_label), ...])
+    """Boxplot comparing KGE across glacier coupling methods."""
     groups = [
         ('Daily', [
             ('baseline', 'Uncoupled'),
@@ -799,69 +810,8 @@ def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir
             ('icemelt_subdaily', 'Icemelt'),
         ]),
     ]
-
-    # Filter to groups/methods that have data
-    valid_groups = []
-    for group_label, methods in groups:
-        valid_methods = []
-        for key, method_label in methods:
-            for gid in catchment_ids:
-                if key in catchment_results[gid]['metrics']:
-                    valid_methods.append((key, method_label))
-                    break
-        if valid_methods:
-            valid_groups.append((group_label, valid_methods))
-
-    if not valid_groups:
-        print("No coupling method comparison data available")
-        return
-
-    # Build flat list of x-positions
-    x_labels = []
-    config_key_list = []
-
-    for group_label, methods in valid_groups:
-        for key, method_label in methods:
-            x_labels.append(f"{method_label}\n({group_label})")
-            config_key_list.append(key)
-
-    n_items = len(config_key_list)
-    n_catchments = len(catchment_ids)
-    bar_width = 0.8 / n_catchments
-    x = np.arange(n_items)
-
-    fig, ax = plt.subplots(figsize=(max(10, n_items * 2), 7))
-
-    for i, gid in enumerate(catchment_ids):
-        vals = []
-        for key in config_key_list:
-            m = catchment_results[gid]['metrics'].get(key)
-            vals.append(m['KGE'] if m else np.nan)
-
-        offset = (i - n_catchments / 2 + 0.5) * bar_width
-        catch_color = catchment_results[gid]['catchment_info']['color']
-        ax.bar(x + offset, vals, bar_width, color=catch_color,
-               edgecolor='black', linewidth=0.5, label=catch_names[gid])
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels)
-    ax.set_ylabel('KGE')
-    ax.legend(title='Catchment')
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
-
-    # Add vertical separators between groups
-    cumulative = 0
-    for gi, (group_label, methods) in enumerate(valid_groups):
-        if gi > 0:
-            ax.axvline(x=cumulative - 0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-        cumulative += len(methods)
-
-    plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_coupling_method.png'
-    fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Saved: {save_path}")
+    _plot_grouped_boxplot(catchment_results, groups, plot_dir,
+                          'cross_catchment_coupling_method.png')
 
 
 #--------------------------------------------------------------------------------
@@ -869,13 +819,7 @@ def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir
 #--------------------------------------------------------------------------------
 
 def plot_et_method_comparison(catchment_results, config_registry, plot_dir):
-    """
-    Grouped bar chart comparing KGE across PET methods:
-    ERA5 PET vs HAR PET vs Oudin formula, for uncoupled and coupled configs.
-    """
-    catchment_ids = list(catchment_results.keys())
-    catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
-
+    """Boxplot comparing KGE across PET methods."""
     groups = [
         ('Uncoupled', [
             ('baseline', 'ERA5'),
@@ -888,68 +832,8 @@ def plot_et_method_comparison(catchment_results, config_registry, plot_dir):
             ('glogem_oudin', 'Oudin'),
         ]),
     ]
-
-    # Filter to groups/methods that have data
-    valid_groups = []
-    for group_label, methods in groups:
-        valid_methods = []
-        for key, method_label in methods:
-            for gid in catchment_ids:
-                if key in catchment_results[gid]['metrics']:
-                    valid_methods.append((key, method_label))
-                    break
-        if valid_methods:
-            valid_groups.append((group_label, valid_methods))
-
-    if not valid_groups:
-        print("No ET method comparison data available")
-        return
-
-    x_labels = []
-    config_key_list = []
-
-    for group_label, methods in valid_groups:
-        for key, method_label in methods:
-            x_labels.append(f"{method_label}\n({group_label})")
-            config_key_list.append(key)
-
-    n_items = len(config_key_list)
-    n_catchments = len(catchment_ids)
-    bar_width = 0.8 / n_catchments
-    x = np.arange(n_items)
-
-    fig, ax = plt.subplots(figsize=(max(10, n_items * 2), 7))
-
-    for i, gid in enumerate(catchment_ids):
-        vals = []
-        for key in config_key_list:
-            m = catchment_results[gid]['metrics'].get(key)
-            vals.append(m['KGE'] if m else np.nan)
-
-        offset = (i - n_catchments / 2 + 0.5) * bar_width
-        catch_color = catchment_results[gid]['catchment_info']['color']
-        ax.bar(x + offset, vals, bar_width, color=catch_color,
-               edgecolor='black', linewidth=0.5, label=catch_names[gid])
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels)
-    ax.set_ylabel('KGE')
-    ax.legend(title='Catchment')
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
-
-    # Add vertical separators between groups
-    cumulative = 0
-    for gi, (group_label, methods) in enumerate(valid_groups):
-        if gi > 0:
-            ax.axvline(x=cumulative - 0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-        cumulative += len(methods)
-
-    plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_et_method.png'
-    fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Saved: {save_path}")
+    _plot_grouped_boxplot(catchment_results, groups, plot_dir,
+                          'cross_catchment_et_method.png')
 
 
 #--------------------------------------------------------------------------------
@@ -968,7 +852,7 @@ def _define_sensitivity_factors():
     """
     return [
         {
-            'name': 'GloGEM Coupling\n(TSLA)',
+            'name': 'Uncoupled →\nGloGEM TSLA',
             'pairs': [
                 ('baseline', 'glogem', 'Daily ERA5'),
                 ('subdaily', 'glogem_subdaily', 'Subdaily ERA5'),
@@ -980,7 +864,7 @@ def _define_sensitivity_factors():
             'sign_label': ('Uncoupled better', 'Coupled better'),
         },
         {
-            'name': 'Subdaily\nTimestep',
+            'name': 'Daily →\nSubdaily',
             'pairs': [
                 ('baseline', 'subdaily', 'Uncoupled ERA5'),
                 ('glogem', 'glogem_subdaily', 'Coupled ERA5'),
@@ -989,7 +873,7 @@ def _define_sensitivity_factors():
             'sign_label': ('Daily better', 'Subdaily better'),
         },
         {
-            'name': 'HAR vs ERA5\nForcing',
+            'name': 'ERA5 →\nHAR Forcing',
             'pairs': [
                 ('baseline', 'har', 'Uncoupled'),
                 ('glogem', 'glogem_har', 'Coupled'),
@@ -997,7 +881,7 @@ def _define_sensitivity_factors():
             'sign_label': ('ERA5 better', 'HAR better'),
         },
         {
-            'name': 'Oudin vs ERA5\nPET',
+            'name': 'ERA5 PET →\nOudin PET',
             'pairs': [
                 ('baseline', 'oudin', 'Uncoupled'),
                 ('glogem', 'glogem_oudin', 'Coupled'),
@@ -1005,7 +889,7 @@ def _define_sensitivity_factors():
             'sign_label': ('ERA5 better', 'Oudin better'),
         },
         {
-            'name': 'TPHiPr vs ERA5\nPrecipitation',
+            'name': 'ERA5 Precip →\nTPHiPr Precip',
             'pairs': [
                 ('baseline', 'tphipr', 'Uncoupled'),
                 ('glogem', 'glogem_tphipr', 'Coupled'),
@@ -1013,7 +897,7 @@ def _define_sensitivity_factors():
             'sign_label': ('ERA5 better', 'TPHiPr better'),
         },
         {
-            'name': 'Icemelt vs\nTSLA Coupling',
+            'name': 'GloGEM TSLA →\nIcemelt',
             'pairs': [
                 ('glogem', 'icemelt', 'Daily'),
                 ('glogem_subdaily', 'icemelt_subdaily', 'Subdaily'),
@@ -1021,14 +905,14 @@ def _define_sensitivity_factors():
             'sign_label': ('TSLA better', 'Icemelt better'),
         },
         {
-            'name': 'GMB vs\nTSLA Coupling',
+            'name': 'GloGEM TSLA →\nGloGEM GMB',
             'pairs': [
                 ('glogem', 'glogem_gmb', 'Daily'),
             ],
             'sign_label': ('TSLA better', 'GMB better'),
         },
         {
-            'name': 'ICIMOD vs ESA\nLanduse',
+            'name': 'ESA Landuse →\nICIMOD Landuse',
             'pairs': [
                 ('baseline', 'icimod', 'Uncoupled'),
                 ('glogem', 'glogem_icimod', 'Coupled'),
@@ -1036,7 +920,7 @@ def _define_sensitivity_factors():
             'sign_label': ('ESA better', 'ICIMOD better'),
         },
         {
-            'name': 'Aspect-based\nHRU Split',
+            'name': 'No Aspect →\nAspect HRU Split',
             'pairs': [
                 ('subdaily', 'subdaily_aspect', 'Uncoupled'),
                 ('glogem_subdaily', 'glogem_subdaily_aspect', 'Coupled'),
@@ -1191,6 +1075,12 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
     y_labels = [catchment_results[gid]['catchment_info']['display_name']
                 for gid in catchment_ids]
     x_labels = [f['name'].replace('\n', ' ') for f in valid_factors]
+    # Add sign_label to x-axis: "Base → Alternative\n(−: base better, +: alt better)"
+    x_labels_annotated = []
+    for f in valid_factors:
+        neg, pos = f['sign_label']
+        x_labels_annotated.append(f"{f['name'].replace(chr(10), ' ')}\n(− {neg} / + {pos})")
+    x_labels = x_labels_annotated
 
     # Diverging colorscale centered at 0
     abs_max = np.nanmax(np.abs(matrix))
@@ -1201,16 +1091,24 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
         2, 1, figsize=(max(12, n_factors * 1.5), max(6, n_catch * 0.8 + 3)),
         gridspec_kw={'height_ratios': [1, 3]}, sharex=True)
 
-    # Top bar: mean |ΔKGE| per factor
-    importance = [factor_mean_abs[f['name']] for f in valid_factors]
-    bar_colors = ['#4472C4'] * n_factors
-    ax_bar.bar(range(n_factors), importance, color=bar_colors, edgecolor='black',
+    # Top bar: mean ΔKGE per factor (signed, colored by direction)
+    mean_deltas = []
+    for f in valid_factors:
+        all_d = []
+        for gid_deltas in factor_deltas.get(f['name'], {}).values():
+            all_d.extend(gid_deltas)
+        mean_deltas.append(np.mean(all_d) if all_d else 0)
+    bar_colors = ['#2ca02c' if d >= 0 else '#d62728' for d in mean_deltas]
+    ax_bar.bar(range(n_factors), mean_deltas, color=bar_colors, edgecolor='black',
                linewidth=0.5, width=0.7)
-    ax_bar.set_ylabel('Mean |ΔKGE|')
+    ax_bar.set_ylabel('Mean ΔKGE')
+    ax_bar.axhline(y=0, color='black', linewidth=0.5)
     ax_bar.grid(True, alpha=0.3, axis='y')
     # Annotate bars
-    for j, imp in enumerate(importance):
-        ax_bar.text(j, imp + abs_max * 0.02, f'{imp:.3f}', ha='center',
+    for j, d in enumerate(mean_deltas):
+        va = 'bottom' if d >= 0 else 'top'
+        offset = abs_max * 0.02 if d >= 0 else -abs_max * 0.02
+        ax_bar.text(j, d + offset, f'{d:+.3f}', ha='center', va=va,
                     fontsize=10, fontweight='bold')
 
     # Bottom heatmap: ΔKGE per catchment × factor
