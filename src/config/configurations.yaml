@@ -15,7 +15,7 @@
 # =============================================================================
 
 # Set this to the folder that contains all configuration output folders
-main_dir: '/home/jberg/OneDrive/Raven_worldwide'
+main_dir: '/home/jberg@giub.local/Raven_world'
 
 configurations:
   # === UNCOUPLED (Raven internal glacier model) ===

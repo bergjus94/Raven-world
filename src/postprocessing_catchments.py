@@ -405,20 +405,18 @@ def plot_regime_comparison(catchment_results, config_registry, plot_dir,
 
 def plot_glacier_contribution_comparison(catchment_results, config_registry, plot_dir):
     """
-    Bar chart of glacier melt fraction of total Q for each catchment,
-    grouped by coupled configuration.
+    Bar chart of glacier melt fraction of total simulated Q for each catchment,
+    across ALL configurations (coupled and uncoupled).
+    Uses Raven's GLACIERMELT_ALLMassLoadings.csv which is produced by all runs.
     """
     catchment_ids = list(catchment_results.keys())
     catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
     config_names = {c['key']: c['display_name'] for c in config_registry}
-    config_colors_map = {c['key']: c['color'] for c in config_registry}
-
-    # Only coupled configs have glacier contributions
-    coupled_keys = [c['key'] for c in config_registry if c['coupled']]
+    config_keys = [c['key'] for c in config_registry]
 
     glacier_fractions = {}  # {config_key: {gauge_id: fraction}}
 
-    for key in coupled_keys:
+    for key in config_keys:
         glacier_fractions[key] = {}
         for gid in catchment_ids:
             mc = catchment_results[gid].get('multi_config')
@@ -429,54 +427,47 @@ def plot_glacier_contribution_comparison(catchment_results, config_registry, plo
 
             individual_config = _build_individual_config(mc, config_dir)
             try:
-                glogem = load_glogem_data(individual_config, plot=False)
-                if glogem is None:
+                info = catchment_results[gid]['catchment_info']
+                gauge_id = mc['gauge_id']
+                model_type = mc['model_type']
+                config_path = Path(mc['main_dir']) / config_dir
+
+                # Load GLACIERMELT_ALLMassLoadings.csv (produced by all Raven runs)
+                glacier_file = (config_path / f"catchment_{gauge_id}" / model_type /
+                                "output" / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv")
+                if not glacier_file.exists():
                     continue
 
-                info = catchment_results[gid]['catchment_info']
-                val_mask = ((glogem['date'] >= info['validation_start']) &
-                            (glogem['date'] <= info['validation_end']))
-                glogem_val = glogem[val_mask]
+                glacier_df = pd.read_csv(glacier_file)
+                glacier_df['date'] = pd.to_datetime(glacier_df['date'])
+                glacier_m3s_col = f"{gauge_id} m3/s"
+                if glacier_m3s_col not in glacier_df.columns:
+                    continue
 
-                # Glacier melt contribution (catchment-normalized) as fraction of mean obs Q
-                mean_glacier_melt = glogem_val['glacier_melt_normalized'].mean()
+                # Filter to validation period
+                val_mask = ((glacier_df['date'] >= info['validation_start']) &
+                            (glacier_df['date'] <= info['validation_end']))
+                glacier_val = glacier_df[val_mask]
+                mean_glacier_m3s = glacier_val[glacier_m3s_col].mean()
 
-                # Get mean observed Q in mm/day from regime data
-                regime = catchment_results[gid]['regime_data'].get(key)
-                if regime is not None and 'obs_Q' in regime.columns:
-                    # Mean obs Q is in m3/s, glacier melt is in mm/day
-                    # We compare both in mm/day using the glacier_melt_normalized vs sim_Q
-                    mean_sim = glogem_val['glacier_melt_normalized'].sum()
-                    # Use simulated total Q to get fraction
-                    data = load_hydrograph_data(individual_config)
-                    if data is not None:
-                        val_mask_q = ((data['date'] >= info['validation_start']) &
-                                      (data['date'] <= info['validation_end']))
-                        mean_obs_q = data[val_mask_q]['obs_Q'].mean()
-                        # Convert glacier melt mm/day to m3/s for comparison
-                        # Actually, just show the normalized glacier melt as fraction of sim Q
-                        mean_sim_q = data[val_mask_q]['sim_Q'].mean()
-                        if mean_sim_q > 0:
-                            # glacier melt normalized is in mm/day over catchment
-                            # sim_Q is in m3/s - need common units
-                            # Use the ratio of glogem melt to total sim Q both in mm/day
-                            # For simplicity: glacier_melt_normalized / mean_total_glogem_output_normalized
-                            total_glogem = (glogem_val['icemelt_normalized'].mean() +
-                                           glogem_val['snowmelt_normalized'].mean() +
-                                           glogem_val['rainfall_normalized'].mean())
-                            if total_glogem > 0:
-                                frac = glogem_val['icemelt_normalized'].mean() / total_glogem
-                            else:
-                                frac = 0
-                            glacier_fractions[key][gid] = frac
-                        del data
+                # Load simulated Q for the same period
+                data = load_hydrograph_data(individual_config)
+                if data is None:
+                    continue
+                val_mask_q = ((data['date'] >= info['validation_start']) &
+                              (data['date'] <= info['validation_end']))
+                mean_sim_q = data[val_mask_q]['sim_Q'].mean()
+                del data
+
+                if mean_sim_q > 0:
+                    glacier_fractions[key][gid] = mean_glacier_m3s / mean_sim_q
 
             except Exception as e:
                 print(f"  Glacier contribution error for {key}/{gid}: {e}")
                 continue
 
     # Filter to configs that have data for at least one catchment
-    valid_keys = [k for k in coupled_keys if glacier_fractions.get(k)]
+    valid_keys = [k for k in config_keys if glacier_fractions.get(k)]
     if not valid_keys:
         print("No glacier contribution data available")
         return
@@ -497,8 +488,8 @@ def plot_glacier_contribution_comparison(catchment_results, config_registry, plo
 
     ax.set_xticks(x)
     ax.set_xticklabels([config_names[k] for k in valid_keys], rotation=45, ha='right')
-    ax.set_ylabel('Ice Melt Fraction of GloGEM Output (%)', fontsize=11)
-    ax.set_title('Glacier Ice Melt Contribution by Catchment and Configuration',
+    ax.set_ylabel('Glacier Melt Fraction of Simulated Q (%)', fontsize=11)
+    ax.set_title('Glacier Melt Contribution by Catchment and Configuration',
                  fontsize=14, fontweight='bold')
     ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
@@ -609,6 +600,665 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
 
     plt.tight_layout()
     save_path = plot_dir / 'cross_catchment_coupling_effect.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############## Plot 5b: Subdaily Effect (Delta-KGE) #############################
+#--------------------------------------------------------------------------------
+
+def plot_subdaily_effect(catchment_results, config_registry, plot_dir):
+    """
+    For each catchment, show KGE change when switching from daily to subdaily.
+    Diverging bars: positive = subdaily improves performance.
+    """
+    catchment_ids = list(catchment_results.keys())
+    catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
+
+    pairs = [
+        ('baseline', 'subdaily', 'ERA5 Daily → Subdaily'),
+        ('glogem', 'glogem_subdaily', 'GloGEM Daily → Subdaily'),
+        ('icimod', 'subdaily_aspect', 'ICIMOD → Subdaily Aspect'),
+        ('glogem_icimod', 'glogem_subdaily_aspect', 'GloGEM ICIMOD → Subdaily Aspect'),
+        ('icemelt', 'icemelt_subdaily', 'Icemelt Daily → Subdaily'),
+    ]
+
+    valid_pairs = []
+    for daily, subdaily, label in pairs:
+        for gid in catchment_ids:
+            m = catchment_results[gid]['metrics']
+            if daily in m and subdaily in m:
+                valid_pairs.append((daily, subdaily, label))
+                break
+
+    if not valid_pairs:
+        print("No subdaily pairs found")
+        return
+
+    n_pairs = len(valid_pairs)
+    n_catchments = len(catchment_ids)
+    bar_width = 0.8 / n_catchments
+    x = np.arange(n_pairs)
+
+    fig, ax = plt.subplots(figsize=(max(10, n_pairs * 1.8), 6))
+
+    for i, gid in enumerate(catchment_ids):
+        deltas = []
+        for daily, subdaily, label in valid_pairs:
+            m = catchment_results[gid]['metrics']
+            if daily in m and subdaily in m:
+                delta = m[subdaily]['KGE'] - m[daily]['KGE']
+            else:
+                delta = np.nan
+            deltas.append(delta)
+
+        offset = (i - n_catchments / 2 + 0.5) * bar_width
+        catch_color = catchment_results[gid]['catchment_info']['color']
+        ax.bar(x + offset, deltas, bar_width, color=catch_color,
+               edgecolor='black', linewidth=0.5, label=catch_names[gid])
+
+    ax.axhline(y=0, color='black', linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right', fontsize=10)
+    ax.set_ylabel('ΔKGE (subdaily − daily)', fontsize=12)
+    ax.set_title('Effect of Subdaily Timestep on KGE',
+                 fontsize=14, fontweight='bold')
+    ax.legend(title='Catchment', fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    ax.axhspan(0, ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 0.1,
+               alpha=0.05, color='green', zorder=0)
+    ax.axhspan(ax.get_ylim()[0] if ax.get_ylim()[0] < 0 else -0.1, 0,
+               alpha=0.05, color='red', zorder=0)
+
+    plt.tight_layout()
+    save_path = plot_dir / 'cross_catchment_subdaily_effect.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############# Plot 5c: Meteorological Forcing Comparison ########################
+#--------------------------------------------------------------------------------
+
+def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
+    """
+    Grouped bar chart comparing KGE across meteorological forcing datasets
+    (ERA5 vs HAR vs TPHiPr), for both uncoupled and coupled configurations.
+    """
+    catchment_ids = list(catchment_results.keys())
+    catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
+
+    # Groups: (group_label, [(config_key, forcing_label), ...])
+    groups = [
+        ('Uncoupled', [
+            ('baseline', 'ERA5'),
+            ('har', 'HAR'),
+            ('tphipr', 'TPHiPr'),
+        ]),
+        ('Coupled (GloGEM)', [
+            ('glogem', 'ERA5'),
+            ('glogem_har', 'HAR'),
+            ('glogem_tphipr', 'TPHiPr'),
+        ]),
+    ]
+
+    # Filter to groups/forcings that have data
+    valid_groups = []
+    for group_label, forcings in groups:
+        valid_forcings = []
+        for key, forcing_label in forcings:
+            for gid in catchment_ids:
+                if key in catchment_results[gid]['metrics']:
+                    valid_forcings.append((key, forcing_label))
+                    break
+        if valid_forcings:
+            valid_groups.append((group_label, valid_forcings))
+
+    if not valid_groups:
+        print("No meteorological forcing comparison data available")
+        return
+
+    # Build flat list of x-positions with group separators
+    forcing_colors = {'ERA5': '#1f77b4', 'HAR': '#d62728', 'TPHiPr': '#843c39'}
+    x_labels = []
+    x_group_labels = []
+    config_key_list = []
+    forcing_label_list = []
+
+    for group_label, forcings in valid_groups:
+        for key, forcing_label in forcings:
+            x_labels.append(f"{forcing_label}\n({group_label})")
+            x_group_labels.append(group_label)
+            config_key_list.append(key)
+            forcing_label_list.append(forcing_label)
+
+    n_items = len(config_key_list)
+    n_catchments = len(catchment_ids)
+    bar_width = 0.8 / n_catchments
+    x = np.arange(n_items)
+
+    fig, ax = plt.subplots(figsize=(max(10, n_items * 2), 7))
+
+    for i, gid in enumerate(catchment_ids):
+        vals = []
+        for key in config_key_list:
+            m = catchment_results[gid]['metrics'].get(key)
+            vals.append(m['KGE'] if m else np.nan)
+
+        offset = (i - n_catchments / 2 + 0.5) * bar_width
+        catch_color = catchment_results[gid]['catchment_info']['color']
+        ax.bar(x + offset, vals, bar_width, color=catch_color,
+               edgecolor='black', linewidth=0.5, label=catch_names[gid])
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, fontsize=10)
+    ax.set_ylabel('KGE', fontsize=12)
+    ax.set_title('Effect of Meteorological Forcing on KGE',
+                 fontsize=14, fontweight='bold')
+    ax.legend(title='Catchment', fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
+
+    # Add vertical separators between groups
+    cumulative = 0
+    for gi, (group_label, forcings) in enumerate(valid_groups):
+        if gi > 0:
+            ax.axvline(x=cumulative - 0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        cumulative += len(forcings)
+
+    plt.tight_layout()
+    save_path = plot_dir / 'cross_catchment_meteo_forcing.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############ Plot 5d: Coupling Method Comparison ################################
+#--------------------------------------------------------------------------------
+
+def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir):
+    """
+    Grouped bar chart comparing KGE across coupling methods:
+    uncoupled (Raven internal), TSLA, GMB, and icemelt,
+    for daily and subdaily timesteps.
+    """
+    catchment_ids = list(catchment_results.keys())
+    catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
+
+    # Groups: (group_label, [(config_key, method_label), ...])
+    groups = [
+        ('Daily', [
+            ('baseline', 'Uncoupled'),
+            ('glogem', 'TSLA'),
+            ('glogem_gmb', 'GMB'),
+            ('icemelt', 'Icemelt'),
+        ]),
+        ('Subdaily', [
+            ('subdaily', 'Uncoupled'),
+            ('glogem_subdaily', 'TSLA'),
+            ('icemelt_subdaily', 'Icemelt'),
+        ]),
+    ]
+
+    # Filter to groups/methods that have data
+    valid_groups = []
+    for group_label, methods in groups:
+        valid_methods = []
+        for key, method_label in methods:
+            for gid in catchment_ids:
+                if key in catchment_results[gid]['metrics']:
+                    valid_methods.append((key, method_label))
+                    break
+        if valid_methods:
+            valid_groups.append((group_label, valid_methods))
+
+    if not valid_groups:
+        print("No coupling method comparison data available")
+        return
+
+    # Build flat list of x-positions
+    x_labels = []
+    config_key_list = []
+
+    for group_label, methods in valid_groups:
+        for key, method_label in methods:
+            x_labels.append(f"{method_label}\n({group_label})")
+            config_key_list.append(key)
+
+    n_items = len(config_key_list)
+    n_catchments = len(catchment_ids)
+    bar_width = 0.8 / n_catchments
+    x = np.arange(n_items)
+
+    fig, ax = plt.subplots(figsize=(max(10, n_items * 2), 7))
+
+    for i, gid in enumerate(catchment_ids):
+        vals = []
+        for key in config_key_list:
+            m = catchment_results[gid]['metrics'].get(key)
+            vals.append(m['KGE'] if m else np.nan)
+
+        offset = (i - n_catchments / 2 + 0.5) * bar_width
+        catch_color = catchment_results[gid]['catchment_info']['color']
+        ax.bar(x + offset, vals, bar_width, color=catch_color,
+               edgecolor='black', linewidth=0.5, label=catch_names[gid])
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, fontsize=10)
+    ax.set_ylabel('KGE', fontsize=12)
+    ax.set_title('Effect of Glacier Coupling Method on KGE',
+                 fontsize=14, fontweight='bold')
+    ax.legend(title='Catchment', fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
+
+    # Add vertical separators between groups
+    cumulative = 0
+    for gi, (group_label, methods) in enumerate(valid_groups):
+        if gi > 0:
+            ax.axvline(x=cumulative - 0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        cumulative += len(methods)
+
+    plt.tight_layout()
+    save_path = plot_dir / 'cross_catchment_coupling_method.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############ Plot 5e: ET Method Comparison ######################################
+#--------------------------------------------------------------------------------
+
+def plot_et_method_comparison(catchment_results, config_registry, plot_dir):
+    """
+    Grouped bar chart comparing KGE across PET methods:
+    ERA5 PET vs HAR PET vs Oudin formula, for uncoupled and coupled configs.
+    """
+    catchment_ids = list(catchment_results.keys())
+    catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
+
+    groups = [
+        ('Uncoupled', [
+            ('baseline', 'ERA5'),
+            ('har', 'HAR'),
+            ('oudin', 'Oudin'),
+        ]),
+        ('Coupled (GloGEM)', [
+            ('glogem', 'ERA5'),
+            ('glogem_har', 'HAR'),
+            ('glogem_oudin', 'Oudin'),
+        ]),
+    ]
+
+    # Filter to groups/methods that have data
+    valid_groups = []
+    for group_label, methods in groups:
+        valid_methods = []
+        for key, method_label in methods:
+            for gid in catchment_ids:
+                if key in catchment_results[gid]['metrics']:
+                    valid_methods.append((key, method_label))
+                    break
+        if valid_methods:
+            valid_groups.append((group_label, valid_methods))
+
+    if not valid_groups:
+        print("No ET method comparison data available")
+        return
+
+    x_labels = []
+    config_key_list = []
+
+    for group_label, methods in valid_groups:
+        for key, method_label in methods:
+            x_labels.append(f"{method_label}\n({group_label})")
+            config_key_list.append(key)
+
+    n_items = len(config_key_list)
+    n_catchments = len(catchment_ids)
+    bar_width = 0.8 / n_catchments
+    x = np.arange(n_items)
+
+    fig, ax = plt.subplots(figsize=(max(10, n_items * 2), 7))
+
+    for i, gid in enumerate(catchment_ids):
+        vals = []
+        for key in config_key_list:
+            m = catchment_results[gid]['metrics'].get(key)
+            vals.append(m['KGE'] if m else np.nan)
+
+        offset = (i - n_catchments / 2 + 0.5) * bar_width
+        catch_color = catchment_results[gid]['catchment_info']['color']
+        ax.bar(x + offset, vals, bar_width, color=catch_color,
+               edgecolor='black', linewidth=0.5, label=catch_names[gid])
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, fontsize=10)
+    ax.set_ylabel('KGE', fontsize=12)
+    ax.set_title('Effect of PET Method on KGE (ERA5 vs HAR vs Oudin)',
+                 fontsize=14, fontweight='bold')
+    ax.legend(title='Catchment', fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
+
+    # Add vertical separators between groups
+    cumulative = 0
+    for gi, (group_label, methods) in enumerate(valid_groups):
+        if gi > 0:
+            ax.axvline(x=cumulative - 0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        cumulative += len(methods)
+
+    plt.tight_layout()
+    save_path = plot_dir / 'cross_catchment_et_method.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+########### Sensitivity factors definition ######################################
+#--------------------------------------------------------------------------------
+
+def _define_sensitivity_factors():
+    """
+    Define modeling choice factors and their comparison pairs.
+
+    Each factor is a dict with:
+        name:  display name
+        pairs: list of (key_a, key_b, pair_label) where ΔKGE = KGE(key_b) - KGE(key_a)
+               For multi-option factors, pairs cover all relevant comparisons.
+        sign_label: (negative_meaning, positive_meaning) for interpretation
+    """
+    return [
+        {
+            'name': 'GloGEM Coupling\n(TSLA)',
+            'pairs': [
+                ('baseline', 'glogem', 'Daily ERA5'),
+                ('subdaily', 'glogem_subdaily', 'Subdaily ERA5'),
+                ('har', 'glogem_har', 'Daily HAR'),
+                ('oudin', 'glogem_oudin', 'Daily Oudin'),
+                ('subdaily_aspect', 'glogem_subdaily_aspect', 'Subdaily Aspect'),
+                ('icimod', 'glogem_icimod', 'ICIMOD'),
+            ],
+            'sign_label': ('Uncoupled better', 'Coupled better'),
+        },
+        {
+            'name': 'Subdaily\nTimestep',
+            'pairs': [
+                ('baseline', 'subdaily', 'Uncoupled ERA5'),
+                ('glogem', 'glogem_subdaily', 'Coupled ERA5'),
+                ('icemelt', 'icemelt_subdaily', 'Icemelt'),
+            ],
+            'sign_label': ('Daily better', 'Subdaily better'),
+        },
+        {
+            'name': 'HAR vs ERA5\nForcing',
+            'pairs': [
+                ('baseline', 'har', 'Uncoupled'),
+                ('glogem', 'glogem_har', 'Coupled'),
+            ],
+            'sign_label': ('ERA5 better', 'HAR better'),
+        },
+        {
+            'name': 'Oudin vs ERA5\nPET',
+            'pairs': [
+                ('baseline', 'oudin', 'Uncoupled'),
+                ('glogem', 'glogem_oudin', 'Coupled'),
+            ],
+            'sign_label': ('ERA5 better', 'Oudin better'),
+        },
+        {
+            'name': 'TPHiPr vs ERA5\nPrecipitation',
+            'pairs': [
+                ('baseline', 'tphipr', 'Uncoupled'),
+                ('glogem', 'glogem_tphipr', 'Coupled'),
+            ],
+            'sign_label': ('ERA5 better', 'TPHiPr better'),
+        },
+        {
+            'name': 'Icemelt vs\nTSLA Coupling',
+            'pairs': [
+                ('glogem', 'icemelt', 'Daily'),
+                ('glogem_subdaily', 'icemelt_subdaily', 'Subdaily'),
+            ],
+            'sign_label': ('TSLA better', 'Icemelt better'),
+        },
+        {
+            'name': 'GMB vs\nTSLA Coupling',
+            'pairs': [
+                ('glogem', 'glogem_gmb', 'Daily'),
+            ],
+            'sign_label': ('TSLA better', 'GMB better'),
+        },
+        {
+            'name': 'ICIMOD vs ESA\nLanduse',
+            'pairs': [
+                ('baseline', 'icimod', 'Uncoupled'),
+                ('glogem', 'glogem_icimod', 'Coupled'),
+            ],
+            'sign_label': ('ESA better', 'ICIMOD better'),
+        },
+        {
+            'name': 'Aspect-based\nHRU Split',
+            'pairs': [
+                ('subdaily', 'subdaily_aspect', 'Uncoupled'),
+                ('glogem_subdaily', 'glogem_subdaily_aspect', 'Coupled'),
+            ],
+            'sign_label': ('Without better', 'Aspect better'),
+        },
+    ]
+
+
+def _compute_factor_deltas(catchment_results, factors):
+    """
+    Compute ΔKGE per factor per catchment.
+
+    Returns dict: {factor_name: {gauge_id: [list of ΔKGE values across valid pairs]}}
+    """
+    catchment_ids = list(catchment_results.keys())
+    factor_deltas = {}
+
+    for factor in factors:
+        factor_deltas[factor['name']] = {}
+        for gid in catchment_ids:
+            m = catchment_results[gid]['metrics']
+            deltas = []
+            for key_a, key_b, _ in factor['pairs']:
+                if key_a in m and key_b in m:
+                    deltas.append(m[key_b]['KGE'] - m[key_a]['KGE'])
+            if deltas:
+                factor_deltas[factor['name']][gid] = deltas
+
+    return factor_deltas
+
+
+#--------------------------------------------------------------------------------
+############ Plot 5f: Sensitivity Tornado #######################################
+#--------------------------------------------------------------------------------
+
+def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir):
+    """
+    Tornado plot showing the range and mean of ΔKGE for each modeling factor.
+    Bars show min-to-max range across all catchments and pairs; marker shows mean.
+    """
+    factors = _define_sensitivity_factors()
+    factor_deltas = _compute_factor_deltas(catchment_results, factors)
+
+    # Collect stats per factor
+    factor_stats = []
+    for factor in factors:
+        name = factor['name']
+        all_deltas = []
+        for gid_deltas in factor_deltas.get(name, {}).values():
+            all_deltas.extend(gid_deltas)
+        if all_deltas:
+            factor_stats.append({
+                'name': name,
+                'mean': np.mean(all_deltas),
+                'mean_abs': np.mean(np.abs(all_deltas)),
+                'min': np.min(all_deltas),
+                'max': np.max(all_deltas),
+                'median': np.median(all_deltas),
+                'all': all_deltas,
+                'sign_label': factor['sign_label'],
+            })
+
+    if not factor_stats:
+        print("No data for sensitivity tornado")
+        return
+
+    # Sort by mean absolute effect (largest at top)
+    factor_stats.sort(key=lambda f: f['mean_abs'])
+
+    n = len(factor_stats)
+    fig, ax = plt.subplots(figsize=(10, max(5, n * 0.8)))
+
+    y = np.arange(n)
+    for i, fs in enumerate(factor_stats):
+        # Draw range bar (min to max)
+        color = '#2ca02c' if fs['mean'] >= 0 else '#d62728'
+        ax.barh(i, fs['max'] - fs['min'], left=fs['min'], height=0.6,
+                color=color, alpha=0.3, edgecolor=color, linewidth=1)
+        # Draw individual points
+        for d in fs['all']:
+            ax.plot(d, i, 'o', color='gray', markersize=4, alpha=0.5, zorder=3)
+        # Draw mean marker
+        ax.plot(fs['mean'], i, 'D', color='black', markersize=8, zorder=5)
+        # Draw median marker
+        ax.plot(fs['median'], i, '|', color='black', markersize=15,
+                markeredgewidth=2, zorder=4)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels([fs['name'] for fs in factor_stats], fontsize=10)
+    ax.axvline(x=0, color='black', linewidth=1)
+    ax.set_xlabel('ΔKGE', fontsize=12)
+    ax.set_title('Sensitivity of KGE to Modeling Choices\n'
+                 '(diamonds = mean, bars = median, dots = individual pairs×catchments)',
+                 fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='x')
+
+    # Add sign labels on edges
+    xlim = ax.get_xlim()
+    for i, fs in enumerate(factor_stats):
+        neg_label, pos_label = fs['sign_label']
+        ax.text(xlim[0], i + 0.35, neg_label, fontsize=7, color='#d62728',
+                ha='left', va='bottom', alpha=0.7)
+        ax.text(xlim[1], i + 0.35, pos_label, fontsize=7, color='#2ca02c',
+                ha='right', va='bottom', alpha=0.7)
+
+    plt.tight_layout()
+    save_path = plot_dir / 'cross_catchment_sensitivity_tornado.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############ Plot 5g: Factor Importance Heatmap #################################
+#--------------------------------------------------------------------------------
+
+def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir):
+    """
+    Heatmap with catchments on y-axis and modeling factors on x-axis.
+    Cells colored by mean ΔKGE for that factor in that catchment.
+    Marginal bar on top shows mean |ΔKGE| across catchments (factor importance).
+    """
+    factors = _define_sensitivity_factors()
+    factor_deltas = _compute_factor_deltas(catchment_results, factors)
+    catchment_ids = list(catchment_results.keys())
+
+    # Filter to factors with data in at least one catchment
+    valid_factors = [f for f in factors if factor_deltas.get(f['name'])]
+    if not valid_factors:
+        print("No data for factor importance heatmap")
+        return
+
+    # Sort factors by mean absolute effect (largest first)
+    factor_mean_abs = {}
+    for f in valid_factors:
+        all_deltas = []
+        for gid_deltas in factor_deltas[f['name']].values():
+            all_deltas.extend(gid_deltas)
+        factor_mean_abs[f['name']] = np.mean(np.abs(all_deltas)) if all_deltas else 0
+    valid_factors.sort(key=lambda f: factor_mean_abs[f['name']], reverse=True)
+
+    factor_names = [f['name'] for f in valid_factors]
+    n_factors = len(factor_names)
+    n_catch = len(catchment_ids)
+
+    # Build matrix: mean ΔKGE per catchment per factor
+    matrix = np.full((n_catch, n_factors), np.nan)
+    for j, f in enumerate(valid_factors):
+        for i, gid in enumerate(catchment_ids):
+            deltas = factor_deltas[f['name']].get(gid, [])
+            if deltas:
+                matrix[i, j] = np.mean(deltas)
+
+    y_labels = [catchment_results[gid]['catchment_info']['display_name']
+                for gid in catchment_ids]
+    x_labels = [f['name'].replace('\n', ' ') for f in valid_factors]
+
+    # Diverging colorscale centered at 0
+    abs_max = np.nanmax(np.abs(matrix))
+    if abs_max == 0:
+        abs_max = 0.1
+
+    fig, (ax_bar, ax_heat) = plt.subplots(
+        2, 1, figsize=(max(12, n_factors * 1.5), max(6, n_catch * 0.8 + 3)),
+        gridspec_kw={'height_ratios': [1, 3]}, sharex=True)
+
+    # Top bar: mean |ΔKGE| per factor
+    importance = [factor_mean_abs[f['name']] for f in valid_factors]
+    bar_colors = ['#4472C4'] * n_factors
+    ax_bar.bar(range(n_factors), importance, color=bar_colors, edgecolor='black',
+               linewidth=0.5, width=0.7)
+    ax_bar.set_ylabel('Mean |ΔKGE|', fontsize=10)
+    ax_bar.set_title('Factor Importance Across Catchments',
+                     fontsize=14, fontweight='bold')
+    ax_bar.grid(True, alpha=0.3, axis='y')
+    # Annotate bars
+    for j, imp in enumerate(importance):
+        ax_bar.text(j, imp + abs_max * 0.02, f'{imp:.3f}', ha='center',
+                    fontsize=8, fontweight='bold')
+
+    # Bottom heatmap: ΔKGE per catchment × factor
+    im = ax_heat.imshow(matrix, cmap='RdYlGn', aspect='auto',
+                        vmin=-abs_max, vmax=abs_max)
+
+    # Annotate cells
+    for i in range(n_catch):
+        for j in range(n_factors):
+            val = matrix[i, j]
+            if np.isnan(val):
+                ax_heat.text(j, i, '—', ha='center', va='center',
+                             fontsize=9, color='gray')
+            else:
+                color = 'white' if abs(val) > abs_max * 0.7 else 'black'
+                ax_heat.text(j, i, f'{val:+.3f}', ha='center', va='center',
+                             fontsize=9, fontweight='bold', color=color)
+
+    # Hatching for NaN cells
+    for i in range(n_catch):
+        for j in range(n_factors):
+            if np.isnan(matrix[i, j]):
+                ax_heat.add_patch(plt.Rectangle(
+                    (j - 0.5, i - 0.5), 1, 1, fill=True,
+                    facecolor='lightgray', edgecolor='gray', hatch='//'))
+
+    ax_heat.set_xticks(range(n_factors))
+    ax_heat.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
+    ax_heat.set_yticks(range(n_catch))
+    ax_heat.set_yticklabels(y_labels, fontsize=10)
+    fig.colorbar(im, ax=ax_heat, shrink=0.8, label='Mean ΔKGE')
+
+    plt.tight_layout()
+    save_path = plot_dir / 'cross_catchment_factor_importance.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {save_path}")
@@ -991,6 +1641,36 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
     run_plot("Coupling Effect (Delta-KGE)",
              plot_coupling_effect,
              ['cross_catchment_coupling_effect.png'],
+             catchment_results, config_registry, plot_dir)
+
+    run_plot("Subdaily Effect (Delta-KGE)",
+             plot_subdaily_effect,
+             ['cross_catchment_subdaily_effect.png'],
+             catchment_results, config_registry, plot_dir)
+
+    run_plot("Meteorological Forcing Comparison",
+             plot_meteo_forcing_comparison,
+             ['cross_catchment_meteo_forcing.png'],
+             catchment_results, config_registry, plot_dir)
+
+    run_plot("Coupling Method Comparison",
+             plot_coupling_method_comparison,
+             ['cross_catchment_coupling_method.png'],
+             catchment_results, config_registry, plot_dir)
+
+    run_plot("ET Method Comparison",
+             plot_et_method_comparison,
+             ['cross_catchment_et_method.png'],
+             catchment_results, config_registry, plot_dir)
+
+    run_plot("Sensitivity Tornado",
+             plot_sensitivity_tornado,
+             ['cross_catchment_sensitivity_tornado.png'],
+             catchment_results, config_registry, plot_dir)
+
+    run_plot("Factor Importance Heatmap",
+             plot_factor_importance_heatmap,
+             ['cross_catchment_factor_importance.png'],
              catchment_results, config_registry, plot_dir)
 
     run_plot("KGE Boxplot",
