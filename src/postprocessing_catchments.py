@@ -634,39 +634,48 @@ def plot_subdaily_effect(catchment_results, config_registry, plot_dir):
         print("No subdaily pairs found")
         return
 
-    n_pairs = len(valid_pairs)
-    n_catchments = len(catchment_ids)
-    bar_width = 0.8 / n_catchments
-    x = np.arange(n_pairs)
+    # Compute ΔKGE per pair
+    box_data = []
+    for daily, subdaily, label in valid_pairs:
+        deltas = []
+        for gid in catchment_ids:
+            m = catchment_results[gid]['metrics']
+            if daily in m and subdaily in m:
+                deltas.append(m[subdaily]['KGE'] - m[daily]['KGE'])
+        box_data.append(deltas)
 
+    n_pairs = len(valid_pairs)
     fig, ax = plt.subplots(figsize=(max(10, n_pairs * 1.8), 6))
 
-    for i, gid in enumerate(catchment_ids):
-        deltas = []
-        for daily, subdaily, label in valid_pairs:
+    bp = ax.boxplot(box_data, patch_artist=True, widths=0.5,
+                    medianprops=dict(color='black', linewidth=2))
+    for box in bp['boxes']:
+        box.set_facecolor('#aec7e8')
+        box.set_alpha(0.5)
+
+    # Overlay individual catchment points
+    catch_colors = {gid: catchment_results[gid]['catchment_info']['color'] for gid in catchment_ids}
+    for i, (daily, subdaily, label) in enumerate(valid_pairs):
+        for gid in catchment_ids:
             m = catchment_results[gid]['metrics']
             if daily in m and subdaily in m:
                 delta = m[subdaily]['KGE'] - m[daily]['KGE']
-            else:
-                delta = np.nan
-            deltas.append(delta)
+                ax.scatter(i + 1, delta, color=catch_colors[gid],
+                           s=60, zorder=5, edgecolors='black', linewidth=0.5)
 
-        offset = (i - n_catchments / 2 + 0.5) * bar_width
-        catch_color = catchment_results[gid]['catchment_info']['color']
-        ax.bar(x + offset, deltas, bar_width, color=catch_color,
-               edgecolor='black', linewidth=0.5, label=catch_names[gid])
+    # Legend for catchments
+    legend_handles = [plt.Line2D([0], [0], marker='o', color='w',
+                                  markerfacecolor=catch_colors[gid],
+                                  markeredgecolor='black', markersize=8,
+                                  label=catch_names[gid])
+                      for gid in catchment_ids]
+    ax.legend(handles=legend_handles, title='Catchment', loc='best')
 
     ax.axhline(y=0, color='black', linewidth=1)
-    ax.set_xticks(x)
+    ax.set_xticks(range(1, n_pairs + 1))
     ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right')
     ax.set_ylabel('ΔKGE (subdaily − daily)')
-    ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
-
-    ax.axhspan(0, ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 0.1,
-               alpha=0.05, color='green', zorder=0)
-    ax.axhspan(ax.get_ylim()[0] if ax.get_ylim()[0] < 0 else -0.1, 0,
-               alpha=0.05, color='red', zorder=0)
 
     plt.tight_layout()
     save_path = plot_dir / 'cross_catchment_subdaily_effect.png'
