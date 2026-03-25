@@ -893,14 +893,6 @@ def _define_sensitivity_factors():
             ],
             'sign_label': ('ESA better', 'ICIMOD better'),
         },
-        {
-            'name': 'No Aspect →\nAspect HRU Split',
-            'pairs': [
-                ('subdaily', 'subdaily_aspect', 'Uncoupled'),
-                ('glogem_subdaily', 'glogem_subdaily_aspect', 'Coupled'),
-            ],
-            'sign_label': ('Without better', 'Aspect better'),
-        },
     ]
 
 
@@ -1113,7 +1105,7 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
     ax_heat.set_xticklabels(x_labels, rotation=45, ha='right')
     ax_heat.set_yticks(range(n_catch))
     ax_heat.set_yticklabels(y_labels)
-    fig.colorbar(im, ax=ax_heat, shrink=0.8, label='Mean ΔKGE')
+    fig.colorbar(im, ax=[ax_bar, ax_heat], shrink=0.8, label='Mean ΔKGE')
 
     plt.tight_layout()
     save_path = plot_dir / 'cross_catchment_factor_importance.png'
