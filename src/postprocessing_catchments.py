@@ -872,7 +872,8 @@ def create_summary_table(catchment_results, config_registry, plot_dir):
 def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
                                         config_filter=None,
                                         skip_per_catchment=False,
-                                        skip_errors=True):
+                                        skip_errors=True,
+                                        skip_existing=False):
     """
     Run complete cross-catchment postprocessing.
 
@@ -888,6 +889,8 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
         If True, skip per-catchment multi-config postprocessing
     skip_errors : bool
         If True, continue on individual plot failures
+    skip_existing : bool
+        If True, skip plots whose output files already exist
     """
     start_time = time.time()
 
@@ -943,8 +946,15 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
     # Phase 3: Cross-catchment plots
     # ========================================================================
     errors = []
+    skipped = []
 
-    def run_plot(name, func, *args, **kwargs):
+    def run_plot(name, func, output_files, *args, **kwargs):
+        if skip_existing and output_files:
+            existing = [f for f in output_files if (plot_dir / f).exists()]
+            if len(existing) == len(output_files):
+                print(f"\n  Skipping {name} (all {len(existing)} output files exist)")
+                skipped.append(name)
+                return
         print(f"\n{'='*60}")
         print(f"Creating: {name}")
         print(f"{'='*60}")
@@ -959,28 +969,44 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
             traceback.print_exc()
 
     run_plot("Performance Heatmap",
-             plot_performance_heatmap, catchment_results, config_registry, plot_dir)
+             plot_performance_heatmap,
+             ['cross_catchment_heatmap_KGE.png', 'cross_catchment_heatmap_NSE.png'],
+             catchment_results, config_registry, plot_dir)
 
     run_plot("Configuration Ranking",
-             plot_configuration_ranking, catchment_results, config_registry, plot_dir)
+             plot_configuration_ranking,
+             ['cross_catchment_config_ranking.png'],
+             catchment_results, config_registry, plot_dir)
 
     run_plot("Regime Comparison",
-             plot_regime_comparison, catchment_results, config_registry, plot_dir)
+             plot_regime_comparison,
+             ['cross_catchment_regime_comparison.png'],
+             catchment_results, config_registry, plot_dir)
 
     run_plot("Glacier Contribution Comparison",
-             plot_glacier_contribution_comparison, catchment_results, config_registry, plot_dir)
+             plot_glacier_contribution_comparison,
+             ['cross_catchment_glacier_contribution.png'],
+             catchment_results, config_registry, plot_dir)
 
     run_plot("Coupling Effect (Delta-KGE)",
-             plot_coupling_effect, catchment_results, config_registry, plot_dir)
+             plot_coupling_effect,
+             ['cross_catchment_coupling_effect.png'],
+             catchment_results, config_registry, plot_dir)
 
     run_plot("KGE Boxplot",
-             plot_kge_boxplot, catchment_results, config_registry, plot_dir)
+             plot_kge_boxplot,
+             ['cross_catchment_kge_boxplot.png'],
+             catchment_results, config_registry, plot_dir)
 
     run_plot("KGE Component Radar",
-             plot_kge_component_radar, catchment_results, config_registry, plot_dir)
+             plot_kge_component_radar,
+             ['cross_catchment_kge_radar.png'],
+             catchment_results, config_registry, plot_dir)
 
     run_plot("Summary Table",
-             create_summary_table, catchment_results, config_registry, plot_dir)
+             create_summary_table,
+             ['cross_catchment_summary_table.png', 'cross_catchment_summary.csv'],
+             catchment_results, config_registry, plot_dir)
 
     # ========================================================================
     # Summary
@@ -993,6 +1019,8 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
     print(f"Configurations: {len(config_registry)}")
     print(f"Output: {plot_dir}")
     print(f"Time: {elapsed:.1f} seconds")
+    if skipped:
+        print(f"Skipped (already exist): {skipped}")
     if errors:
         print(f"Failed plots: {errors}")
     else:
@@ -1018,6 +1046,8 @@ if __name__ == '__main__':
                         help='Skip per-catchment multi-config postprocessing')
     parser.add_argument('--skip-errors', action='store_true', default=True,
                         help='Continue on individual plot failures (default: True)')
+    parser.add_argument('--skip-existing', action='store_true',
+                        help='Skip plots whose output files already exist')
 
     args = parser.parse_args()
 
@@ -1027,4 +1057,5 @@ if __name__ == '__main__':
         config_filter=args.configs,
         skip_per_catchment=args.skip_per_catchment,
         skip_errors=args.skip_errors,
+        skip_existing=args.skip_existing,
     )
