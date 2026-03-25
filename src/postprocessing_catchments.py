@@ -605,83 +605,27 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
 
 
 #--------------------------------------------------------------------------------
-############## Plot 5b: Subdaily Effect (Delta-KGE) #############################
+############## Plot 5b: Subdaily Effect #########################################
 #--------------------------------------------------------------------------------
 
 def plot_subdaily_effect(catchment_results, config_registry, plot_dir):
-    """
-    For each catchment, show KGE change when switching from daily to subdaily.
-    Diverging bars: positive = subdaily improves performance.
-    """
-    catchment_ids = list(catchment_results.keys())
-    catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
-
-    pairs = [
-        ('baseline', 'subdaily', 'Uncoupled Daily → Subdaily'),
-        ('glogem', 'glogem_subdaily', 'GloGEM Daily → Subdaily'),
-        ('icemelt', 'icemelt_subdaily', 'Icemelt Daily → Subdaily'),
+    """Boxplot comparing KGE of daily vs subdaily timestep configs."""
+    groups = [
+        ('Uncoupled', [
+            ('baseline', 'Daily'),
+            ('subdaily', 'Subdaily'),
+        ]),
+        ('Coupled (GloGEM)', [
+            ('glogem', 'Daily'),
+            ('glogem_subdaily', 'Subdaily'),
+        ]),
+        ('Icemelt', [
+            ('icemelt', 'Daily'),
+            ('icemelt_subdaily', 'Subdaily'),
+        ]),
     ]
-
-    valid_pairs = []
-    for daily, subdaily, label in pairs:
-        for gid in catchment_ids:
-            m = catchment_results[gid]['metrics']
-            if daily in m and subdaily in m:
-                valid_pairs.append((daily, subdaily, label))
-                break
-
-    if not valid_pairs:
-        print("No subdaily pairs found")
-        return
-
-    # Compute ΔKGE per pair
-    box_data = []
-    for daily, subdaily, label in valid_pairs:
-        deltas = []
-        for gid in catchment_ids:
-            m = catchment_results[gid]['metrics']
-            if daily in m and subdaily in m:
-                deltas.append(m[subdaily]['KGE'] - m[daily]['KGE'])
-        box_data.append(deltas)
-
-    n_pairs = len(valid_pairs)
-    fig, ax = plt.subplots(figsize=(max(10, n_pairs * 1.8), 6))
-
-    bp = ax.boxplot(box_data, patch_artist=True, widths=0.5,
-                    medianprops=dict(color='black', linewidth=2))
-    for box in bp['boxes']:
-        box.set_facecolor('#aec7e8')
-        box.set_alpha(0.5)
-
-    # Overlay individual catchment points
-    catch_colors = {gid: catchment_results[gid]['catchment_info']['color'] for gid in catchment_ids}
-    for i, (daily, subdaily, label) in enumerate(valid_pairs):
-        for gid in catchment_ids:
-            m = catchment_results[gid]['metrics']
-            if daily in m and subdaily in m:
-                delta = m[subdaily]['KGE'] - m[daily]['KGE']
-                ax.scatter(i + 1, delta, color=catch_colors[gid],
-                           s=60, zorder=5, edgecolors='black', linewidth=0.5)
-
-    # Legend for catchments
-    legend_handles = [plt.Line2D([0], [0], marker='o', color='w',
-                                  markerfacecolor=catch_colors[gid],
-                                  markeredgecolor='black', markersize=8,
-                                  label=catch_names[gid])
-                      for gid in catchment_ids]
-    ax.legend(handles=legend_handles, title='Catchment', loc='best')
-
-    ax.axhline(y=0, color='black', linewidth=1)
-    ax.set_xticks(range(1, n_pairs + 1))
-    ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right')
-    ax.set_ylabel('ΔKGE (subdaily − daily)')
-    ax.grid(True, alpha=0.3, axis='y')
-
-    plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_subdaily_effect.png'
-    fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Saved: {save_path}")
+    _plot_grouped_boxplot(catchment_results, groups, plot_dir,
+                          'cross_catchment_subdaily_effect.png')
 
 
 #--------------------------------------------------------------------------------
@@ -719,7 +663,8 @@ def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel=
     config_key_list = []
     box_data = []
     group_colors = {'Uncoupled': '#aec7e8', 'Coupled (GloGEM)': '#ffbb78',
-                    'Daily': '#aec7e8', 'Subdaily': '#ffbb78'}
+                    'Daily': '#aec7e8', 'Subdaily': '#ffbb78',
+                    'Icemelt': '#c5b0d5'}
 
     for group_label, configs in valid_groups:
         for key, config_label in configs:
@@ -843,6 +788,26 @@ def plot_et_method_comparison(catchment_results, config_registry, plot_dir):
     ]
     _plot_grouped_boxplot(catchment_results, groups, plot_dir,
                           'cross_catchment_et_method.png')
+
+
+#--------------------------------------------------------------------------------
+############ Plot 5f: Landuse Effect ############################################
+#--------------------------------------------------------------------------------
+
+def plot_landuse_effect(catchment_results, config_registry, plot_dir):
+    """Boxplot comparing KGE across landuse datasets (ESA vs ICIMOD)."""
+    groups = [
+        ('Uncoupled', [
+            ('baseline', 'ESA'),
+            ('icimod', 'ICIMOD'),
+        ]),
+        ('Coupled (GloGEM)', [
+            ('glogem', 'ESA'),
+            ('glogem_icimod', 'ICIMOD'),
+        ]),
+    ]
+    _plot_grouped_boxplot(catchment_results, groups, plot_dir,
+                          'cross_catchment_landuse_effect.png')
 
 
 #--------------------------------------------------------------------------------
@@ -1547,6 +1512,11 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
     run_plot("ET Method Comparison",
              plot_et_method_comparison,
              ['cross_catchment_et_method.png'],
+             catchment_results, config_registry, plot_dir)
+
+    run_plot("Landuse Effect",
+             plot_landuse_effect,
+             ['cross_catchment_landuse_effect.png'],
              catchment_results, config_registry, plot_dir)
 
     run_plot("Sensitivity Tornado",
