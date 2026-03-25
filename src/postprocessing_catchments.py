@@ -21,6 +21,18 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+
+# Global plot style for cross-catchment plots
+plt.rcParams.update({
+    'font.size': 13,
+    'axes.labelsize': 14,
+    'axes.labelweight': 'bold',
+    'axes.titlesize': 14,
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12,
+    'legend.fontsize': 11,
+    'legend.title_fontsize': 12,
+})
 from pathlib import Path
 import yaml
 import argparse
@@ -235,11 +247,9 @@ def plot_performance_heatmap(catchment_results, config_registry, plot_dir):
                                                edgecolor='gray', hatch='//'))
 
         ax.set_xticks(range(len(x_labels)))
-        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
+        ax.set_xticklabels(x_labels, rotation=45, ha='right')
         ax.set_yticks(range(len(y_labels)))
-        ax.set_yticklabels(y_labels, fontsize=10)
-        ax.set_title(f'{metric_name} Across Catchments and Configurations',
-                     fontsize=14, fontweight='bold')
+        ax.set_yticklabels(y_labels)
         fig.colorbar(im, ax=ax, shrink=0.8, label=metric_name)
 
         plt.tight_layout()
@@ -301,11 +311,9 @@ def plot_configuration_ranking(catchment_results, config_registry, plot_dir):
         ax.plot(j, mean_val, 'k_', markersize=20, markeredgewidth=2.5, zorder=5)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([config_names[k] for k in sorted_keys], rotation=45, ha='right', fontsize=10)
-    ax.set_ylabel('KGE', fontsize=12)
-    ax.set_title('Configuration Ranking by KGE (sorted by mean, black markers)',
-                 fontsize=14, fontweight='bold')
-    ax.legend(title='Catchment', fontsize=10)
+    ax.set_xticklabels([config_names[k] for k in sorted_keys], rotation=45, ha='right')
+    ax.set_ylabel('KGE')
+    ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
@@ -376,22 +384,17 @@ def plot_regime_comparison(catchment_results, config_registry, plot_dir,
             ax.plot(monthly['month'], monthly['sim_Q'], color=color,
                     linewidth=2, label=label)
 
-        ax.set_title(f"{info['display_name']} ({gid})\n"
-                     f"Validation: {info['validation_start']} — {info['validation_end']}",
-                     fontsize=11, fontweight='bold')
+        ax.set_title(f"{info['display_name']} ({gid})", fontweight='bold')
         ax.set_xticks(range(1, 13))
         ax.set_xticklabels(month_labels)
         ax.set_xlabel('Month')
         ax.set_ylabel('Discharge (m³/s)')
         ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=8, loc='best')
+        ax.legend(fontsize=9, loc='best')
 
     # Hide unused subplots
     for idx in range(n_catch, n_rows * n_cols):
         axes[idx // n_cols][idx % n_cols].set_visible(False)
-
-    fig.suptitle('Monthly Regime Comparison Across Catchments',
-                 fontsize=15, fontweight='bold')
     plt.tight_layout()
     save_path = plot_dir / 'cross_catchment_regime_comparison.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -488,9 +491,7 @@ def plot_glacier_contribution_comparison(catchment_results, config_registry, plo
 
     ax.set_xticks(x)
     ax.set_xticklabels([config_names[k] for k in valid_keys], rotation=45, ha='right')
-    ax.set_ylabel('Glacier Melt Fraction of Simulated Q (%)', fontsize=11)
-    ax.set_title('Glacier Melt Contribution by Catchment and Configuration',
-                 fontsize=14, fontweight='bold')
+    ax.set_ylabel('Glacier Melt Fraction of Simulated Q (%)')
     ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
 
@@ -585,11 +586,9 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
 
     ax.axhline(y=0, color='black', linewidth=1)
     ax.set_xticks(x)
-    ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right', fontsize=10)
-    ax.set_ylabel('ΔKGE (coupled − uncoupled)', fontsize=12)
-    ax.set_title('Effect of GloGEM Coupling on KGE',
-                 fontsize=14, fontweight='bold')
-    ax.legend(title='Catchment', fontsize=10)
+    ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right')
+    ax.set_ylabel('ΔKGE (coupled − uncoupled)')
+    ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
 
     # Shade background
@@ -661,11 +660,9 @@ def plot_subdaily_effect(catchment_results, config_registry, plot_dir):
 
     ax.axhline(y=0, color='black', linewidth=1)
     ax.set_xticks(x)
-    ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right', fontsize=10)
-    ax.set_ylabel('ΔKGE (subdaily − daily)', fontsize=12)
-    ax.set_title('Effect of Subdaily Timestep on KGE',
-                 fontsize=14, fontweight='bold')
-    ax.legend(title='Catchment', fontsize=10)
+    ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right')
+    ax.set_ylabel('ΔKGE (subdaily − daily)')
+    ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
 
     ax.axhspan(0, ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 0.1,
@@ -755,11 +752,9 @@ def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
                edgecolor='black', linewidth=0.5, label=catch_names[gid])
 
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, fontsize=10)
-    ax.set_ylabel('KGE', fontsize=12)
-    ax.set_title('Effect of Meteorological Forcing on KGE',
-                 fontsize=14, fontweight='bold')
-    ax.legend(title='Catchment', fontsize=10)
+    ax.set_xticklabels(x_labels)
+    ax.set_ylabel('KGE')
+    ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
@@ -849,11 +844,9 @@ def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir
                edgecolor='black', linewidth=0.5, label=catch_names[gid])
 
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, fontsize=10)
-    ax.set_ylabel('KGE', fontsize=12)
-    ax.set_title('Effect of Glacier Coupling Method on KGE',
-                 fontsize=14, fontweight='bold')
-    ax.legend(title='Catchment', fontsize=10)
+    ax.set_xticklabels(x_labels)
+    ax.set_ylabel('KGE')
+    ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
@@ -939,11 +932,9 @@ def plot_et_method_comparison(catchment_results, config_registry, plot_dir):
                edgecolor='black', linewidth=0.5, label=catch_names[gid])
 
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, fontsize=10)
-    ax.set_ylabel('KGE', fontsize=12)
-    ax.set_title('Effect of PET Method on KGE (ERA5 vs HAR vs Oudin)',
-                 fontsize=14, fontweight='bold')
-    ax.legend(title='Catchment', fontsize=10)
+    ax.set_xticklabels(x_labels)
+    ax.set_ylabel('KGE')
+    ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
@@ -1135,21 +1126,18 @@ def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir):
                 markeredgewidth=2, zorder=4)
 
     ax.set_yticks(y)
-    ax.set_yticklabels([fs['name'] for fs in factor_stats], fontsize=10)
+    ax.set_yticklabels([fs['name'] for fs in factor_stats])
     ax.axvline(x=0, color='black', linewidth=1)
-    ax.set_xlabel('ΔKGE', fontsize=12)
-    ax.set_title('Sensitivity of KGE to Modeling Choices\n'
-                 '(diamonds = mean, bars = median, dots = individual pairs×catchments)',
-                 fontsize=13, fontweight='bold')
+    ax.set_xlabel('ΔKGE')
     ax.grid(True, alpha=0.3, axis='x')
 
     # Add sign labels on edges
     xlim = ax.get_xlim()
     for i, fs in enumerate(factor_stats):
         neg_label, pos_label = fs['sign_label']
-        ax.text(xlim[0], i + 0.35, neg_label, fontsize=7, color='#d62728',
+        ax.text(xlim[0], i + 0.35, neg_label, fontsize=8, color='#d62728',
                 ha='left', va='bottom', alpha=0.7)
-        ax.text(xlim[1], i + 0.35, pos_label, fontsize=7, color='#2ca02c',
+        ax.text(xlim[1], i + 0.35, pos_label, fontsize=8, color='#2ca02c',
                 ha='right', va='bottom', alpha=0.7)
 
     plt.tight_layout()
@@ -1218,14 +1206,12 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
     bar_colors = ['#4472C4'] * n_factors
     ax_bar.bar(range(n_factors), importance, color=bar_colors, edgecolor='black',
                linewidth=0.5, width=0.7)
-    ax_bar.set_ylabel('Mean |ΔKGE|', fontsize=10)
-    ax_bar.set_title('Factor Importance Across Catchments',
-                     fontsize=14, fontweight='bold')
+    ax_bar.set_ylabel('Mean |ΔKGE|')
     ax_bar.grid(True, alpha=0.3, axis='y')
     # Annotate bars
     for j, imp in enumerate(importance):
         ax_bar.text(j, imp + abs_max * 0.02, f'{imp:.3f}', ha='center',
-                    fontsize=8, fontweight='bold')
+                    fontsize=10, fontweight='bold')
 
     # Bottom heatmap: ΔKGE per catchment × factor
     im = ax_heat.imshow(matrix, cmap='RdYlGn', aspect='auto',
@@ -1252,9 +1238,9 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
                     facecolor='lightgray', edgecolor='gray', hatch='//'))
 
     ax_heat.set_xticks(range(n_factors))
-    ax_heat.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
+    ax_heat.set_xticklabels(x_labels, rotation=45, ha='right')
     ax_heat.set_yticks(range(n_catch))
-    ax_heat.set_yticklabels(y_labels, fontsize=10)
+    ax_heat.set_yticklabels(y_labels)
     fig.colorbar(im, ax=ax_heat, shrink=0.8, label='Mean ΔKGE')
 
     plt.tight_layout()
@@ -1323,13 +1309,11 @@ def plot_kge_boxplot(catchment_results, config_registry, plot_dir):
                                   markeredgecolor='black', markersize=8,
                                   label=catch_names[gid])
                       for gid in catchment_ids]
-    ax.legend(handles=legend_handles, title='Catchment', fontsize=10, loc='best')
+    ax.legend(handles=legend_handles, title='Catchment', loc='best')
 
     ax.set_xticks(range(1, len(valid_keys) + 1))
-    ax.set_xticklabels(box_labels, rotation=45, ha='right', fontsize=10)
-    ax.set_ylabel('KGE', fontsize=12)
-    ax.set_title('KGE Distribution Across Catchments per Configuration',
-                 fontsize=14, fontweight='bold')
+    ax.set_xticklabels(box_labels, rotation=45, ha='right')
+    ax.set_ylabel('KGE')
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
@@ -1381,7 +1365,7 @@ def plot_kge_component_radar(catchment_results, config_registry, plot_dir,
 
     for idx, key in enumerate(radar_configs):
         ax = axes[idx // n_cols][idx % n_cols]
-        ax.set_title(config_names.get(key, key), fontsize=11, fontweight='bold', pad=20)
+        ax.set_title(config_names.get(key, key), fontweight='bold', pad=20)
 
         for gid in catchment_ids:
             m = catchment_results[gid]['metrics'].get(key)
@@ -1394,20 +1378,18 @@ def plot_kge_component_radar(catchment_results, config_registry, plot_dir,
             ax.fill(angles, values, color=catch_colors[gid], alpha=0.1)
 
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(categories, fontsize=9)
+        ax.set_xticklabels(categories)
         ax.set_ylim(0, max(2.0, ax.get_ylim()[1]))
 
         # Reference circle at 1.0 (ideal)
         ideal = [1.0] * n_cats + [1.0]
         ax.plot(angles, ideal, 'k--', linewidth=1, alpha=0.5, label='Ideal')
 
-        ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=8)
+        ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=9)
 
     # Hide unused subplots
     for idx in range(n_configs, n_rows * n_cols):
         axes[idx // n_cols][idx % n_cols].set_visible(False)
-
-    fig.suptitle('KGE Components Across Catchments', fontsize=15, fontweight='bold')
     plt.tight_layout()
     save_path = plot_dir / 'cross_catchment_kge_radar.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -1505,9 +1487,6 @@ def create_summary_table(catchment_results, config_registry, plot_dir):
                                    if col_labels[j2] in best_per_col]:
                 if i % 2 == 0:
                     cell.set_facecolor('#F2F2F2')
-
-    ax.set_title('Cross-Catchment Performance Summary',
-                 fontsize=14, fontweight='bold', pad=20)
 
     save_path = plot_dir / 'cross_catchment_summary_table.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
