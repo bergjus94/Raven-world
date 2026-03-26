@@ -383,6 +383,11 @@ def main(namelist_path: str, force_reprocess: bool = False):
                 glogem_processor = MultiSubbasinGloGEMProcessor(namelist_path)
             else:
                 glogem_processor = GloGEMProcessor(namelist_path)
+
+            print(f"   📁 GloGEM shared_data_dir: {glogem_processor.shared_data_dir}")
+            print(f"   📁 GloGEM model_dir: {glogem_processor.model_dir}")
+            print(f"   📁 GloGEM glogem_dir: {glogem_processor.glogem_dir}")
+
             results_glogem = glogem_processor.process_all(force_reprocess=force_reprocess)
 
             if not results_glogem.get('skipped', False):
@@ -395,7 +400,19 @@ def main(namelist_path: str, force_reprocess: bool = False):
                     print(f"      - Missing in GloGEM: {len(results_glogem['validation']['missing_in_glogem'])}")
             else:
                 print(f"   ⏭️ GloGEM files already exist (skipped)")
-                
+
+            # Verify irrigation files were created
+            irrigation_nc = glogem_processor.shared_data_dir / 'irrigation.nc'
+            irrigation_gw = glogem_processor.shared_data_dir / 'GridWeights_Irrigation.txt'
+            if irrigation_nc.exists():
+                print(f"   ✅ irrigation.nc exists: {irrigation_nc} ({irrigation_nc.stat().st_size/1e6:.1f} MB)")
+            else:
+                print(f"   ❌ irrigation.nc NOT FOUND at: {irrigation_nc}")
+            if irrigation_gw.exists():
+                print(f"   ✅ GridWeights_Irrigation.txt exists: {irrigation_gw}")
+            else:
+                print(f"   ❌ GridWeights_Irrigation.txt NOT FOUND at: {irrigation_gw}")
+
         except Exception as e:
             print(f"   ❌ Error processing GloGEM data: {e}")
             traceback.print_exc()

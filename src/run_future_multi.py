@@ -215,6 +215,11 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                     timeout=7200,  # 2 hours (scipy regridding can be slow)
                 )
                 logger.info(f"  Input creation complete for {model_id}")
+                # Log Step 6 (GloGEM) output for debugging
+                if process.stdout:
+                    for line in process.stdout.splitlines():
+                        if any(kw in line.lower() for kw in ['step 6', 'irrigation', 'glogem', 'error', '❌', '✅']):
+                            logger.info(f"    {line.strip()}")
             except subprocess.CalledProcessError as e:
                 logger.error(f"  Input creation failed for {model_id}")
                 logger.error(e.stdout[-2000:] if e.stdout else "")
