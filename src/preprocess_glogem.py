@@ -87,6 +87,7 @@ class GloGEMProcessor:
             )
 
         self.coupled = config.get('coupled', False)
+        self.future = config.get('future', False)
 
         self.model_dir = self.main_dir / config.get('config_dir')
 
@@ -666,7 +667,8 @@ class GloGEMProcessor:
         self.logger.info("Creating irrigation NetCDF file...")
 
         # Use model-specific filename for future runs (each CMIP6 model has its own GloGEM data)
-        if self.glogem_model:
+        # Historical/calibration runs use plain irrigation.nc (no _swap_rvt_model to rename it)
+        if self.future and self.glogem_model:
             irrigation_filename = f'irrigation_{self.glogem_model}.nc'
         else:
             irrigation_filename = 'irrigation.nc'
@@ -1852,7 +1854,7 @@ class GloGEMProcessor:
         self.logger.info("="*60)
         
         # ✅ CHECK: Skip if final output already exists in shared directory
-        if self.glogem_model:
+        if self.future and self.glogem_model:
             irrigation_nc = self.shared_data_dir / f'irrigation_{self.glogem_model}.nc'
         else:
             irrigation_nc = self.shared_data_dir / 'irrigation.nc'
@@ -1947,6 +1949,7 @@ class MultiSubbasinGloGEMProcessor:
         self.debug = config.get('debug', False)
 
         self.coupled = config.get('coupled', False)
+        self.future = config.get('future', False)
         self.irrigation_variable = config.get('irrigation_variable', 'discharge').lower()
         if self.irrigation_variable not in _VALID_IRRIGATION_VARS:
             raise ValueError(
@@ -1991,7 +1994,7 @@ class MultiSubbasinGloGEMProcessor:
 
         Returns dict with {'skipped': bool, 'n_subbasins': int, ...}.
         """
-        if self.glogem_model:
+        if self.future and self.glogem_model:
             output_nc = self.shared_data_dir / f'irrigation_{self.glogem_model}.nc'
         else:
             output_nc = self.shared_data_dir / 'irrigation.nc'
