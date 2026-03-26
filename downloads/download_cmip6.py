@@ -626,24 +626,20 @@ def download_model(
                 ds_tas = xr.open_dataset(tas_path)
                 ds_tasmin = xr.open_dataset(tasmin_path)
 
-                # Get the variable name (usually 'tas' or 'tasmin')
-                tas_var = [v for v in ds_tas.data_vars if v != 'time_bnds'][0]
-                tasmin_var = [v for v in ds_tasmin.data_vars if v != 'time_bnds'][0]
+                # Derive tasmax = 2 * tas - tasmin (use variable names directly)
+                tasmax_data = 2 * ds_tas['tas'] - ds_tasmin['tasmin']
 
-                # Derive tasmax = 2 * tas - tasmin
-                tasmax_data = 2 * ds_tas[tas_var] - ds_tasmin[tasmin_var]
-
-                ds_tasmax = ds_tas.copy()
-                ds_tasmax = ds_tasmax.rename({tas_var: 'tasmax'})
-                ds_tasmax['tasmax'] = tasmax_data
-                ds_tasmax['tasmax'].attrs = ds_tas[tas_var].attrs.copy()
+                ds_tasmax = xr.Dataset(
+                    {'tasmax': tasmax_data},
+                    attrs=ds_tas.attrs,
+                )
+                ds_tasmax['tasmax'].attrs = ds_tas['tas'].attrs.copy()
                 ds_tasmax['tasmax'].attrs['long_name'] = 'Daily Maximum Near-Surface Air Temperature (derived)'
                 ds_tasmax['tasmax'].attrs['history'] = 'Derived: tasmax = 2*tas - tasmin'
 
                 ds_tasmax.to_netcdf(tasmax_path)
                 ds_tas.close()
                 ds_tasmin.close()
-                ds_tasmax.close()
 
                 results[key_tasmax] = True
                 print(f"   OK Derived tasmax saved to: {tasmax_path}")
