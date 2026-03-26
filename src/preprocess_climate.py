@@ -895,7 +895,7 @@ class _DownscalerBase:
                     f"(noleap→standard)"
                 )
                 ds = ds.reindex(time=full_idx)
-                ds = ds.interpolate_na(dim="time", method="linear")
+                ds = ds.chunk({"time": -1}).interpolate_na(dim="time", method="linear")
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"  Saving {out_path.name} ...")

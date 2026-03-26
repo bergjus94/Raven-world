@@ -607,6 +607,49 @@ def download_model(
                 historical_end   = historical_end,
             )
 
+    # Fallback: derive tasmax from tas and tasmin if download failed
+    # tasmax ≈ 2 * tas - tasmin  (assumes daily mean = (max+min)/2)
+    for exp in experiments:
+        key_tasmax = (exp, "tasmax")
+        key_tas = (exp, "tas")
+        key_tasmin = (exp, "tasmin")
+
+        if (key_tasmax in results and not results[key_tasmax]
+                and results.get(key_tas) and results.get(key_tasmin)):
+            print(f"\n   Deriving tasmax from tas and tasmin for {model_id}/{exp}...")
+            try:
+                exp_dir = out_dir / model_id / exp
+                tas_path = exp_dir / "tas.nc"
+                tasmin_path = exp_dir / "tasmin.nc"
+                tasmax_path = exp_dir / "tasmax.nc"
+
+                ds_tas = xr.open_dataset(tas_path)
+                ds_tasmin = xr.open_dataset(tasmin_path)
+
+                # Get the variable name (usually 'tas' or 'tasmin')
+                tas_var = [v for v in ds_tas.data_vars if v != 'time_bnds'][0]
+                tasmin_var = [v for v in ds_tasmin.data_vars if v != 'time_bnds'][0]
+
+                # Derive tasmax = 2 * tas - tasmin
+                tasmax_data = 2 * ds_tas[tas_var] - ds_tasmin[tasmin_var]
+
+                ds_tasmax = ds_tas.copy()
+                ds_tasmax = ds_tasmax.rename({tas_var: 'tasmax'})
+                ds_tasmax['tasmax'] = tasmax_data
+                ds_tasmax['tasmax'].attrs = ds_tas[tas_var].attrs.copy()
+                ds_tasmax['tasmax'].attrs['long_name'] = 'Daily Maximum Near-Surface Air Temperature (derived)'
+                ds_tasmax['tasmax'].attrs['history'] = 'Derived: tasmax = 2*tas - tasmin'
+
+                ds_tasmax.to_netcdf(tasmax_path)
+                ds_tas.close()
+                ds_tasmin.close()
+                ds_tasmax.close()
+
+                results[key_tasmax] = True
+                print(f"   OK Derived tasmax saved to: {tasmax_path}")
+            except Exception as e:
+                print(f"   ERROR deriving tasmax for {model_id}/{exp}: {e}")
+
     return results
 
 
