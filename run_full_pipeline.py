@@ -460,7 +460,9 @@ def phase4_generate_future_namelist(namelist_path, nml, calibrated_yaml, future_
     future_nml['cmip6_dir'] = f"{main_dir}/01_data/CMIP6"
     models = future_proj.get('models', FUTURE_DEFAULTS['models'])
     future_nml['cmip6_models'] = models
-    future_nml['cmip6_scenarios'] = ['historical'] + scenarios
+    # Ensure 'historical' is included (needed for bias correction) without duplicates
+    all_scenarios = ['historical'] + [s for s in scenarios if s != 'historical']
+    future_nml['cmip6_scenarios'] = all_scenarios
     future_nml['cmip6_train_start'] = '1980-01-01'
     future_nml['cmip6_train_end'] = '2014-12-31'
 

@@ -664,9 +664,13 @@ class GloGEMProcessor:
         ✅ UPDATED: Handles aggregated glacier HRUs (2 HRUs: large + small) instead of per-glacier HRUs
         """
         self.logger.info("Creating irrigation NetCDF file...")
-        
-        # ✅ Use shared directory
-        output_path = self.shared_data_dir / 'irrigation.nc'
+
+        # Use model-specific filename for future runs (each CMIP6 model has its own GloGEM data)
+        if self.glogem_model:
+            irrigation_filename = f'irrigation_{self.glogem_model}.nc'
+        else:
+            irrigation_filename = 'irrigation.nc'
+        output_path = self.shared_data_dir / irrigation_filename
         
         if output_path.exists() and not force_reprocess:
             self.logger.info(f"✅ Irrigation file already exists: {output_path}")
@@ -1848,7 +1852,10 @@ class GloGEMProcessor:
         self.logger.info("="*60)
         
         # ✅ CHECK: Skip if final output already exists in shared directory
-        irrigation_nc = self.shared_data_dir / 'irrigation.nc'
+        if self.glogem_model:
+            irrigation_nc = self.shared_data_dir / f'irrigation_{self.glogem_model}.nc'
+        else:
+            irrigation_nc = self.shared_data_dir / 'irrigation.nc'
         irrigation_gridweights = self.shared_data_dir / 'GridWeights_Irrigation.txt'
         
         if irrigation_nc.exists() and irrigation_gridweights.exists() and not force_reprocess:
@@ -1984,11 +1991,14 @@ class MultiSubbasinGloGEMProcessor:
 
         Returns dict with {'skipped': bool, 'n_subbasins': int, ...}.
         """
-        output_nc = self.shared_data_dir / 'irrigation.nc'
+        if self.glogem_model:
+            output_nc = self.shared_data_dir / f'irrigation_{self.glogem_model}.nc'
+        else:
+            output_nc = self.shared_data_dir / 'irrigation.nc'
         output_gw = self.shared_data_dir / 'GridWeights_Irrigation.txt'
 
         if output_nc.exists() and output_gw.exists() and not force_reprocess:
-            self.logger.info("✅ irrigation.nc + GridWeights already exist — skipping.")
+            self.logger.info(f"✅ {output_nc.name} + GridWeights already exist — skipping.")
             return {'skipped': True}
 
         # --- Load merged HRU shapefile ---

@@ -402,12 +402,16 @@ def main(namelist_path: str, force_reprocess: bool = False):
                 print(f"   ⏭️ GloGEM files already exist (skipped)")
 
             # Verify irrigation files were created
-            irrigation_nc = glogem_processor.shared_data_dir / 'irrigation.nc'
+            glogem_model = nml.get('glogem_model', None)
+            if glogem_model:
+                irrigation_nc = glogem_processor.shared_data_dir / f'irrigation_{glogem_model}.nc'
+            else:
+                irrigation_nc = glogem_processor.shared_data_dir / 'irrigation.nc'
             irrigation_gw = glogem_processor.shared_data_dir / 'GridWeights_Irrigation.txt'
             if irrigation_nc.exists():
-                print(f"   ✅ irrigation.nc exists: {irrigation_nc} ({irrigation_nc.stat().st_size/1e6:.1f} MB)")
+                print(f"   ✅ {irrigation_nc.name} exists: {irrigation_nc} ({irrigation_nc.stat().st_size/1e6:.1f} MB)")
             else:
-                print(f"   ❌ irrigation.nc NOT FOUND at: {irrigation_nc}")
+                print(f"   ❌ {irrigation_nc.name} NOT FOUND at: {irrigation_nc}")
             if irrigation_gw.exists():
                 print(f"   ✅ GridWeights_Irrigation.txt exists: {irrigation_gw}")
             else:

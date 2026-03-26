@@ -98,10 +98,11 @@ def generate_model_namelist(base_nml_path, model_id, tmp_dir):
 
 
 def _swap_rvt_model(rvt_path, target_model_id, logger):
-    """Update .rvt CMIP6 filenames to point to the target model.
+    """Update .rvt CMIP6 and irrigation filenames to point to the target model.
 
-    Scans for any cmip6_{MODEL}_ssp126_ or cmip6_{MODEL}_historical_
-    references and replaces the model name portion.
+    Swaps:
+    - cmip6_{MODEL}_ssp126_*.nc → cmip6_{TARGET}_ssp126_*.nc
+    - irrigation.nc or irrigation_{model}.nc → irrigation_{target_glogem_id}.nc
     """
     text = rvt_path.read_text()
     # Match any CMIP6 model name in cmip6_<MODEL>_ patterns
@@ -110,9 +111,16 @@ def _swap_rvt_model(rvt_path, target_model_id, logger):
         rf'\g<1>{target_model_id}\3',
         text,
     )
+    # Swap irrigation.nc to model-specific version
+    glogem_id = GLOGEM_MODEL_ID.get(target_model_id, target_model_id.lower())
+    new_text = re.sub(
+        r'irrigation(?:_[a-z0-9-]+)?\.nc',
+        f'irrigation_{glogem_id}.nc',
+        new_text,
+    )
     if new_text != text:
         rvt_path.write_text(new_text)
-        logger.info(f"  .rvt updated to use {target_model_id} forcing files")
+        logger.info(f"  .rvt updated to use {target_model_id} forcing + irrigation_{glogem_id}.nc")
     else:
         logger.info(f"  .rvt already references {target_model_id}")
 
@@ -192,12 +200,15 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                     return False
 
         # Step 2: Create input files (downscaling + GloGEM + Raven files)
-        # Check if input files already exist for this model
+        # Check if input files already exist for this model (CMIP6 forcing + irrigation)
         data_obs_dir = catchment_dir / "data_obs"
+        glogem_id = GLOGEM_MODEL_ID[model_id]
         expected_inputs = [
             data_obs_dir / f"cmip6_{model_id}_ssp126_{var}.nc"
             for var in ["precip", "temp_mean", "temp_max", "temp_min"]
         ]
+        if nml.get("coupled", False):
+            expected_inputs.append(data_obs_dir / f"irrigation_{glogem_id}.nc")
         inputs_exist = all(f.exists() for f in expected_inputs)
 
         if inputs_exist and not force:
