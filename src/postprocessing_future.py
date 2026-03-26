@@ -354,7 +354,8 @@ def plot_regime_by_period(all_hydro, gauge_id, plot_dir, hist_data=None):
 
         # Historical observed
         if hist_data is not None and 'Q_obs' in hist_data.columns:
-            obs_regime = hist_data['Q_obs'].dropna().groupby(hist_data.index.month).mean()
+            obs_clean = hist_data['Q_obs'].dropna()
+            obs_regime = obs_clean.groupby(obs_clean.index.month).mean()
             ax.plot(obs_regime.index, obs_regime.values, 'k-', linewidth=2,
                     label='Historical observed')
 
@@ -417,12 +418,14 @@ def plot_regime_shift(all_hydro, gauge_id, plot_dir, hist_data=None):
 
     # Historical
     if hist_data is not None and 'Q_obs' in hist_data.columns:
-        obs_regime = hist_data['Q_obs'].dropna().groupby(hist_data.index.month).mean()
+        obs_clean = hist_data['Q_obs'].dropna()
+        obs_regime = obs_clean.groupby(obs_clean.index.month).mean()
         ax.plot(obs_regime.index, obs_regime.values, 'k-', linewidth=2.5,
                 label='Historical observed')
 
     if hist_data is not None and 'Q_sim_hist' in hist_data.columns:
-        sim_regime = hist_data['Q_sim_hist'].dropna().groupby(hist_data.index.month).mean()
+        sim_clean = hist_data['Q_sim_hist'].dropna()
+        sim_regime = sim_clean.groupby(sim_clean.index.month).mean()
         ax.plot(sim_regime.index, sim_regime.values, 'k--', linewidth=1.5,
                 label='Historical simulated')
 

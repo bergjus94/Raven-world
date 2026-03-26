@@ -716,7 +716,7 @@ Examples:
         # Future namelist passed directly — build future_proj from its contents
         future_proj = {
             'enabled': True,
-            'models': nml.get('cmip6_models', FUTURE_DEFAULTS['models']),
+            'models': nml.get('cmip6_models', None) or FUTURE_DEFAULTS['models'],
             'scenarios': [s for s in nml.get('cmip6_scenarios', ['ssp126']) if s != 'historical'],
         }
         future_enabled = not args.skip_future

@@ -1,0 +1,95 @@
+# =============================================================================
+# Namelist for gauge 0104 (coupled, GloGEM TSLA, HAR forcing)
+# Subdaily melt enabled, future projections enabled
+# =============================================================================
+
+gauge_id: '0104'
+start_date: '1980-01-01'
+end_date: '2008-12-31'
+cali_end_date: '1995-12-31'
+warm_up_date: '1978-01-01'
+
+model_type: 'HBV'
+template: true
+main_dir: '/home/jberg@giub.local/Raven_world'
+config_dir: 'test_future_configs/glogem_har'
+debug: true
+
+coupled: true
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+subdaily_method: 'SUBDAILY_HOURLY_MELT'
+
+nconnect: 'multiple'
+criteria:
+  - elevation
+  - landuse
+
+meteo_source: 'HAR'
+future: false
+
+# =============================================================================
+# Future projections (used by run_full_pipeline.py)
+# =============================================================================
+future_projections:
+  enabled: true
+  start_date: '1981-01-01'
+  end_date: '2100-09-30'
+  warm_up_date: '1980-01-01'
+  models:
+    - GFDL-ESM4
+    - IPSL-CM6A-LR
+    - MPI-ESM1-2-HR
+    - MRI-ESM2-0
+    - UKESM1-0-LL
+  scenarios:
+    - historical
+    - ssp126
+
+cmip6_dir: '/home/jberg@giub.local/Raven_world/01_data/CMIP6'
+cmip6_train_start: '1980-01-01'
+cmip6_train_end: '2014-12-31'
+
+# =============================================================================
+# Paths (relative to main_dir or absolute)
+# =============================================================================
+meteo_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/Indus-Era5'
+meteo_har_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/HAR'
+shape_dir: '01_data/topo/catchment_shapefile/catchment_shape_{gauge_id}.shp'
+raster_dir: '01_data/topo/catchment_dem/dem_Indus.tif'
+stream_dir: '01_data/streamflow/streamflow_{gauge_id}.csv'
+landuse_dir: '01_data/topo/catchment_landuse/landuse_Indus_30m.tif'
+glacier_dir: '01_data/topo/glacier_outlines/nsidc0770_14.rgi60.SouthAsiaWest/14_rgi60_SouthAsiaWest.shp'
+glogem_dir: '01_data/GloGEM/Indus/TSLA'
+params_dir: '../src/config/default_params.yaml'
+
+# =============================================================================
+# Forcing file templates (populated by meteo preprocessors)
+# =============================================================================
+forcing_files:
+  - 'era5_land_2m_temperature_2000-2000_daily_max_combined.nc'
+  - 'era5_land_2m_temperature_2000-2000_daily_min_combined.nc'
+  - 'era5_land_2m_temperature_2000-2000_daily_mean_combined.nc'
+  - 'era5_land_total_precipitation_2000-2000_daily_combined.nc'
+
+forcing_files_har:
+  - 'har_land_2m_temperature_2000-2000_daily_max_combined.nc'
+  - 'har_land_2m_temperature_2000-2000_daily_min_combined.nc'
+  - 'har_land_2m_temperature_2000-2000_daily_mean_combined.nc'
+  - 'har_land_total_precipitation_2000-2000_daily_combined.nc'
+
+# =============================================================================
+# Calibration settings
+# =============================================================================
+calibration:
+   metrics:
+     primary: 'KGE'
+     secondary: ['NSE', 'PBIAS', 'RMSE']
+   iterations: 5000
+   ngs: 15
+   cali_end_date: '1995-12-31'
+   vali_end_date: '2008-12-31'
+
+raven_executable: '/home/jberg@giub.local/RavenHydroFramework/build/Raven'

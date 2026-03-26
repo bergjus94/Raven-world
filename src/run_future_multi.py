@@ -20,6 +20,7 @@ Usage:
 
 import sys
 import argparse
+import re
 import shutil
 import subprocess
 import time
@@ -80,15 +81,40 @@ def generate_model_namelist(base_nml_path, model_id, tmp_dir):
     # Resolve relative params_dir to absolute (temp namelist lives in /tmp/)
     params_dir = nml.get("params_dir", "")
     if params_dir and not Path(params_dir).is_absolute():
+        # Try resolving from base namelist location first
         resolved = (base_nml_path.parent / params_dir).resolve()
-        if resolved.exists():
-            nml["params_dir"] = str(resolved)
+        if not resolved.exists():
+            # Fall back to project directory (script_dir/../)
+            resolved_proj = (project_dir / params_dir.lstrip('../')).resolve()
+            if resolved_proj.exists():
+                resolved = resolved_proj
+        nml["params_dir"] = str(resolved)
 
     tmp_path = Path(tmp_dir) / f"namelist_future_{model_id}.yaml"
     with open(tmp_path, "w") as f:
         yaml.dump(nml, f, default_flow_style=False, sort_keys=False)
 
     return tmp_path, nml
+
+
+def _swap_rvt_model(rvt_path, target_model_id, logger):
+    """Update .rvt CMIP6 filenames to point to the target model.
+
+    Scans for any cmip6_{MODEL}_ssp126_ or cmip6_{MODEL}_historical_
+    references and replaces the model name portion.
+    """
+    text = rvt_path.read_text()
+    # Match any CMIP6 model name in cmip6_<MODEL>_ patterns
+    new_text = re.sub(
+        r'(cmip6_)([A-Za-z0-9_-]+?)(_(?:ssp|historical))',
+        rf'\g<1>{target_model_id}\3',
+        text,
+    )
+    if new_text != text:
+        rvt_path.write_text(new_text)
+        logger.info(f"  .rvt updated to use {target_model_id} forcing files")
+    else:
+        logger.info(f"  .rvt already references {target_model_id}")
 
 
 def run_single_model(base_nml_path, model_id, skip_download=False,
@@ -109,6 +135,14 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
         gauge_id = str(nml["gauge_id"])
         model_type = nml["model_type"]
         catchment_dir = main_dir / config_dir / f"catchment_{gauge_id}"
+
+        # Check if this model already completed (output exists)
+        existing_output = catchment_dir / model_type / "output" / GLOGEM_MODEL_ID[model_id]
+        if existing_output.exists() and not force:
+            hydrographs = list(existing_output.glob(f"{gauge_id}_{model_type}_Hydrographs*"))
+            if hydrographs:
+                logger.info(f"  Output already exists for {model_id}, skipping (use --force to rerun)")
+                return True
 
         # Step 1: Download CMIP6 (if needed)
         if not skip_download:
@@ -158,24 +192,35 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                     return False
 
         # Step 2: Create input files (downscaling + GloGEM + Raven files)
-        logger.info(f"  Creating input files for {model_id}...")
-        create_script = script_dir / "create_input_files.py"
-        cmd = [sys.executable, str(create_script), str(tmp_nml_path)]
-        if force:
-            cmd.append("--force")
+        # Check if input files already exist for this model
+        data_obs_dir = catchment_dir / "data_obs"
+        expected_inputs = [
+            data_obs_dir / f"cmip6_{model_id}_ssp126_{var}.nc"
+            for var in ["precip", "temp_mean", "temp_max", "temp_min"]
+        ]
+        inputs_exist = all(f.exists() for f in expected_inputs)
 
-        try:
-            process = subprocess.run(
-                cmd, check=True, capture_output=True, text=True,
-                timeout=7200,  # 2 hours (scipy regridding can be slow)
-            )
-            logger.info(f"  Input creation complete for {model_id}")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"  Input creation failed for {model_id}")
-            logger.error(e.stdout[-2000:] if e.stdout else "")
-            if e.stderr:
-                logger.error(e.stderr[-1000:])
-            return False
+        if inputs_exist and not force:
+            logger.info(f"  Input files already exist for {model_id}, skipping creation")
+        else:
+            logger.info(f"  Creating input files for {model_id}...")
+            create_script = script_dir / "create_input_files.py"
+            cmd = [sys.executable, str(create_script), str(tmp_nml_path)]
+            if force:
+                cmd.append("--force")
+
+            try:
+                process = subprocess.run(
+                    cmd, check=True, capture_output=True, text=True,
+                    timeout=7200,  # 2 hours (scipy regridding can be slow)
+                )
+                logger.info(f"  Input creation complete for {model_id}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"  Input creation failed for {model_id}")
+                logger.error(e.stdout[-2000:] if e.stdout else "")
+                if e.stderr:
+                    logger.error(e.stderr[-1000:])
+                return False
 
         # Step 3: Fix leap days in CMIP6 files (noleap → standard)
         logger.info(f"  Fixing leap days for {model_id}...")
@@ -185,6 +230,10 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
         model_dir = catchment_dir / model_type
         _add_rvi_output_options(model_dir / f"{gauge_id}_{model_type}.rvi",
                                 nml.get("coupled", False), logger)
+
+        # Step 4b: Update .rvt to point to this model's CMIP6 forcing files
+        rvt_path = model_dir / f"{gauge_id}_{model_type}.rvt"
+        _swap_rvt_model(rvt_path, model_id, logger)
 
         # Step 5: Run Raven forward
         logger.info(f"  Running Raven for {model_id}...")
@@ -199,7 +248,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
             start = time.time()
             process = subprocess.run(
                 cmd, check=True, capture_output=True, text=True,
-                timeout=600,
+                timeout=1200,
             )
             duration = time.time() - start
             logger.info(f"  Raven completed in {duration:.1f}s for {model_id}")

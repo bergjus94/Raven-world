@@ -1,5 +1,6 @@
 # =============================================================================
 # Namelist for gauge 0122 (coupled, GloGEM TSLA)
+# Subdaily melt enabled, future projections enabled
 # =============================================================================
 
 gauge_id: '0122'
@@ -11,11 +12,15 @@ warm_up_date: '1978-01-01'
 model_type: 'HBV'
 template: true
 main_dir: '/home/jberg@giub.local/Raven_world'
-config_dir: 'test_config_all/03_model_setups_glogem'
+config_dir: 'test_future_configs/glogem'
 debug: true
 
 coupled: true
 glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+subdaily_method: 'SUBDAILY_HOURLY_MELT'
 
 nconnect: 'multiple'
 criteria:
@@ -24,6 +29,28 @@ criteria:
 
 meteo_source: 'ERA5'
 future: false
+
+# =============================================================================
+# Future projections (used by run_full_pipeline.py)
+# =============================================================================
+future_projections:
+  enabled: true
+  start_date: '1981-01-01'
+  end_date: '2100-09-30'
+  warm_up_date: '1980-01-01'
+  models:
+    - GFDL-ESM4
+    - IPSL-CM6A-LR
+    - MPI-ESM1-2-HR
+    - MRI-ESM2-0
+    - UKESM1-0-LL
+  scenarios:
+    - historical
+    - ssp126
+
+cmip6_dir: '/home/jberg@giub.local/Raven_world/01_data/CMIP6'
+cmip6_train_start: '1980-01-01'
+cmip6_train_end: '2014-12-31'
 
 # =============================================================================
 # Paths (relative to main_dir or absolute)
