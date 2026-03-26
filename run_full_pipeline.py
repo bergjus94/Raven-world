@@ -442,9 +442,11 @@ def phase4_generate_future_namelist(namelist_path, nml, calibrated_yaml, future_
     # Config directory: append _future
     future_nml['config_dir'] = config_dir + '_future'
 
-    # Scenario (first one as default for the base namelist; run_future_multi handles per-model)
+    # Scenario: pick first non-historical scenario for GloGEM file naming
+    # (historical is only used for CMIP6 bias correction training, not for GloGEM)
     scenarios = future_proj.get('scenarios', FUTURE_DEFAULTS['scenarios'])
-    future_nml['glogem_scenario'] = scenarios[0]
+    future_scenarios = [s for s in scenarios if s != 'historical']
+    future_nml['glogem_scenario'] = future_scenarios[0] if future_scenarios else scenarios[0]
 
     # Calibrated params path (relative to namelist location)
     if calibrated_yaml:
