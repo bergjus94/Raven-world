@@ -1210,10 +1210,11 @@ class GloGEMProcessor:
             # Save detailed report
             self._save_validation_report(results, rgi_region_code)
             
-            # Create map visualization
-            hru_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
-            hru_gdf = gpd.read_file(hru_path)
-            self._create_validation_map(hru_gdf, results, rgi_region_code)
+            # Create map visualization using clipped glacier shapefile
+            # (HRU.shp Glacier_Cl field is truncated at 254 chars by shapefile format)
+            glacier_shp_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "clipped_glacier.shp"
+            catchment_shp_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "catchment_shape.shp"
+            self._create_validation_map(glacier_shp_path, catchment_shp_path, results, rgi_region_code)
             
             return results
             
@@ -1260,82 +1261,114 @@ class GloGEMProcessor:
         
         self.logger.info(f"✅ Validation report saved: {report_path}")
     
-    def _create_validation_map(self, hru_gdf: gpd.GeoDataFrame, results: Dict[str, List[str]], 
-                               rgi_region_code: str) -> None:
+    def _create_validation_map(self, glacier_shp_path: Path, catchment_shp_path: Path,
+                               results: Dict[str, List[str]], rgi_region_code: str) -> None:
         """
         Create map showing matched and missing glaciers.
-        ✅ UPDATED: Handles pipe-separated glacier IDs, no labels on map
+        Uses clipped_glacier.shp (one polygon per glacier with full RGIId)
+        instead of HRU.shp (whose Glacier_Cl field is truncated at 254 chars).
         """
         out_dir = Path(self.model_dir, f'catchment_{self.gauge_id}', 'validation')
         out_dir.mkdir(parents=True, exist_ok=True)
-        
+
         try:
-            # Add validation status to HRU geodataframe
-            hru_gdf = hru_gdf.copy()
-            hru_gdf['validation_status'] = 'non-glacier'
-            
-            # ✅ NEW: Handle pipe-separated glacier IDs
-            for idx, row in hru_gdf.iterrows():
-                glacier_id_str = row.get('Glacier_Cl', None)
-                if pd.isna(glacier_id_str):
-                    continue
-                
-                # Parse pipe-separated IDs
-                if isinstance(glacier_id_str, str) and '|' in glacier_id_str:
-                    id_list = glacier_id_str.split('|')
-                else:
-                    id_list = [glacier_id_str]
-                
-                # Check status of each glacier in this HRU
-                has_matched = any(g_id in results['matched'] for g_id in id_list)
-                has_missing = any(g_id in results['missing_in_glogem'] for g_id in id_list)
-                
-                if has_missing:
-                    hru_gdf.at[idx, 'validation_status'] = 'missing_in_glogem'
-                elif has_matched:
-                    hru_gdf.at[idx, 'validation_status'] = 'matched'
-            
+            glacier_shp_path = Path(glacier_shp_path)
+            catchment_shp_path = Path(catchment_shp_path)
+
+            if not glacier_shp_path.exists():
+                self.logger.warning(f"Clipped glacier shapefile not found: {glacier_shp_path}")
+                return
+
+            glacier_gdf = gpd.read_file(glacier_shp_path)
+
+            if len(glacier_gdf) == 0:
+                self.logger.warning("No glaciers in clipped shapefile, skipping validation map")
+                return
+
+            # Tag each glacier polygon by validation status using its RGIId
+            matched_set = set(results['matched'])
+            missing_set = set(results['missing_in_glogem'])
+
+            glacier_gdf = glacier_gdf.copy()
+            glacier_gdf['validation_status'] = glacier_gdf['RGIId'].apply(
+                lambda rid: 'missing_in_glogem' if rid in missing_set
+                else ('matched' if rid in matched_set else 'unknown')
+            )
+
+            # Load catchment boundary for context (try dedicated file, fall back to HRU dissolve)
+            catchment_gdf = None
+            if catchment_shp_path.exists():
+                catchment_gdf = gpd.read_file(catchment_shp_path)
+                if catchment_gdf.crs != glacier_gdf.crs:
+                    catchment_gdf = catchment_gdf.to_crs(glacier_gdf.crs)
+            else:
+                # Fall back to dissolving HRU.shp for an outline
+                hru_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
+                if hru_path.exists():
+                    hru_gdf = gpd.read_file(hru_path)
+                    if hru_gdf.crs != glacier_gdf.crs:
+                        hru_gdf = hru_gdf.to_crs(glacier_gdf.crs)
+                    catchment_gdf = gpd.GeoDataFrame(
+                        geometry=[hru_gdf.union_all()], crs=glacier_gdf.crs
+                    )
+
             # Create figure
             fig, ax = plt.subplots(figsize=(14, 10))
-            
-            # Define colors
+
+            # Plot catchment boundary first
+            if catchment_gdf is not None:
+                catchment_gdf.boundary.plot(ax=ax, color='black', linewidth=1.5,
+                                            label='Catchment boundary')
+
+            # Plot glaciers by status
             colors = {
-                'non-glacier': 'lightgray',
-                'matched': 'green',
-                'missing_in_glogem': 'red'
+                'matched': ('steelblue', 0.6),
+                'missing_in_glogem': ('red', 0.7),
+                'unknown': ('orange', 0.5),
             }
-            
-            # Plot each category
-            for status, color in colors.items():
-                subset = hru_gdf[hru_gdf['validation_status'] == status]
+
+            for status, (color, alpha) in colors.items():
+                subset = glacier_gdf[glacier_gdf['validation_status'] == status]
                 if len(subset) > 0:
-                    subset.plot(ax=ax, color=color, edgecolor='black', linewidth=0.5, 
-                              label=status.replace('_', ' ').title())
-            
-            # ✅ REMOVED: No glacier ID labels on map (as requested)
-            
-            ax.set_title(f'Glacier Validation Map - Gauge {self.gauge_id}\n'
-                        f'Matched: {len(results["matched"])}, '
-                        f'Missing in GloGEM: {len(results["missing_in_glogem"])}, '
-                        f'Missing in HRU: {len(results["missing_in_hru"])}',
-                        fontsize=14, fontweight='bold')
-            ax.set_xlabel('Easting (m)')
-            ax.set_ylabel('Northing (m)')
-            ax.legend(loc='best', fontsize=10)
-            ax.set_aspect('equal')
-            
+                    label = {
+                        'matched': f'In GloGEM ({len(subset)})',
+                        'missing_in_glogem': f'Missing from GloGEM ({len(subset)})',
+                        'unknown': f'Unknown status ({len(subset)})',
+                    }[status]
+                    subset.plot(ax=ax, color=color, alpha=alpha, edgecolor='none',
+                                label=label)
+
+            n_matched = len(results['matched'])
+            n_missing = len(results['missing_in_glogem'])
+            n_total = n_matched + n_missing
+
+            # Compute missing area from glacier shapefile
+            missing_area = glacier_gdf.loc[
+                glacier_gdf['validation_status'] == 'missing_in_glogem', 'Area'
+            ].sum() if 'Area' in glacier_gdf.columns else 0
+            total_area = glacier_gdf['Area'].sum() if 'Area' in glacier_gdf.columns else 0
+
+            pct_count = 100 * n_missing / n_total if n_total > 0 else 0
+            pct_area = 100 * missing_area / total_area if total_area > 0 else 0
+
+            ax.set_title(
+                f'Glacier Validation Map - Gauge {self.gauge_id}\n'
+                f'{n_total} RGI glaciers | {n_missing} missing from GloGEM ({pct_count:.1f}%)\n'
+                f'Missing area: {missing_area:.1f} / {total_area:.1f} km² ({pct_area:.1f}%)',
+                fontsize=12, fontweight='bold')
+            ax.set_xlabel('Longitude')
+            ax.set_ylabel('Latitude')
+            ax.legend(loc='upper left', fontsize=10)
+
             plt.tight_layout()
-            
+
             # Save
             map_path = out_dir / 'glacier_validation_map.png'
             plt.savefig(map_path, dpi=300, bbox_inches='tight')
-            self.logger.info(f"✅ Validation map saved: {map_path}")
-            
-            if self.debug:
-                plt.show()
-            
+            self.logger.info(f"Validation map saved: {map_path}")
+
             plt.close()
-            
+
         except Exception as e:
             self.logger.error(f"Error creating validation map: {e}")
             self.logger.error(traceback.format_exc())
