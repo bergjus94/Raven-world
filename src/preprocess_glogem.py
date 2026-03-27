@@ -454,9 +454,12 @@ class GloGEMProcessor:
         """
         self.logger.info("Creating catchment-averaged glacier data (ALL, LARGE, SMALL)...")
 
-        # Output path
+        # Output path (model-specific for future runs)
         topo_dir = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files"
-        output_path = topo_dir / 'GloGEM_catchment_averaged.csv'
+        if self.future and self.glogem_model:
+            output_path = topo_dir / f'GloGEM_catchment_averaged_{self.glogem_model}.csv'
+        else:
+            output_path = topo_dir / 'GloGEM_catchment_averaged.csv'
 
         # Check if it already exists
         if output_path.exists():
