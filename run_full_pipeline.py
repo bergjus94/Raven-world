@@ -170,6 +170,13 @@ def phase1_create_inputs(namelist_path, nml, force=False, future_proj=None, logg
             extended_nml['warm_up_date'] = future_warm_up
             # Keep the original start_date — preprocessing uses warm_up_date for data range
 
+            # Resolve relative paths before copying to temp dir
+            nml_dir = Path(namelist_path).parent
+            if 'params_dir' in extended_nml:
+                params_path = Path(extended_nml['params_dir'])
+                if not params_path.is_absolute():
+                    extended_nml['params_dir'] = str((nml_dir / params_path).resolve())
+
             tmp_dir = tempfile.mkdtemp(prefix='pipeline_phase1_')
             tmp_path = Path(tmp_dir) / Path(namelist_path).name
             with open(tmp_path, 'w') as f:
