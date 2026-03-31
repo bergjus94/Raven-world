@@ -871,8 +871,16 @@ def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir,
         print("No data for sensitivity tornado")
         return
 
-    # Sort by mean absolute effect (largest at top)
-    factor_stats.sort(key=lambda f: f['mean_abs'])
+    # Sort by mean absolute KGE effect (consistent order for KGE and NSE)
+    kge_deltas = _compute_factor_deltas(catchment_results, factors, metric='KGE')
+    kge_mean_abs = {}
+    for factor in factors:
+        name = factor['name']
+        all_d = []
+        for gid_deltas in kge_deltas.get(name, {}).values():
+            all_d.extend(gid_deltas)
+        kge_mean_abs[name] = np.mean(np.abs(all_d)) if all_d else 0
+    factor_stats.sort(key=lambda f: kge_mean_abs.get(f['name'], 0))
 
     n = len(factor_stats)
     fig, ax = plt.subplots(figsize=(10, max(5, n * 0.8)))
@@ -935,11 +943,12 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir,
         print("No data for factor importance heatmap")
         return
 
-    # Sort factors by mean absolute effect (largest first)
+    # Sort factors by mean absolute KGE effect (consistent order for KGE and NSE)
+    kge_deltas = _compute_factor_deltas(catchment_results, factors, metric='KGE')
     factor_mean_abs = {}
     for f in valid_factors:
         all_deltas = []
-        for gid_deltas in factor_deltas[f['name']].values():
+        for gid_deltas in kge_deltas.get(f['name'], {}).values():
             all_deltas.extend(gid_deltas)
         factor_mean_abs[f['name']] = np.mean(np.abs(all_deltas)) if all_deltas else 0
     valid_factors.sort(key=lambda f: factor_mean_abs[f['name']], reverse=True)
