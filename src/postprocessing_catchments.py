@@ -64,10 +64,11 @@ def load_all_catchment_data(yaml_path, catchment_filter=None, config_filter=None
     catchments = registry.get('catchments', [])
     config_registry = registry['configurations']
 
-    # Auto-assign catchment colors if not specified in YAML
+    # Auto-assign catchment colors if not specified in YAML (12 distinct colors)
     _catchment_palette = [
         '#1b9e77', '#d95f02', '#7570b3', '#e7298a',
         '#66a61e', '#e6ab02', '#a6761d', '#666666',
+        '#e41a1c', '#377eb8', '#4daf4a', '#984ea3',
     ]
     for i, catch in enumerate(catchments):
         if 'color' not in catch:
@@ -263,9 +264,10 @@ def plot_performance_heatmap(catchment_results, config_registry, plot_dir):
 ######################## Plot 2: Configuration Ranking ##########################
 #--------------------------------------------------------------------------------
 
-def plot_configuration_ranking(catchment_results, config_registry, plot_dir):
+def plot_configuration_ranking(catchment_results, config_registry, plot_dir,
+                               metric='KGE'):
     """
-    Grouped bar chart: for each config, bars grouped by catchment showing KGE.
+    Grouped bar chart: for each config, bars grouped by catchment.
     Sorted by mean performance across catchments.
     """
     catchment_ids = list(catchment_results.keys())
@@ -274,23 +276,21 @@ def plot_configuration_ranking(catchment_results, config_registry, plot_dir):
     catch_colors = {gid: catchment_results[gid]['catchment_info']['color'] for gid in catchment_ids}
     catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
 
-    # Collect KGE per config per catchment
-    kge_data = {}
+    metric_data = {}
     for key in config_keys:
         vals = []
         for gid in catchment_ids:
             m = catchment_results[gid]['metrics'].get(key)
-            vals.append(m['KGE'] if m else np.nan)
+            vals.append(m[metric] if m else np.nan)
         if not all(np.isnan(v) for v in vals):
-            kge_data[key] = vals
+            metric_data[key] = vals
 
-    if not kge_data:
-        print("No data for configuration ranking")
+    if not metric_data:
+        print(f"No data for configuration ranking ({metric})")
         return
 
-    # Sort by mean KGE (descending)
-    sorted_keys = sorted(kge_data.keys(),
-                         key=lambda k: np.nanmean(kge_data[k]), reverse=True)
+    sorted_keys = sorted(metric_data.keys(),
+                         key=lambda k: np.nanmean(metric_data[k]), reverse=True)
 
     n_catchments = len(catchment_ids)
     n_configs = len(sorted_keys)
@@ -300,25 +300,24 @@ def plot_configuration_ranking(catchment_results, config_registry, plot_dir):
     fig, ax = plt.subplots(figsize=(max(12, n_configs * 1.2), 7))
 
     for i, gid in enumerate(catchment_ids):
-        vals = [kge_data[key][catchment_ids.index(gid)] for key in sorted_keys]
+        vals = [metric_data[key][catchment_ids.index(gid)] for key in sorted_keys]
         offset = (i - n_catchments / 2 + 0.5) * bar_width
         bars = ax.bar(x + offset, vals, bar_width, label=catch_names[gid],
                       color=catch_colors[gid], edgecolor='black', linewidth=0.5)
 
-    # Add mean line markers
     for j, key in enumerate(sorted_keys):
-        mean_val = np.nanmean(kge_data[key])
+        mean_val = np.nanmean(metric_data[key])
         ax.plot(j, mean_val, 'k_', markersize=20, markeredgewidth=2.5, zorder=5)
 
     ax.set_xticks(x)
     ax.set_xticklabels([config_names[k] for k in sorted_keys], rotation=45, ha='right')
-    ax.set_ylabel('KGE')
+    ax.set_ylabel(metric)
     ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
     plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_config_ranking.png'
+    save_path = plot_dir / f'cross_catchment_config_ranking_{metric}.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {save_path}")
@@ -506,10 +505,11 @@ def plot_glacier_contribution_comparison(catchment_results, config_registry, plo
 ###################### Plot 5: Coupling Effect (Delta-KGE) ######################
 #--------------------------------------------------------------------------------
 
-def plot_coupling_effect(catchment_results, config_registry, plot_dir):
+def plot_coupling_effect(catchment_results, config_registry, plot_dir,
+                         metric='KGE'):
     """
-    For each catchment, show KGE change when switching from uncoupled to coupled.
-    Diverging bars: green=improvement, red=degradation.
+    For each catchment, show metric change when switching from uncoupled to coupled.
+    Diverging bars with catchment colors.
     """
     catchment_ids = list(catchment_results.keys())
     catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
@@ -532,7 +532,7 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
                 break
 
     if not valid_pairs:
-        print("No coupling pairs found")
+        print(f"No coupling pairs found ({metric})")
         return
 
     n_pairs = len(valid_pairs)
@@ -547,32 +547,7 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
         for uncoupled, coupled, label in valid_pairs:
             m = catchment_results[gid]['metrics']
             if uncoupled in m and coupled in m:
-                delta = m[coupled]['KGE'] - m[uncoupled]['KGE']
-            else:
-                delta = np.nan
-            deltas.append(delta)
-
-        offset = (i - n_catchments / 2 + 0.5) * bar_width
-        colors = ['#2ca02c' if d >= 0 else '#d62728' for d in deltas]
-        ax.bar(x + offset, deltas, bar_width, color=colors,
-               edgecolor='black', linewidth=0.5, label=catch_names[gid] if i == 0 or True else '')
-
-    # Custom legend: one entry per catchment + improvement/degradation
-    legend_handles = []
-    for gid in catchment_ids:
-        legend_handles.append(Patch(facecolor=catchment_results[gid]['catchment_info']['color'],
-                                    edgecolor='black', label=catch_names[gid]))
-
-    # Re-do with catchment colors instead of green/red per bar
-    # Actually, let's use catchment colors with positive/negative direction
-    fig, ax = plt.subplots(figsize=(max(10, n_pairs * 1.8), 6))
-
-    for i, gid in enumerate(catchment_ids):
-        deltas = []
-        for uncoupled, coupled, label in valid_pairs:
-            m = catchment_results[gid]['metrics']
-            if uncoupled in m and coupled in m:
-                delta = m[coupled]['KGE'] - m[uncoupled]['KGE']
+                delta = m[coupled][metric] - m[uncoupled][metric]
             else:
                 delta = np.nan
             deltas.append(delta)
@@ -585,7 +560,7 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
     ax.axhline(y=0, color='black', linewidth=1)
     ax.set_xticks(x)
     ax.set_xticklabels([label for _, _, label in valid_pairs], rotation=45, ha='right')
-    ax.set_ylabel('ΔKGE (coupled − uncoupled)')
+    ax.set_ylabel(f'Δ{metric} (coupled − uncoupled)')
     ax.legend(title='Catchment')
     ax.grid(True, alpha=0.3, axis='y')
 
@@ -596,7 +571,7 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
                alpha=0.05, color='red', zorder=0)
 
     plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_coupling_effect.png'
+    save_path = plot_dir / f'cross_catchment_coupling_effect_{metric}.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {save_path}")
@@ -606,8 +581,9 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
 ############## Plot 5b: Subdaily Effect #########################################
 #--------------------------------------------------------------------------------
 
-def plot_precipitation_forcing_comparison(catchment_results, config_registry, plot_dir):
-    """Boxplot comparing KGE across precipitation forcing datasets."""
+def plot_precipitation_forcing_comparison(catchment_results, config_registry, plot_dir,
+                                          metric='KGE'):
+    """Boxplot comparing a metric across precipitation forcing datasets."""
     groups = [
         ('Uncoupled', [
             ('baseline', 'ERA5'),
@@ -621,16 +597,18 @@ def plot_precipitation_forcing_comparison(catchment_results, config_registry, pl
         ]),
     ]
     _plot_grouped_boxplot(catchment_results, groups, plot_dir,
-                          'cross_catchment_precip_forcing.png')
+                          f'cross_catchment_precip_forcing_{metric}.png',
+                          metric=metric)
 
 
 #--------------------------------------------------------------------------------
 ############# Plot 5c: Meteorological Forcing Comparison ########################
 #--------------------------------------------------------------------------------
 
-def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel='KGE'):
+def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename,
+                          metric='KGE'):
     """
-    Boxplot comparing KGE across grouped configurations.
+    Boxplot comparing a metric across grouped configurations.
     Each box shows the spread across catchments for one config.
     Individual catchment points overlaid as colored dots.
     """
@@ -659,14 +637,13 @@ def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel=
     config_key_list = []
     box_data = []
     group_colors = {'Uncoupled': '#aec7e8', 'Coupled (GloGEM)': '#ffbb78',
-                    'Daily': '#aec7e8', 'Subdaily': '#ffbb78',
-                    'Icemelt': '#c5b0d5'}
+                    'Glacier Coupling': '#c7e9c0'}
 
     for group_label, configs in valid_groups:
         for key, config_label in configs:
             x_labels.append(f"{config_label}\n({group_label})")
             config_key_list.append(key)
-            vals = [catchment_results[gid]['metrics'][key]['KGE']
+            vals = [catchment_results[gid]['metrics'][key][metric]
                     for gid in catchment_ids
                     if key in catchment_results[gid]['metrics']]
             box_data.append(vals)
@@ -691,7 +668,7 @@ def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel=
         for gid in catchment_ids:
             m = catchment_results[gid]['metrics'].get(key)
             if m:
-                ax.scatter(i + 1, m['KGE'], color=catch_colors[gid],
+                ax.scatter(i + 1, m[metric], color=catch_colors[gid],
                            s=60, zorder=5, edgecolors='black', linewidth=0.5)
 
     # Legend for catchments
@@ -704,7 +681,7 @@ def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel=
 
     ax.set_xticks(range(1, n_items + 1))
     ax.set_xticklabels(x_labels, rotation=45, ha='right')
-    ax.set_ylabel(ylabel)
+    ax.set_ylabel(metric)
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
@@ -727,8 +704,9 @@ def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel=
 ############ Plot 5d: Coupling Method Comparison ################################
 #--------------------------------------------------------------------------------
 
-def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir):
-    """Boxplot comparing KGE across glacier coupling methods."""
+def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir,
+                                    metric='KGE'):
+    """Boxplot comparing a metric across glacier coupling methods."""
     groups = [
         ('Glacier Coupling', [
             ('baseline', 'Uncoupled'),
@@ -738,7 +716,8 @@ def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir
         ]),
     ]
     _plot_grouped_boxplot(catchment_results, groups, plot_dir,
-                          'cross_catchment_coupling_method.png')
+                          f'cross_catchment_coupling_method_{metric}.png',
+                          metric=metric)
 
 
 #--------------------------------------------------------------------------------
@@ -749,8 +728,9 @@ def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir
 ############ Plot 5f: PET Method Comparison #####################################
 #--------------------------------------------------------------------------------
 
-def plot_pet_method_comparison(catchment_results, config_registry, plot_dir):
-    """Boxplot comparing KGE across PET estimation methods."""
+def plot_pet_method_comparison(catchment_results, config_registry, plot_dir,
+                               metric='KGE'):
+    """Boxplot comparing a metric across PET estimation methods."""
     groups = [
         ('Uncoupled', [
             ('baseline', 'ERA5 PET'),
@@ -762,7 +742,8 @@ def plot_pet_method_comparison(catchment_results, config_registry, plot_dir):
         ]),
     ]
     _plot_grouped_boxplot(catchment_results, groups, plot_dir,
-                          'cross_catchment_pet_method.png')
+                          f'cross_catchment_pet_method_{metric}.png',
+                          metric=metric)
 
 
 #--------------------------------------------------------------------------------
@@ -831,11 +812,11 @@ def _define_sensitivity_factors():
     ]
 
 
-def _compute_factor_deltas(catchment_results, factors):
+def _compute_factor_deltas(catchment_results, factors, metric='KGE'):
     """
-    Compute ΔKGE per factor per catchment.
+    Compute Δmetric per factor per catchment.
 
-    Returns dict: {factor_name: {gauge_id: [list of ΔKGE values across valid pairs]}}
+    Returns dict: {factor_name: {gauge_id: [list of Δmetric values across valid pairs]}}
     """
     catchment_ids = list(catchment_results.keys())
     factor_deltas = {}
@@ -847,7 +828,7 @@ def _compute_factor_deltas(catchment_results, factors):
             deltas = []
             for key_a, key_b, _ in factor['pairs']:
                 if key_a in m and key_b in m:
-                    deltas.append(m[key_b]['KGE'] - m[key_a]['KGE'])
+                    deltas.append(m[key_b][metric] - m[key_a][metric])
             if deltas:
                 factor_deltas[factor['name']][gid] = deltas
 
@@ -858,13 +839,14 @@ def _compute_factor_deltas(catchment_results, factors):
 ############ Plot 5f: Sensitivity Tornado #######################################
 #--------------------------------------------------------------------------------
 
-def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir):
+def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir,
+                             metric='KGE'):
     """
-    Tornado plot showing the range and mean of ΔKGE for each modeling factor.
+    Tornado plot showing the range and mean of Δmetric for each modeling factor.
     Bars show min-to-max range across all catchments and pairs; marker shows mean.
     """
     factors = _define_sensitivity_factors()
-    factor_deltas = _compute_factor_deltas(catchment_results, factors)
+    factor_deltas = _compute_factor_deltas(catchment_results, factors, metric=metric)
 
     # Collect stats per factor
     factor_stats = []
@@ -913,7 +895,7 @@ def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir):
     ax.set_yticks(y)
     ax.set_yticklabels([fs['name'] for fs in factor_stats])
     ax.axvline(x=0, color='black', linewidth=1)
-    ax.set_xlabel('ΔKGE')
+    ax.set_xlabel(f'Δ{metric}')
     ax.grid(True, alpha=0.3, axis='x')
 
     # Add sign labels on edges
@@ -926,7 +908,7 @@ def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir):
                 ha='right', va='bottom', alpha=0.7)
 
     plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_sensitivity_tornado.png'
+    save_path = plot_dir / f'cross_catchment_sensitivity_tornado_{metric}.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {save_path}")
@@ -936,14 +918,15 @@ def plot_sensitivity_tornado(catchment_results, config_registry, plot_dir):
 ############ Plot 5g: Factor Importance Heatmap #################################
 #--------------------------------------------------------------------------------
 
-def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir):
+def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir,
+                                   metric='KGE'):
     """
     Heatmap with catchments on y-axis and modeling factors on x-axis.
-    Cells colored by mean ΔKGE for that factor in that catchment.
-    Marginal bar on top shows mean |ΔKGE| across catchments (factor importance).
+    Cells colored by mean Δmetric for that factor in that catchment.
+    Marginal bar on top shows mean |Δmetric| across catchments (factor importance).
     """
     factors = _define_sensitivity_factors()
-    factor_deltas = _compute_factor_deltas(catchment_results, factors)
+    factor_deltas = _compute_factor_deltas(catchment_results, factors, metric=metric)
     catchment_ids = list(catchment_results.keys())
 
     # Filter to factors with data in at least one catchment
@@ -1006,7 +989,7 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
     bar_colors = ['#2ca02c' if d >= 0 else '#d62728' for d in mean_deltas]
     ax_bar.bar(range(n_factors), mean_deltas, color=bar_colors, edgecolor='black',
                linewidth=0.5, width=0.7)
-    ax_bar.set_ylabel('Mean ΔKGE')
+    ax_bar.set_ylabel(f'Mean Δ{metric}')
     ax_bar.axhline(y=0, color='black', linewidth=0.5)
     ax_bar.grid(True, alpha=0.3, axis='y')
     # Annotate bars
@@ -1044,11 +1027,11 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
     ax_heat.set_xticklabels(x_labels, rotation=45, ha='right')
     ax_heat.set_yticks(range(n_catch))
     ax_heat.set_yticklabels(y_labels)
-    fig.colorbar(im, cax=cax, label='Mean ΔKGE')
+    fig.colorbar(im, cax=cax, label=f'Mean Δ{metric}')
     plt.setp(ax_bar.get_xticklabels(), visible=False)
 
     plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_factor_importance.png'
+    save_path = plot_dir / f'cross_catchment_factor_importance_{metric}.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {save_path}")
@@ -1058,9 +1041,10 @@ def plot_factor_importance_heatmap(catchment_results, config_registry, plot_dir)
 #################### Plot 6: KGE Boxplot per Configuration ######################
 #--------------------------------------------------------------------------------
 
-def plot_kge_boxplot(catchment_results, config_registry, plot_dir):
+def plot_metric_boxplot(catchment_results, config_registry, plot_dir,
+                        metric='KGE'):
     """
-    Boxplot with one box per configuration, showing KGE spread across catchments.
+    Boxplot with one box per configuration, showing metric spread across catchments.
     Individual catchment points overlaid as colored dots.
     """
     catchment_ids = list(catchment_results.keys())
@@ -1070,14 +1054,13 @@ def plot_kge_boxplot(catchment_results, config_registry, plot_dir):
     catch_colors = {gid: catchment_results[gid]['catchment_info']['color'] for gid in catchment_ids}
     catch_names = {gid: catchment_results[gid]['catchment_info']['display_name'] for gid in catchment_ids}
 
-    # Collect KGE values per config
     box_data = []
     box_labels = []
     box_colors = []
     valid_keys = []
 
     for key in config_keys:
-        vals = [catchment_results[gid]['metrics'][key]['KGE']
+        vals = [catchment_results[gid]['metrics'][key][metric]
                 for gid in catchment_ids
                 if key in catchment_results[gid]['metrics']]
         if vals:
@@ -1087,7 +1070,7 @@ def plot_kge_boxplot(catchment_results, config_registry, plot_dir):
             valid_keys.append(key)
 
     if not box_data:
-        print("No data for boxplot")
+        print(f"No data for boxplot ({metric})")
         return
 
     fig, ax = plt.subplots(figsize=(max(12, len(valid_keys) * 1.0), 7))
@@ -1099,15 +1082,13 @@ def plot_kge_boxplot(catchment_results, config_registry, plot_dir):
         patch.set_facecolor(color)
         patch.set_alpha(0.4)
 
-    # Overlay individual catchment points
     for i, key in enumerate(valid_keys):
         for gid in catchment_ids:
             m = catchment_results[gid]['metrics'].get(key)
             if m:
-                ax.scatter(i + 1, m['KGE'], color=catch_colors[gid],
+                ax.scatter(i + 1, m[metric], color=catch_colors[gid],
                            s=60, zorder=5, edgecolors='black', linewidth=0.5)
 
-    # Legend for catchments
     legend_handles = [plt.Line2D([0], [0], marker='o', color='w',
                                   markerfacecolor=catch_colors[gid],
                                   markeredgecolor='black', markersize=8,
@@ -1117,12 +1098,12 @@ def plot_kge_boxplot(catchment_results, config_registry, plot_dir):
 
     ax.set_xticks(range(1, len(valid_keys) + 1))
     ax.set_xticklabels(box_labels, rotation=45, ha='right')
-    ax.set_ylabel('KGE')
+    ax.set_ylabel(metric)
     ax.grid(True, alpha=0.3, axis='y')
     ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
 
     plt.tight_layout()
-    save_path = plot_dir / 'cross_catchment_kge_boxplot.png'
+    save_path = plot_dir / f'cross_catchment_boxplot_{metric}.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {save_path}")
@@ -1406,11 +1387,49 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
              ['cross_catchment_heatmap_KGE.png', 'cross_catchment_heatmap_NSE.png'],
              catchment_results, config_registry, plot_dir)
 
-    run_plot("Configuration Ranking",
-             plot_configuration_ranking,
-             ['cross_catchment_config_ranking.png'],
-             catchment_results, config_registry, plot_dir)
+    # Generate plots for both KGE and NSE
+    for metric in ['KGE', 'NSE']:
+        run_plot(f"Configuration Ranking ({metric})",
+                 plot_configuration_ranking,
+                 [f'cross_catchment_config_ranking_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
 
+        run_plot(f"Coupling Effect (Delta-{metric})",
+                 plot_coupling_effect,
+                 [f'cross_catchment_coupling_effect_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
+
+        run_plot(f"Precipitation Forcing Comparison ({metric})",
+                 plot_precipitation_forcing_comparison,
+                 [f'cross_catchment_precip_forcing_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
+
+        run_plot(f"Coupling Method Comparison ({metric})",
+                 plot_coupling_method_comparison,
+                 [f'cross_catchment_coupling_method_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
+
+        run_plot(f"PET Method Comparison ({metric})",
+                 plot_pet_method_comparison,
+                 [f'cross_catchment_pet_method_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
+
+        run_plot(f"Sensitivity Tornado ({metric})",
+                 plot_sensitivity_tornado,
+                 [f'cross_catchment_sensitivity_tornado_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
+
+        run_plot(f"Factor Importance Heatmap ({metric})",
+                 plot_factor_importance_heatmap,
+                 [f'cross_catchment_factor_importance_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
+
+        run_plot(f"Metric Boxplot ({metric})",
+                 plot_metric_boxplot,
+                 [f'cross_catchment_boxplot_{metric}.png'],
+                 catchment_results, config_registry, plot_dir, metric=metric)
+
+    # Plots that don't vary by metric
     run_plot("Regime Comparison",
              plot_regime_comparison,
              ['cross_catchment_regime_comparison.png'],
@@ -1419,41 +1438,6 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
     run_plot("Glacier Contribution Comparison",
              plot_glacier_contribution_comparison,
              ['cross_catchment_glacier_contribution.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("Coupling Effect (Delta-KGE)",
-             plot_coupling_effect,
-             ['cross_catchment_coupling_effect.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("Precipitation Forcing Comparison",
-             plot_precipitation_forcing_comparison,
-             ['cross_catchment_precip_forcing.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("Coupling Method Comparison",
-             plot_coupling_method_comparison,
-             ['cross_catchment_coupling_method.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("PET Method Comparison",
-             plot_pet_method_comparison,
-             ['cross_catchment_pet_method.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("Sensitivity Tornado",
-             plot_sensitivity_tornado,
-             ['cross_catchment_sensitivity_tornado.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("Factor Importance Heatmap",
-             plot_factor_importance_heatmap,
-             ['cross_catchment_factor_importance.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("KGE Boxplot",
-             plot_kge_boxplot,
-             ['cross_catchment_kge_boxplot.png'],
              catchment_results, config_registry, plot_dir)
 
     run_plot("KGE Component Radar",
