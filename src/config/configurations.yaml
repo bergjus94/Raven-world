@@ -25,33 +25,21 @@ configurations:
     coupled: false
     glacier_source: 'none'
 
-  - key: 'subdaily'
-    display_name: 'HBV Subdaily'
-    color: '#aec7e8'
-    coupled: false
-    glacier_source: 'none'
-
-  - key: 'icimod'
-    display_name: 'HBV ICIMOD'
-    color: '#9467bd'
-    coupled: false
-    glacier_source: 'none'
-
   - key: 'har'
     display_name: 'HBV HAR'
     color: '#d62728'
     coupled: false
     glacier_source: 'none'
 
-  - key: 'subdaily_aspect'
-    display_name: 'HBV Subdaily Aspect'
-    color: '#98df8a'
-    coupled: false
-    glacier_source: 'none'
-
   - key: 'oudin'
     display_name: 'HBV Oudin'
     color: '#c5b0d5'
+    coupled: false
+    glacier_source: 'none'
+
+  - key: 'tphipr'
+    display_name: 'HBV TPHiPr'
+    color: '#843c39'
     coupled: false
     glacier_source: 'none'
 
@@ -62,33 +50,21 @@ configurations:
     coupled: true
     glacier_source: 'glogem'
 
-  - key: 'glogem_subdaily'
-    display_name: 'HBV GloGEM Subdaily'
-    color: '#e377c2'
-    coupled: true
-    glacier_source: 'glogem'
-
-  - key: 'glogem_icimod'
-    display_name: 'HBV GloGEM ICIMOD'
-    color: '#ff9896'
-    coupled: true
-    glacier_source: 'glogem'
-
   - key: 'glogem_har'
     display_name: 'HBV GloGEM HAR'
     color: '#bcbd22'
     coupled: true
     glacier_source: 'glogem'
 
-  - key: 'glogem_subdaily_aspect'
-    display_name: 'HBV GloGEM Subdaily Aspect'
-    color: '#17becf'
-    coupled: true
-    glacier_source: 'glogem'
-
   - key: 'glogem_oudin'
     display_name: 'HBV GloGEM Oudin'
     color: '#e6ab02'
+    coupled: true
+    glacier_source: 'glogem'
+
+  - key: 'glogem_tphipr'
+    display_name: 'HBV GloGEM TPHiPr'
+    color: '#de9ed6'
     coupled: true
     glacier_source: 'glogem'
 
@@ -105,27 +81,6 @@ configurations:
     coupled: true
     glacier_source: 'glogem'
     icemelt_mode: true
-
-  - key: 'icemelt_subdaily'
-    display_name: 'HBV Icemelt Subdaily'
-    color: '#7f7f7f'
-    coupled: true
-    glacier_source: 'glogem'
-    icemelt_mode: true
-
-  # === UNCOUPLED with TPHiPr precipitation ===
-  - key: 'tphipr'
-    display_name: 'HBV TPHiPr'
-    color: '#843c39'
-    coupled: false
-    glacier_source: 'none'
-
-  # === COUPLED with TPHiPr precipitation ===
-  - key: 'glogem_tphipr'
-    display_name: 'HBV GloGEM TPHiPr'
-    color: '#de9ed6'
-    coupled: true
-    glacier_source: 'glogem'
 
 # =============================================================================
 # Catchment registry for cross-catchment comparison
@@ -149,10 +104,25 @@ catchments:
     validation_start: '1999-12-31'
     validation_end: '2014-12-31'
 
+  - gauge_id: '0104'
+    display_name: 'Kunhar @ Naran'
+    validation_start: '1995-12-31'
+    validation_end: '2008-12-31'
+
+  - gauge_id: '0105'
+    display_name: 'Kunhar @ Garhi Habibullah'
+    validation_start: '1995-12-31'
+    validation_end: '2009-12-31'
+
   - gauge_id: '0116'
     display_name: 'Gilgit @ Gilgit'
     validation_start: '1990-12-31'
     validation_end: '1998-12-31'
+
+  - gauge_id: '0117'
+    display_name: 'Indus @ Kharmong'
+    validation_start: '1990-12-31'
+    validation_end: '1997-12-31'
 
   - gauge_id: '0118'
     display_name: 'Shigar @ Shigar'
@@ -161,6 +131,11 @@ catchments:
 
   - gauge_id: '0119'
     display_name: 'Astore @ Doyian'
+    validation_start: '1989-12-31'
+    validation_end: '1997-12-31'
+
+  - gauge_id: '0120'
+    display_name: 'Gilgit @ Alam Br'
     validation_start: '1989-12-31'
     validation_end: '1997-12-31'
 

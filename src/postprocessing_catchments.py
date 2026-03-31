@@ -339,7 +339,7 @@ def plot_regime_comparison(catchment_results, config_registry, plot_dir,
     config_colors_map = {c['key']: c['color'] for c in config_registry}
 
     if regime_configs is None:
-        # Default: show baseline + glogem + glogem_subdaily (or all if few)
+        # Default: show all available configs
         regime_configs = [c['key'] for c in config_registry]
 
     n_catch = len(catchment_ids)
@@ -517,11 +517,9 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
     # Define coupling pairs: (uncoupled_key, coupled_key, pair_label)
     pairs = [
         ('baseline', 'glogem', 'Baseline → GloGEM'),
-        ('subdaily', 'glogem_subdaily', 'Subdaily → GloGEM Subdaily'),
-        ('icimod', 'glogem_icimod', 'ICIMOD → GloGEM ICIMOD'),
         ('har', 'glogem_har', 'HAR → GloGEM HAR'),
-        ('subdaily_aspect', 'glogem_subdaily_aspect', 'Aspect → GloGEM Aspect'),
         ('oudin', 'glogem_oudin', 'Oudin → GloGEM Oudin'),
+        ('tphipr', 'glogem_tphipr', 'TPHiPr → GloGEM TPHiPr'),
     ]
 
     # Filter pairs to those that exist in at least one catchment
@@ -608,24 +606,22 @@ def plot_coupling_effect(catchment_results, config_registry, plot_dir):
 ############## Plot 5b: Subdaily Effect #########################################
 #--------------------------------------------------------------------------------
 
-def plot_subdaily_effect(catchment_results, config_registry, plot_dir):
-    """Boxplot comparing KGE of daily vs subdaily timestep configs."""
+def plot_precipitation_forcing_comparison(catchment_results, config_registry, plot_dir):
+    """Boxplot comparing KGE across precipitation forcing datasets."""
     groups = [
         ('Uncoupled', [
-            ('baseline', 'Daily'),
-            ('subdaily', 'Subdaily'),
+            ('baseline', 'ERA5'),
+            ('har', 'HAR'),
+            ('tphipr', 'TPHiPr'),
         ]),
         ('Coupled (GloGEM)', [
-            ('glogem', 'Daily'),
-            ('glogem_subdaily', 'Subdaily'),
-        ]),
-        ('Icemelt', [
-            ('icemelt', 'Daily'),
-            ('icemelt_subdaily', 'Subdaily'),
+            ('glogem', 'ERA5'),
+            ('glogem_har', 'HAR'),
+            ('glogem_tphipr', 'TPHiPr'),
         ]),
     ]
     _plot_grouped_boxplot(catchment_results, groups, plot_dir,
-                          'cross_catchment_subdaily_effect.png')
+                          'cross_catchment_precip_forcing.png')
 
 
 #--------------------------------------------------------------------------------
@@ -727,24 +723,6 @@ def _plot_grouped_boxplot(catchment_results, groups, plot_dir, filename, ylabel=
     print(f"Saved: {save_path}")
 
 
-def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
-    """Boxplot comparing KGE across meteorological forcing datasets."""
-    groups = [
-        ('Uncoupled', [
-            ('baseline', 'ERA5'),
-            ('har', 'HAR'),
-            ('tphipr', 'TPHiPr'),
-        ]),
-        ('Coupled (GloGEM)', [
-            ('glogem', 'ERA5'),
-            ('glogem_har', 'HAR'),
-            ('glogem_tphipr', 'TPHiPr'),
-        ]),
-    ]
-    _plot_grouped_boxplot(catchment_results, groups, plot_dir,
-                          'cross_catchment_meteo_forcing.png')
-
-
 #--------------------------------------------------------------------------------
 ############ Plot 5d: Coupling Method Comparison ################################
 #--------------------------------------------------------------------------------
@@ -752,16 +730,11 @@ def plot_meteo_forcing_comparison(catchment_results, config_registry, plot_dir):
 def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir):
     """Boxplot comparing KGE across glacier coupling methods."""
     groups = [
-        ('Daily', [
+        ('Glacier Coupling', [
             ('baseline', 'Uncoupled'),
-            ('glogem', 'TSLA'),
-            ('glogem_gmb', 'GMB'),
+            ('glogem', 'GloGEM TSLA'),
+            ('glogem_gmb', 'GloGEM GMB'),
             ('icemelt', 'Icemelt'),
-        ]),
-        ('Subdaily', [
-            ('subdaily', 'Uncoupled'),
-            ('glogem_subdaily', 'TSLA'),
-            ('icemelt_subdaily', 'Icemelt'),
         ]),
     ]
     _plot_grouped_boxplot(catchment_results, groups, plot_dir,
@@ -772,42 +745,24 @@ def plot_coupling_method_comparison(catchment_results, config_registry, plot_dir
 ############ Plot 5e: ET Method Comparison ######################################
 #--------------------------------------------------------------------------------
 
-def plot_et_method_comparison(catchment_results, config_registry, plot_dir):
-    """Boxplot comparing KGE across PET methods."""
+#--------------------------------------------------------------------------------
+############ Plot 5f: PET Method Comparison #####################################
+#--------------------------------------------------------------------------------
+
+def plot_pet_method_comparison(catchment_results, config_registry, plot_dir):
+    """Boxplot comparing KGE across PET estimation methods."""
     groups = [
         ('Uncoupled', [
-            ('baseline', 'ERA5'),
-            ('har', 'HAR'),
-            ('oudin', 'Oudin'),
+            ('baseline', 'ERA5 PET'),
+            ('oudin', 'Oudin PET'),
         ]),
         ('Coupled (GloGEM)', [
-            ('glogem', 'ERA5'),
-            ('glogem_har', 'HAR'),
-            ('glogem_oudin', 'Oudin'),
+            ('glogem', 'ERA5 PET'),
+            ('glogem_oudin', 'Oudin PET'),
         ]),
     ]
     _plot_grouped_boxplot(catchment_results, groups, plot_dir,
-                          'cross_catchment_et_method.png')
-
-
-#--------------------------------------------------------------------------------
-############ Plot 5f: Landuse Effect ############################################
-#--------------------------------------------------------------------------------
-
-def plot_landuse_effect(catchment_results, config_registry, plot_dir):
-    """Boxplot comparing KGE across landuse datasets (ESA vs ICIMOD)."""
-    groups = [
-        ('Uncoupled', [
-            ('baseline', 'ESA'),
-            ('icimod', 'ICIMOD'),
-        ]),
-        ('Coupled (GloGEM)', [
-            ('glogem', 'ESA'),
-            ('glogem_icimod', 'ICIMOD'),
-        ]),
-    ]
-    _plot_grouped_boxplot(catchment_results, groups, plot_dir,
-                          'cross_catchment_landuse_effect.png')
+                          'cross_catchment_pet_method.png')
 
 
 #--------------------------------------------------------------------------------
@@ -828,23 +783,12 @@ def _define_sensitivity_factors():
         {
             'name': 'Uncoupled →\nGloGEM TSLA',
             'pairs': [
-                ('baseline', 'glogem', 'Daily ERA5'),
-                ('subdaily', 'glogem_subdaily', 'Subdaily ERA5'),
-                ('har', 'glogem_har', 'Daily HAR'),
-                ('oudin', 'glogem_oudin', 'Daily Oudin'),
-                ('subdaily_aspect', 'glogem_subdaily_aspect', 'Subdaily Aspect'),
-                ('icimod', 'glogem_icimod', 'ICIMOD'),
+                ('baseline', 'glogem', 'ERA5'),
+                ('har', 'glogem_har', 'HAR'),
+                ('oudin', 'glogem_oudin', 'Oudin'),
+                ('tphipr', 'glogem_tphipr', 'TPHiPr'),
             ],
             'sign_label': ('Uncoupled better', 'Coupled better'),
-        },
-        {
-            'name': 'Daily →\nSubdaily',
-            'pairs': [
-                ('baseline', 'subdaily', 'Uncoupled ERA5'),
-                ('glogem', 'glogem_subdaily', 'Coupled ERA5'),
-                ('icemelt', 'icemelt_subdaily', 'Icemelt'),
-            ],
-            'sign_label': ('Daily better', 'Subdaily better'),
         },
         {
             'name': 'ERA5 →\nHAR Forcing',
@@ -873,25 +817,16 @@ def _define_sensitivity_factors():
         {
             'name': 'GloGEM TSLA →\nIcemelt',
             'pairs': [
-                ('glogem', 'icemelt', 'Daily'),
-                ('glogem_subdaily', 'icemelt_subdaily', 'Subdaily'),
+                ('glogem', 'icemelt', 'ERA5'),
             ],
             'sign_label': ('TSLA better', 'Icemelt better'),
         },
         {
             'name': 'GloGEM TSLA →\nGloGEM GMB',
             'pairs': [
-                ('glogem', 'glogem_gmb', 'Daily'),
+                ('glogem', 'glogem_gmb', 'ERA5'),
             ],
             'sign_label': ('TSLA better', 'GMB better'),
-        },
-        {
-            'name': 'ESA Landuse →\nICIMOD Landuse',
-            'pairs': [
-                ('baseline', 'icimod', 'Uncoupled'),
-                ('glogem', 'glogem_icimod', 'Coupled'),
-            ],
-            'sign_label': ('ESA better', 'ICIMOD better'),
         },
     ]
 
@@ -1491,14 +1426,9 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
              ['cross_catchment_coupling_effect.png'],
              catchment_results, config_registry, plot_dir)
 
-    run_plot("Subdaily Effect (Delta-KGE)",
-             plot_subdaily_effect,
-             ['cross_catchment_subdaily_effect.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("Meteorological Forcing Comparison",
-             plot_meteo_forcing_comparison,
-             ['cross_catchment_meteo_forcing.png'],
+    run_plot("Precipitation Forcing Comparison",
+             plot_precipitation_forcing_comparison,
+             ['cross_catchment_precip_forcing.png'],
              catchment_results, config_registry, plot_dir)
 
     run_plot("Coupling Method Comparison",
@@ -1506,14 +1436,9 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
              ['cross_catchment_coupling_method.png'],
              catchment_results, config_registry, plot_dir)
 
-    run_plot("ET Method Comparison",
-             plot_et_method_comparison,
-             ['cross_catchment_et_method.png'],
-             catchment_results, config_registry, plot_dir)
-
-    run_plot("Landuse Effect",
-             plot_landuse_effect,
-             ['cross_catchment_landuse_effect.png'],
+    run_plot("PET Method Comparison",
+             plot_pet_method_comparison,
+             ['cross_catchment_pet_method.png'],
              catchment_results, config_registry, plot_dir)
 
     run_plot("Sensitivity Tornado",
