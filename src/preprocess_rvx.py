@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import date
 import numpy as np
 import rasterio
+from paths import get_paths
 
 
 #--------------------------------------------------------------------------------
@@ -53,19 +54,23 @@ def create_header(gauge_id: str, model, author='Justine Berg',
 
 #---------------------------------------------------------------------------------
 
-def get_hrus_by_elevation_band(model_dir, gauge_id):
+def get_hrus_by_elevation_band(model_dir, gauge_id, topo_dir=None):
     """
     Load HRU shapefile and create a list of HRU IDs for each elevation band.
-    
+
     Args:
-        model_dir: Directory containing model files
-        gauge_id: ID of the gauge
-        
+        model_dir: Directory containing model files (unused if topo_dir provided)
+        gauge_id: ID of the gauge (unused if topo_dir provided)
+        topo_dir: Path to topo_files directory (preferred; overrides model_dir/gauge_id)
+
     Returns:
         Dictionary with elevation bands as keys and lists of HRU IDs as values
     """
     # Load HRU shapefile
-    hru_path = Path(model_dir, f'catchment_{gauge_id}', 'topo_files', 'HRU.shp')
+    if topo_dir is not None:
+        hru_path = Path(topo_dir) / 'HRU.shp'
+    else:
+        hru_path = Path(model_dir, f'catchment_{gauge_id}', 'topo_files', 'HRU.shp')
     hru_gdf = gpd.read_file(hru_path)
     
     # Filter out landuse classes 7 and 8 if needed
@@ -91,12 +96,12 @@ def get_hrus_by_elevation_band(model_dir, gauge_id):
 #---------------------------------------------------------------------------------
 
 
-def create_rvh_file(model_dir, gauge_id, model_type, params, template):
+def create_rvh_file(model_dir, gauge_id, model_type, params, template, topo_dir=None):
     """Write Raven .rvh file by reading the HRU_table.csv file.
 
     Args:
         model_dir: Path or str
-            Directory containing model files
+            Directory containing model files (unused if topo_dir provided)
         gauge_id: str
             ID of the gauge
         model_type: str
@@ -105,6 +110,8 @@ def create_rvh_file(model_dir, gauge_id, model_type, params, template):
             Dictionary of model parameters
         template: bool
             Whether to create a template file (True) or a regular file (False)
+        topo_dir: Path or str, optional
+            Path to topo_files directory (preferred; overrides model_dir/gauge_id)
     """
     # Determine file paths
     if template is False:
@@ -117,7 +124,10 @@ def create_rvh_file(model_dir, gauge_id, model_type, params, template):
         file_path: Path = Path(model_dir, f'catchment_{gauge_id}', model_type, 'templates', file_name)
 
     # Read HRU table from CSV file
-    hru_table_path = Path(model_dir, f'catchment_{gauge_id}', 'topo_files', 'HRU_table.csv')
+    if topo_dir is not None:
+        hru_table_path = Path(topo_dir) / 'HRU_table.csv'
+    else:
+        hru_table_path = Path(model_dir, f'catchment_{gauge_id}', 'topo_files', 'HRU_table.csv')
     
     try:
         # Try to read the HRU table file
@@ -153,8 +163,8 @@ def create_rvh_file(model_dir, gauge_id, model_type, params, template):
     ]
     
     # Get HRUs by elevation band
-    hrus_by_band = get_hrus_by_elevation_band(model_dir, gauge_id)
-    
+    hrus_by_band = get_hrus_by_elevation_band(model_dir, gauge_id, topo_dir=topo_dir)
+
     # Create HRU groups section
     hru_groups = []
 
@@ -340,24 +350,29 @@ def forcing_block(coupled):
 
 #---------------------------------------------------------------------------------
 
-def get_gauge_location_from_dem(model_dir, gauge_id):
+def get_gauge_location_from_dem(model_dir, gauge_id, topo_dir=None):
     """
     Extract gauge location (lat, lon, elevation) from the lowest point in the DEM
-    
+
     Parameters
     ----------
     model_dir : Path or str
-        Directory containing model files
+        Directory containing model files (unused if topo_dir provided)
     gauge_id : str
-        ID of the gauge
-        
+        ID of the gauge (unused if topo_dir provided)
+    topo_dir : Path or str, optional
+        Path to topo_files directory (preferred; overrides model_dir/gauge_id)
+
     Returns
     -------
     tuple
         (latitude, longitude, elevation) of the lowest point in the DEM
     """
     # Path to clipped DEM
-    dem_path = Path(model_dir, f'catchment_{gauge_id}', 'topo_files', 'clipped_dem.tif')
+    if topo_dir is not None:
+        dem_path = Path(topo_dir) / 'clipped_dem.tif'
+    else:
+        dem_path = Path(model_dir, f'catchment_{gauge_id}', 'topo_files', 'clipped_dem.tif')
     
     if not dem_path.exists():
         raise FileNotFoundError(f"DEM file not found: {dem_path}")
@@ -481,7 +496,8 @@ def write_rvt(gauge_id: str,
               params,
               coupled = False,
               author='Justine Berg',
-              template = False):
+              template = False,
+              topo_dir = None):
     """Write to Raven .rvt file.
 
     Args:
@@ -499,12 +515,14 @@ def write_rvt(gauge_id: str,
             Author name
         template: bool
             Should a template file be created?
+        topo_dir: Path or str, optional
+            Path to topo_files directory (preferred; overrides model_dir/gauge_id)
     """
-    
+
     # Extract gauge location from DEM
     print(f"Extracting gauge location from DEM for gauge {gauge_id}...")
     try:
-        gauge_lat, gauge_lon, station_elevation = get_gauge_location_from_dem(model_dir, gauge_id)
+        gauge_lat, gauge_lon, station_elevation = get_gauge_location_from_dem(model_dir, gauge_id, topo_dir=topo_dir)
     except Exception as e:
         print(f"Error: Could not extract gauge location from DEM: {e}")
         print("Please check that the DEM file exists and is readable.")
@@ -1033,8 +1051,8 @@ def write_rvp_file(model_type, params, gauge_id, model_dir, template):
 
 #---------------------------------------------------------------------------------
 
-def write_rvi_file(start_date, end_date, gauge_id, model_type, cali_end_date, model_dir, params, template):
-    
+def write_rvi_file(start_date, end_date, gauge_id, model_type, cali_end_date, model_dir, params, template, topo_dir=None):
+
     if template is False:
         param_or_name = "init"
         file_name: str = f"{gauge_id}_{model_type}.rvi"
@@ -1043,8 +1061,8 @@ def write_rvi_file(start_date, end_date, gauge_id, model_type, cali_end_date, mo
         param_or_name = "names"
         file_name: str = f"{gauge_id}_{model_type}.rvi.tpl"
         file_path: Path = Path(model_dir,'catchment_' + str(gauge_id),model_type,'templates',file_name)
-        
-    hrus_by_band = get_hrus_by_elevation_band(model_dir, gauge_id)
+
+    hrus_by_band = get_hrus_by_elevation_band(model_dir, gauge_id, topo_dir=topo_dir)
     # Create elevation bands definition string
     elevation_bands = sorted(hrus_by_band.keys(), key=lambda x: int(x.split('-')[0]))
     hru_groups_definition = ":DefineHRUGroups " + " ".join(elevation_bands)

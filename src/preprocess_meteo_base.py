@@ -20,6 +20,7 @@ import logging
 import yaml
 from typing import Dict, List, Union, Optional, Any, Tuple
 from shapely.geometry import Polygon
+from paths import get_paths
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -93,29 +94,27 @@ class MeteoBase:
         self.model_type = self.config.get('model_type')
         self.debug = self.config.get('debug', False)
         self.coupled = self.config.get('coupled', False)
-        self.model_dir = self.main_dir / self.config.get('config_dir')
 
-        # Shared catchment-level directories (primary storage)
-        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
-        self.shared_plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'plots'
+        # Centralized path construction
+        paths = get_paths(self.config)
+        self.shared_data_dir = paths['data_obs_dir']
+        self.shared_plots_dir = paths['plots_dir']
 
-        # Model-specific directory (for backward compatibility)
-        self.model_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / self.model_type / 'data_obs'
-
-        # Use shared directories as primary output locations
+        # Primary output locations (shared)
         self.output_path = self.shared_data_dir
         self.plots_dir = self.shared_plots_dir
         self.spatial_plots_dir = self.plots_dir / 'spatial_overview'
         self.timeseries_plots_dir = self.plots_dir / 'time_series'
 
-        # Backward-compat alias
+        # Backward-compat aliases
         self.processed_data_dir = self.output_path
+        self.model_dir = paths['catchment_dir'].parent  # model_runs/
+        self.model_data_dir = self.shared_data_dir  # no longer separate
 
         # Create all directories
         self.spatial_plots_dir.mkdir(parents=True, exist_ok=True)
         self.timeseries_plots_dir.mkdir(parents=True, exist_ok=True)
         self.output_path.mkdir(parents=True, exist_ok=True)
-        self.model_data_dir.mkdir(parents=True, exist_ok=True)
 
         # Setup logger
         self.logger = self._setup_logger()

@@ -28,6 +28,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from preprocess_meteo_base import MeteoBase, normalize_coords
+from paths import get_paths
 
 #--------------------------------------------------------------------------------
 ############################### HARAnalyzer Class ###############################
@@ -1800,8 +1801,10 @@ class HARGridWeightsGenerator(MeteoBase):
         super().__init__(namelist_path, force_reprocess)
 
         # GridWeights-specific paths
-        self.out_dir = self.shared_data_dir
-        self.out_HRU_shape_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'topo_files' / 'HRU.shp'
+        paths = get_paths(self.config)
+        self.out_dir = self.shared_data_dir  # HAR NC files stay in data_obs
+        self.gridweights_dir = paths['topo_dir']  # GridWeights in topo variant (HRU-dependent)
+        self.out_HRU_shape_dir = paths['topo_dir'] / 'HRU.shp'
 
         self.logger.info(f"HAR GridWeights Generator initialized for gauge {self.gauge_id}")
 
@@ -1820,7 +1823,7 @@ class HARGridWeightsGenerator(MeteoBase):
         self.logger.info(f"Generating HAR grid weights for catchment {self.gauge_id}")
         
         # Check if GridWeights file already exists
-        gridweights_file = self.out_dir / 'GridWeights_HAR.txt'
+        gridweights_file = self.gridweights_dir / 'GridWeights_HAR.txt'
         
         if gridweights_file.exists() and not self.force_reprocess:
             self.logger.info(f"✅ GridWeights_HAR.txt already exists")
@@ -2076,8 +2079,8 @@ class HARGridWeightsGenerator(MeteoBase):
         cell_id = list(relative_area['cell_id'])
         rel_area = list(relative_area['normalized_relative_area'])
 
-        filename = self.out_dir / 'GridWeights_HAR.txt'
-        
+        filename = self.gridweights_dir / 'GridWeights_HAR.txt'
+
         self.logger.info(f"Writing HAR grid weights to {filename}")
         
         with open(filename, 'w') as ff:

@@ -7,10 +7,12 @@
 #--------------------------------------------------------------------------------
 
 import sys
+import argparse
 import traceback
 from pathlib import Path
 import yaml
 import matplotlib
+from paths import get_paths
 matplotlib.use('Agg')  # Prevent plots from showing in image viewer
 
 # Import preprocessing modules
@@ -451,12 +453,10 @@ def main(namelist_path: str, force_reprocess: bool = False):
     # Print output directory
     with open(namelist_path, "r") as f:
         nml = yaml.safe_load(f)
-    main_dir = Path(nml.get('main_dir', ''))
-    config_dir = nml.get('config_dir', '')
-    output_dir = main_dir / config_dir / f"catchment_{gauge_id}" / model_type
-    
+    paths = get_paths(nml)
+
     print(f"\n📁 Output directory:")
-    print(f"   {output_dir}")
+    print(f"   {paths['model_dir']}")
     print("\n" + "=" * 70)
     
     return True
@@ -466,65 +466,65 @@ def main(namelist_path: str, force_reprocess: bool = False):
 ################################# CLI interface #################################
 #--------------------------------------------------------------------------------
 
-def print_usage():
-    """Print usage information"""
-    print("""
-Usage: python create_input_files.py <namelist_path> [options]
-
-Arguments:
-    namelist_path       Path to the namelist YAML file
-
-Options:
-    --force, -f         Force reprocessing of existing files
-    --help, -h          Show this help message
-
-Example:
-    python create_input_files.py ../namelist_0102.yaml
-    python create_input_files.py ../namelist_0102.yaml --force
-
-Supported configurations:
-    meteo_source:   'ERA5Land', 'HAR'
-    model_type:     'HBV', 'HYMOD', 'MOHYSE', 'HMETS'
-    coupled:        true/false (enables GloGEM glacier processing)
-""")
-
-
 if __name__ == "__main__":
-    # Parse command line arguments
-    if len(sys.argv) < 2:
-        print_usage()
-        sys.exit(1)
-    
-    # Check for help flag
-    if sys.argv[1] in ['--help', '-h']:
-        print_usage()
-        sys.exit(0)
-    
-    namelist_path = sys.argv[1]
-    
-    # Check for force flag
-    force_reprocess = False
-    if len(sys.argv) > 2:
-        if sys.argv[2] in ['--force', '-f']:
-            force_reprocess = True
-            print("🔄 Force reprocessing enabled")
-    
-    # Check if namelist exists
-    if not Path(namelist_path).exists():
-        print(f"❌ Error: Namelist file not found: {namelist_path}")
-        sys.exit(1)
-    
-    # Run main function
-    try:
-        success = main(namelist_path, force_reprocess=force_reprocess)
-        if success:
-            sys.exit(0)
-        else:
+    parser = argparse.ArgumentParser(
+        description='Create all Raven input files from a namelist or composable config.',
+        epilog="""
+Examples:
+    # Legacy: single namelist file
+    python create_input_files.py ../namelist_0102.yaml
+
+    # Composable: catchment + config + model
+    python create_input_files.py --catchment 0101 --config glogem --model HBV
+
+    # Force reprocessing
+    python create_input_files.py --catchment 0101 --config baseline -f
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument('namelist', nargs='?', default=None,
+                        help='Path to namelist YAML file (legacy mode)')
+    parser.add_argument('--catchment', '-c', type=str,
+                        help='Catchment ID (e.g. 0101)')
+    parser.add_argument('--config', '-C', type=str, default='baseline',
+                        help='Configuration name (e.g. glogem, baseline)')
+    parser.add_argument('--model', '-m', type=str, default='HBV',
+                        help='Hydrological model (HBV, HMETS, HYMOD, MOHYSE)')
+    parser.add_argument('--env', type=str, default=None,
+                        help='Environment: "local" or "server" (auto-detected)')
+    parser.add_argument('--force', '-f', action='store_true',
+                        help='Force reprocessing of existing files')
+    args = parser.parse_args()
+
+    # Resolve namelist path
+    if args.namelist:
+        namelist_path = args.namelist
+        if not Path(namelist_path).exists():
+            print(f"Error: Namelist file not found: {namelist_path}")
             sys.exit(1)
+    elif args.catchment:
+        from config_merge import load_config
+        _, namelist_path = load_config(
+            catchment=args.catchment,
+            configuration=args.config,
+            model=args.model,
+            env=args.env,
+        )
+        namelist_path = str(namelist_path)
+        print(f"Merged config: catchment={args.catchment}, config={args.config}, model={args.model}")
+    else:
+        parser.error("Provide either a namelist path or --catchment")
+
+    if args.force:
+        print("Force reprocessing enabled")
+
+    try:
+        success = main(namelist_path, force_reprocess=args.force)
+        sys.exit(0 if success else 1)
     except KeyboardInterrupt:
-        print("\n\n⚠️ Processing interrupted by user")
+        print("\n\nProcessing interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Fatal error: {e}")
+        print(f"\nFatal error: {e}")
         traceback.print_exc()
         sys.exit(1)

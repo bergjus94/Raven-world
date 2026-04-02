@@ -42,6 +42,8 @@ script_dir = Path(__file__).parent.absolute()
 src_dir = script_dir / 'src'
 sys.path.insert(0, str(src_dir))
 
+from paths import get_paths
+
 # All 5 ISIMIP3b models
 ALL_MODELS = [
     "GFDL-ESM4", "IPSL-CM6A-LR", "MPI-ESM1-2-HR", "MRI-ESM2-0", "UKESM1-0-LL",
@@ -140,10 +142,10 @@ def phase1_create_inputs(namelist_path, nml, force=False, future_proj=None, logg
     logger.info("=" * 70)
 
     # Check if .rv* files already exist
-    config_dir = nml.get('config_dir', '02_model_setups')
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
-    model_dir = Path(nml['main_dir']) / config_dir / f"catchment_{gauge_id}" / model_type
+    paths = get_paths(nml)
+    model_dir = paths['model_dir']
 
     rv_extensions = ['.rvi', '.rvp', '.rvc', '.rvh', '.rvt']
     file_prefix = f"{gauge_id}_{model_type}"
@@ -213,8 +215,8 @@ def phase2_calibrate(namelist_path, nml, iterations=None, ngs=None, logger=None)
 
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
-    config_dir = nml.get('config_dir', '02_model_setups')
-    output_dir = Path(nml['main_dir']) / config_dir / f"catchment_{gauge_id}" / model_type / 'output'
+    paths = get_paths(nml)
+    output_dir = paths['output_dir']
 
     # Check if already calibrated
     verified_csv = output_dir / f"{gauge_id}_{model_type}_VERIFIED_best_params.csv"
@@ -240,7 +242,6 @@ def phase2_calibrate(namelist_path, nml, iterations=None, ngs=None, logger=None)
         import postprocessing
         config = {
             'main_dir': nml['main_dir'],
-            'config_dir': config_dir,
             'gauge_id': gauge_id,
             'model_type': model_type,
             'start_date': nml.get('start_date', '2000-01-01'),
@@ -250,6 +251,7 @@ def phase2_calibrate(namelist_path, nml, iterations=None, ngs=None, logger=None)
             'coupled': nml.get('coupled', False),
             'raven_executable': nml.get('raven_executable'),
             'glogem_dir': nml.get('glogem_dir', None),
+            '_config_key': nml.get('_config_key', 'baseline'),
         }
         results = postprocessing.run_complete_postprocessing(
             config=config,
@@ -282,14 +284,14 @@ def phase3_convert_params(nml, logger=None):
 
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
-    config_dir = nml.get('config_dir', '02_model_setups')
-    suffix = derive_config_suffix(config_dir)
+    config_key = nml.get('_config_key', 'baseline')
+    paths = get_paths(nml)
 
-    output_dir = Path(nml['main_dir']) / config_dir / f"catchment_{gauge_id}" / model_type / 'output'
+    output_dir = paths['output_dir']
     verified_csv = output_dir / f"{gauge_id}_{model_type}_VERIFIED_best_params.csv"
 
     # Output path
-    calibrated_yaml = script_dir / 'src' / 'config' / f"calibrated_params_{suffix}_{gauge_id}.yaml"
+    calibrated_yaml = script_dir / 'src' / 'config' / f"calibrated_params_{config_key}_{gauge_id}.yaml"
 
     # Check if already exists
     if calibrated_yaml.exists():
@@ -357,7 +359,7 @@ def phase3_convert_params(nml, logger=None):
 
     # Write with header comment
     header = (
-        f"# Calibrated Parameters for catchment {gauge_id} — {model_type} {suffix.replace('_', ' ').title()}\n"
+        f"# Calibrated Parameters for catchment {gauge_id} — {model_type} {config_key.replace('_', ' ').title()}\n"
         f"# Source: {verified_csv.relative_to(Path(nml['main_dir']))}\n"
     )
     if obj_value is not None:
@@ -431,8 +433,7 @@ def phase4_generate_future_namelist(namelist_path, nml, calibrated_yaml, future_
         return future_path
 
     gauge_id = str(nml['gauge_id'])
-    config_dir = nml.get('config_dir', '02_model_setups')
-    suffix = derive_config_suffix(config_dir)
+    config_key = nml.get('_config_key', 'baseline')
     main_dir = nml['main_dir']
 
     # Start from a deep copy of the historical namelist
@@ -445,9 +446,6 @@ def phase4_generate_future_namelist(namelist_path, nml, calibrated_yaml, future_
     future_nml['end_date'] = future_proj.get('end_date', FUTURE_DEFAULTS['end_date'])
     future_nml['warm_up_date'] = future_proj.get('warm_up_date', FUTURE_DEFAULTS['warm_up_date'])
     future_nml['cali_end_date'] = future_nml['end_date']  # No calibration split in future mode
-
-    # Config directory: append _future
-    future_nml['config_dir'] = config_dir + '_future'
 
     # Scenario: pick first non-historical scenario for GloGEM file naming
     # (historical is only used for CMIP6 bias correction training, not for GloGEM)
@@ -464,7 +462,7 @@ def phase4_generate_future_namelist(namelist_path, nml, calibrated_yaml, future_
         future_nml['params_dir'] = rel_params
 
     # CMIP6 settings
-    future_nml['cmip6_dir'] = f"{main_dir}/01_data/CMIP6"
+    future_nml['cmip6_dir'] = nml.get('cmip6_dir', f"{main_dir}/01_data/CMIP6")
     models = future_proj.get('models', FUTURE_DEFAULTS['models'])
     future_nml['cmip6_models'] = models
     # Ensure 'historical' is included (needed for bias correction) without duplicates
@@ -538,12 +536,8 @@ def phase6_ensemble_diagnostics(nml, future_proj, logger=None):
 
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
-    config_dir = nml.get('config_dir', '02_model_setups')
-    if not config_dir.endswith('_future'):
-        config_dir = config_dir + '_future'
-    main_dir = Path(nml['main_dir'])
-
-    output_dir = main_dir / config_dir / f"catchment_{gauge_id}" / model_type / 'output'
+    paths = get_paths(nml)
+    output_dir = paths['output_dir']
 
     if not output_dir.exists():
         logger.warning(f"  Future output directory not found: {output_dir}")
@@ -675,7 +669,16 @@ Examples:
         """,
     )
 
-    parser.add_argument('namelist', type=str, help='Path to historical namelist YAML')
+    parser.add_argument('namelist', nargs='?', default=None,
+                        help='Path to historical namelist YAML (legacy mode)')
+    parser.add_argument('--catchment', '-c', type=str,
+                        help='Catchment ID (e.g. 0101)')
+    parser.add_argument('--config', '-C', type=str, default='baseline',
+                        help='Configuration name (e.g. glogem, baseline)')
+    parser.add_argument('--model', '-m', type=str, default='HBV',
+                        help='Hydrological model (HBV, HMETS, HYMOD, MOHYSE)')
+    parser.add_argument('--env', type=str, default=None,
+                        help='Environment: "local" or "server" (auto-detected)')
     parser.add_argument('--skip-preprocessing', action='store_true',
                         help='Skip Phase 1 (assume .rv* files exist)')
     parser.add_argument('--skip-calibration', action='store_true',
@@ -702,14 +705,26 @@ Examples:
 
     args = parser.parse_args()
 
-    # Load namelist
-    namelist_path = Path(args.namelist).resolve()
-    if not namelist_path.exists():
-        print(f"Error: Namelist not found: {namelist_path}")
-        sys.exit(1)
-
-    with open(namelist_path) as f:
-        nml = yaml.safe_load(f)
+    # Load namelist (legacy or composable mode)
+    if args.namelist:
+        namelist_path = Path(args.namelist).resolve()
+        if not namelist_path.exists():
+            print(f"Error: Namelist not found: {namelist_path}")
+            sys.exit(1)
+        with open(namelist_path) as f:
+            nml = yaml.safe_load(f)
+    elif args.catchment:
+        from config_merge import load_config
+        nml, namelist_path = load_config(
+            catchment=args.catchment,
+            configuration=args.config,
+            model=args.model,
+            env=args.env,
+        )
+        namelist_path = Path(namelist_path).resolve()
+        print(f"Merged config: catchment={args.catchment}, config={args.config}, model={args.model}")
+    else:
+        parser.error("Provide either a namelist path or --catchment")
 
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
@@ -766,11 +781,7 @@ Examples:
             # =================================================================
 
             # Phase 3: Convert params (still needed if YAML doesn't exist yet)
-            # Derive the historical config_dir by stripping _future suffix
             hist_nml = copy.deepcopy(nml)
-            hist_config_dir = nml.get('config_dir', '').replace('_future', '')
-            hist_nml['config_dir'] = hist_config_dir
-            # Recover historical dates from namelist for header comment
             calibrated_yaml = phase3_convert_params(hist_nml, logger=logger)
             phase_results['Phase 3: Params YAML'] = calibrated_yaml is not None
             if calibrated_yaml is None:

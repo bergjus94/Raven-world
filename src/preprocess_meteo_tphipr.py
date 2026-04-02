@@ -27,6 +27,7 @@ from shapely.geometry import Polygon
 import warnings
 warnings.filterwarnings('ignore')
 
+from paths import get_paths
 from preprocess_meteo_base import MeteoBase, normalize_coords
 
 #--------------------------------------------------------------------------------
@@ -269,9 +270,8 @@ class TPHiPrGridWeightsGenerator(MeteoBase):
     def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
         super().__init__(namelist_path, force_reprocess)
 
-        self.out_HRU_shape_dir = (
-            self.model_dir / f'catchment_{self.gauge_id}' / 'topo_files' / 'HRU.shp'
-        )
+        self._topo_dir = get_paths(self.config)['topo_dir']
+        self.out_HRU_shape_dir = self._topo_dir / 'HRU.shp'
         self.logger.info(f"TPHiPrGridWeightsGenerator initialized for gauge {self.gauge_id}")
 
     #---------------------------------------------------------------------------------
@@ -285,7 +285,7 @@ class TPHiPrGridWeightsGenerator(MeteoBase):
         gpd.GeoDataFrame
             Relative area table (empty if file already existed).
         """
-        gridweights_file = self.shared_data_dir / 'GridWeights_TPHiPr.txt'
+        gridweights_file = self._topo_dir / 'GridWeights_TPHiPr.txt'
 
         if gridweights_file.exists() and not self.force_reprocess:
             self.logger.info("✅ GridWeights_TPHiPr.txt already exists – skipping")
@@ -446,7 +446,7 @@ class TPHiPrGridWeightsGenerator(MeteoBase):
         cell_id = list(relative_area['cell_id'])
         rel_area = list(relative_area['normalized_relative_area'])
 
-        filename = self.shared_data_dir / 'GridWeights_TPHiPr.txt'
+        filename = self._topo_dir / 'GridWeights_TPHiPr.txt'
         self.logger.info(f"Writing {filename}")
 
         with open(filename, 'w') as ff:

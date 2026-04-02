@@ -18,6 +18,10 @@ from datetime import datetime
 import yaml
 import matplotlib.dates as mdates
 
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
+from paths import get_paths
+
 class RavenSCEUA(object):
     """SPOTPY setup for SCEUA algorithm with Raven hydrological model"""
     
@@ -38,16 +42,17 @@ class RavenSCEUA(object):
         self.script_dir = Path(__file__).parent.absolute()
         self.main_dir = Path(main_dir) if main_dir else self.script_dir
 
-        # Require config_dir and construct model_dir from it
-        if not config_dir:
-            raise ValueError("config_dir is required. Please provide a valid configuration directory path.")
-        self.config_dir = config_dir
-        self.model_dir = self.main_dir / config_dir / f'catchment_{gauge_id}' / model_type
-
-        # Derived paths
-        self.output_path = self.model_dir / 'output'
+        # Centralized path construction
+        paths = get_paths(namelist or {
+            'main_dir': str(self.main_dir),
+            'gauge_id': gauge_id,
+            'model_type': model_type,
+            '_config_key': config_dir or 'baseline',
+        })
+        self.model_dir = paths['model_dir']
+        self.output_path = paths['output_dir']
         self.output_path.mkdir(parents=True, exist_ok=True)
-        self.template_dir = self.model_dir / 'templates'
+        self.template_dir = paths['template_dir']
 
         # Parameters directory - use params_dir if provided, otherwise default
         if params_dir:
@@ -87,7 +92,6 @@ class RavenSCEUA(object):
         print(f"Validation period ends: {vali_end_date}")
         print(f"Objective function: {obj_function}")
         print(f"Main directory: {self.main_dir}")
-        print(f"Config directory: {self.config_dir}")
         print(f"Model directory: {self.model_dir}")
         print(f"Coupled mode: {coupled}")
         print(f"Results will be saved to: {self.results_file}")
@@ -1401,12 +1405,20 @@ def parse_arguments():
     
     # Optional arguments
     parser.add_argument('--obj_function', type=str, default='KGE', help='Objective function (KGE, NSE, etc.)')
-    parser.add_argument('--iterations', type=int, default=20, help='Number of iterations')
-    parser.add_argument('--ngs', type=int, default=8, help='Number of complexes for SCEUA')
+    parser.add_argument('--iterations', type=int, default=None, help='Number of iterations')
+    parser.add_argument('--ngs', type=int, default=None, help='Number of complexes for SCEUA')
     parser.add_argument('--main_dir', type=str, help='Main directory for Raven Switzerland project')
     parser.add_argument('--config_dir', type=str, help='Configuration directory (e.g., coupled or uncoupled)')
     parser.add_argument('--coupled', action='store_true', help='Use coupled model')
     parser.add_argument('--namelist', type=str, help='Path to namelist file')
+    parser.add_argument('--catchment', '-c', type=str,
+                        help='Catchment ID (composable config mode)')
+    parser.add_argument('--config', '-C', type=str, default='baseline',
+                        help='Configuration name (composable config mode)')
+    parser.add_argument('--model', '-m', type=str, default=None,
+                        help='Hydrological model (composable config mode)')
+    parser.add_argument('--env', type=str, default=None,
+                        help='Environment: "local" or "server"')
     parser.add_argument('--params-dir', type=str, help='Path to parameters YAML file')
     parser.add_argument('--raven-exe', type=str, help='Path to Raven executable')
     
@@ -1420,6 +1432,18 @@ def parse_arguments():
     params_dir = getattr(args, 'params_dir', None)
     raven_exe = getattr(args, 'raven_exe', None)
     
+    # Composable config mode: merge layers into a temp namelist
+    if args.catchment and not args.namelist:
+        from config_merge import load_config
+        nml_dict, tmp_path = load_config(
+            catchment=args.catchment,
+            configuration=args.config,
+            model=args.model or 'HBV',
+            env=args.env,
+        )
+        args.namelist = str(tmp_path)
+        print(f"Merged config: catchment={args.catchment}, config={args.config}, model={args.model or 'HBV'}")
+
     # Load from namelist if provided
     if args.namelist:
         namelist_path = Path(args.namelist)
@@ -1438,9 +1462,13 @@ def parse_arguments():
             if not main_dir and 'main_dir' in namelist:
                 main_dir = namelist['main_dir']
             
-            if not config_dir and 'config_dir' in namelist:
-                config_dir = namelist['config_dir']
-                print(f"Using config_dir from namelist: {config_dir}")
+            if not config_dir:
+                if 'config_dir' in namelist:
+                    config_dir = namelist['config_dir']
+                elif '_config_key' in namelist:
+                    config_dir = namelist['_config_key']
+                if config_dir:
+                    print(f"Using config from namelist: {config_dir}")
             
             if not args.coupled and 'coupled' in namelist:
                 args.coupled = namelist['coupled']
@@ -1465,13 +1493,13 @@ def parse_arguments():
                 raven_exe = namelist['raven_executable']
                 print(f"Using Raven executable from namelist: {raven_exe}")
             
-            # Set iterations from namelist if available
-            if 'calibration' in namelist and 'iterations' in namelist['calibration']:
+            # Set iterations from namelist if not provided on CLI
+            if args.iterations is None and 'calibration' in namelist and 'iterations' in namelist['calibration']:
                 args.iterations = namelist['calibration']['iterations']
                 print(f"Using iterations={args.iterations} from namelist")
 
-            # Set ngs (number of complexes) from namelist if available
-            if 'calibration' in namelist and 'ngs' in namelist['calibration']:
+            # Set ngs (number of complexes) from namelist if not provided on CLI
+            if args.ngs is None and 'calibration' in namelist and 'ngs' in namelist['calibration']:
                 args.ngs = namelist['calibration']['ngs']
                 print(f"Using ngs={args.ngs} from namelist")
 
@@ -1480,6 +1508,12 @@ def parse_arguments():
                 args.obj_function = namelist['calibration']['metrics']['primary']
                 print(f"Using objective function={args.obj_function} from namelist")
     
+    # Final defaults if neither CLI nor namelist provided values
+    if args.iterations is None:
+        args.iterations = 20
+    if args.ngs is None:
+        args.ngs = 8
+
     # Validate required arguments
     if not args.gauge_id:
         parser.error("Gauge ID is required")

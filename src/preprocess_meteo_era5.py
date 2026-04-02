@@ -27,6 +27,7 @@ from shapely.geometry import Polygon
 import warnings
 warnings.filterwarnings('ignore')
 
+from paths import get_paths
 from preprocess_meteo_base import MeteoBase, normalize_coords
 
 #--------------------------------------------------------------------------------
@@ -2118,8 +2119,10 @@ class GridWeightsGenerator(MeteoBase):
             self.era5_data_dir = self.main_dir / self.era5_data_dir
 
         # GridWeights-specific paths
-        self.out_dir = self.shared_data_dir  # Where GridWeights.txt will be saved
-        self.out_HRU_shape_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'topo_files' / 'HRU.shp'
+        paths = get_paths(self.config)
+        self.out_dir = self.shared_data_dir  # Meteo NC files stay in data_obs
+        self.gridweights_dir = paths['topo_dir']  # GridWeights in topo variant (HRU-dependent)
+        self.out_HRU_shape_dir = paths['topo_dir'] / 'HRU.shp'
 
         # Log the output directory
         self.logger.info(f"Processing for gauge {self.gauge_id} using basin {self.basin_id} meteo data")
@@ -2449,8 +2452,8 @@ class GridWeightsGenerator(MeteoBase):
         HRU_list = list(relative_area[hru_id_col])
         cell_id = list(relative_area['cell_id'])
         rel_area = list(relative_area['normalized_relative_area'])
-        filename = self.out_dir / 'GridWeights.txt'
-        
+        filename = self.gridweights_dir / 'GridWeights.txt'
+
         self.logger.debug(f"Writing to {filename}")
         self.logger.debug(f"Number of HRUs: {number_HRUs}, Number of cells: {number_cells}")
         self.logger.debug(f"Number of weight entries: {len(HRU_list)}")
@@ -2499,7 +2502,7 @@ class GridWeightsGenerator(MeteoBase):
         self.logger.info(f"Generating ERA5-Land grid weights for catchment {self.gauge_id}")
         
         # ✅ CHECK 1: Skip if GridWeights.txt already exists
-        gridweights_file = self.out_dir / 'GridWeights.txt'
+        gridweights_file = self.gridweights_dir / 'GridWeights.txt'
         
         if gridweights_file.exists():
             self.logger.info(f"✅ GridWeights.txt already exists at {gridweights_file}")
@@ -2510,7 +2513,7 @@ class GridWeightsGenerator(MeteoBase):
             return gpd.GeoDataFrame()
 
         # ✅ CHECK 2: Check for cached overlay calculation
-        cache_file = self.out_dir / 'grid_overlay_cache.pkl'
+        cache_file = self.gridweights_dir / 'grid_overlay_cache.pkl'
         
         if cache_file.exists():
             self.logger.info("📦 Loading cached overlay data...")

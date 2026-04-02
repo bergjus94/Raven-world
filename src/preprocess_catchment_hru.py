@@ -24,6 +24,7 @@ from rasterio.transform import xy
 from pyproj import Transformer
 from matplotlib.patches import Arrow
 import yaml
+from paths import get_paths
 from pysheds.grid import Grid as pyshedsGrid
 
 #--------------------------------------------------------------------------------
@@ -98,7 +99,12 @@ class CatchmentProcessor:
         self.main_dir = Path(self.config['main_dir'])
         self.coupled = self.config.get('coupled', False)
         self._irrigation_variable = self.config.get('irrigation_variable', 'discharge').lower()
-        self.model_dir = self.main_dir / self.config.get('config_dir') / f"catchment_{self.gauge_id}"
+
+        # Centralized path construction
+        paths = get_paths(self.config)
+        self.model_dir = paths['catchment_dir']
+        self._topo_dir = paths['topo_dir']
+        self._topo_shared_dir = paths['topo_shared_dir']
 
         # Data directories (format paths with gauge_id) - CORRECTED PATHS
         self.shape_dir = self.main_dir / self.config['shape_dir'].format(gauge_id=self.gauge_id)
@@ -223,20 +229,20 @@ class CatchmentProcessor:
         """
         Create output directory structure
         """
-        topo_dir = Path(self.model_dir, 'topo_files')
-        topo_dir.mkdir(parents=True, exist_ok=True)
-        
+        self._topo_shared_dir.mkdir(parents=True, exist_ok=True)
+        self._topo_dir.mkdir(parents=True, exist_ok=True)
+
         if self.debug:
             plot_dir = Path(self.model_dir, 'plots')
             plot_dir.mkdir(parents=True, exist_ok=True)
-            
-        self.logger.debug(f"Created directory structure at {topo_dir}")
+
+        self.logger.debug(f"Created directory structure at {self._topo_dir}")
 
     #---------------------------------------------------------------------------------
 
     def get_path(self, filename: str) -> Path:
         """
-        Get path to a file in the topo_files directory
+        Get path to a file in the topo variant directory.
 
         Parameters
         ----------
@@ -246,9 +252,9 @@ class CatchmentProcessor:
         Returns
         -------
         Path
-            Full path to the file
+            Full path to the file in the variant-specific topo directory
         """
-        return Path(self.model_dir, 'topo_files', filename)
+        return self._topo_dir / filename
 
     #---------------------------------------------------------------------------------
 
@@ -741,8 +747,11 @@ class CatchmentProcessor:
         if self.dem_data is None:
             self.clip_srtm_dem()
         
-        # Determine landuse source path
-        landuse_source_path = self.main_dir / self.config['landuse_dir']
+        # Determine landuse source path — use ICIMOD-specific file when requested
+        if self.landuse_source == 'ICIMOD' and 'landuse_dir_icimod' in self.config:
+            landuse_source_path = self.main_dir / self.config['landuse_dir_icimod']
+        else:
+            landuse_source_path = self.main_dir / self.config['landuse_dir']
         
         if not landuse_source_path.exists():
             raise FileNotFoundError(f"Landuse file not found: {landuse_source_path}")
@@ -1290,29 +1299,24 @@ class CatchmentProcessor:
 
         # Three-way glacier handling:
         # 1. uncoupled: burn as GLACIER (class 7) for criteria-based discretization
-        # 2. icemelt mode (coupled + icemelt): burn as ROCK (class 5) — snow accumulates, no glacier melt
-        # 3. coupled (non-icemelt): leave for aggregated 2-HRU creation below
+        # 2. icemelt mode (coupled + icemelt): aggregated 2-HRU (large+small) labeled as ROCK (class 5)
+        # 3. coupled (non-icemelt): aggregated 2-HRU labeled as MASKED_GLACIER (class 8)
         if self.glacier_data is not None and not self.coupled:
             glacier_mask = (self.glacier_data > 0) & np.isfinite(self.glacier_data)
             self.landuse_data.values[glacier_mask] = 7
             self.logger.info(f"Burned {int(np.count_nonzero(glacier_mask))} glacier pixels as landuse class 7 for criteria-based discretization")
-        elif self.glacier_data is not None and self.icemelt_mode:
-            glacier_mask = (self.glacier_data > 0) & np.isfinite(self.glacier_data)
-            self.landuse_data.values[glacier_mask] = 5
-            self.logger.info(f"Burned {int(np.count_nonzero(glacier_mask))} glacier pixels as landuse class 5 (ROCK) for icemelt mode")
 
         # Debug info after data loading but before processing
         if self.debug:
             self.logger.debug("Debugging catchment processing")
 
-            topo_dir = Path(self.model_dir, 'topo_files')
-            self.logger.debug(f"Topo directory: {topo_dir} (exists: {topo_dir.exists()})")
+            self.logger.debug(f"Topo directory: {self._topo_dir} (exists: {self._topo_dir.exists()})")
 
-            if topo_dir.exists():
-                files = list(topo_dir.glob('*'))
+            if self._topo_dir.exists():
+                files = list(self._topo_dir.glob('*'))
                 self.logger.debug(f"Topo files: {[f.name for f in files]}")
 
-                glacier_raster = topo_dir / 'glacier_raster.tif'
+                glacier_raster = self._topo_dir / 'glacier_raster.tif'
                 if glacier_raster.exists():
                     with rasterio.open(glacier_raster) as src:
                         data = src.read(1)
@@ -1386,9 +1390,11 @@ class CatchmentProcessor:
             'W': ((self.aspect_data >= 225) & (self.aspect_data < 315))
         }
         
-        # Handle glaciers: create aggregated glacier HRUs only when coupled (non-icemelt)
-        # When not coupled or in icemelt mode, glacier pixels participate in criteria-based discretization
-        if self.glacier_data is not None and self.coupled and not self.icemelt_mode:
+        # Handle glaciers: create aggregated glacier HRUs when coupled (both discharge and icemelt)
+        # - coupled (non-icemelt): 2 HRUs labeled MASKED_GLACIER (class 8)
+        # - icemelt: 2 HRUs labeled ROCK (class 5) — snow accumulates, icemelt applied via irrigation
+        # When not coupled, glacier pixels participate in criteria-based discretization (class 7)
+        if self.glacier_data is not None and self.coupled:
             glacier_data_np = self.glacier_data
             # Get unique glacier IDs, filtering out NaN and infinite values
             valid_glacier_data = glacier_data_np[~np.isnan(glacier_data_np)]
@@ -1451,8 +1457,8 @@ class CatchmentProcessor:
                                 'Slope', 'Slope Min', 'Slope Max',
                                 'Aspect Class']:
                         columns[field].append(np.nan)
-                    # MASKED_GLACIER (8) when coupled (GloGEM external), GLACIER (7) when not
-                    columns['Land Use Class'].append(8 if self.coupled else 7)
+                    # ROCK (5) for icemelt, MASKED_GLACIER (8) for coupled, GLACIER (7) for uncoupled
+                    columns['Land Use Class'].append(5 if self.icemelt_mode else (8 if self.coupled else 7))
 
                     self.logger.info(f"Created aggregated glacier HRU {unit_id} with {len(rgi_ids)} glaciers")
                     unit_id += 1
@@ -1534,8 +1540,8 @@ class CatchmentProcessor:
                                 'Slope', 'Slope Min', 'Slope Max',
                                 'Aspect Class']:
                         columns[field].append(np.nan)
-                    # MASKED_GLACIER (8) when coupled (GloGEM external), GLACIER (7) when not
-                    columns['Land Use Class'].append(8 if self.coupled else 7)
+                    # ROCK (5) for icemelt, MASKED_GLACIER (8) for coupled, GLACIER (7) for uncoupled
+                    columns['Land Use Class'].append(5 if self.icemelt_mode else (8 if self.coupled else 7))
 
                     self.logger.info(f"Created LARGE glacier HRU {unit_id} with {len(large_glacier_ids)} glaciers")
                     self._large_glacier_hru_id = unit_id
@@ -1564,8 +1570,8 @@ class CatchmentProcessor:
                                 'Slope', 'Slope Min', 'Slope Max',
                                 'Aspect Class']:
                         columns[field].append(np.nan)
-                    # MASKED_GLACIER (8) when coupled (GloGEM external), GLACIER (7) when not
-                    columns['Land Use Class'].append(8 if self.coupled else 7)
+                    # ROCK (5) for icemelt, MASKED_GLACIER (8) for coupled, GLACIER (7) for uncoupled
+                    columns['Land Use Class'].append(5 if self.icemelt_mode else (8 if self.coupled else 7))
 
                     self.logger.info(f"Created SMALL glacier HRU {unit_id} with {len(small_glacier_ids)} glaciers")
                     self._small_glacier_hru_id = unit_id
@@ -1618,8 +1624,8 @@ class CatchmentProcessor:
                 elif criterion_name == 'landuse':
                     mask_unit &= (landuse_np == criterion)
             
-            # Exclude glacier cells only when coupled (non-icemelt) — already assigned to aggregated glacier HRUs
-            if self.glacier_data is not None and self.coupled and not self.icemelt_mode:
+            # Exclude glacier cells when coupled (both discharge and icemelt) — already assigned to aggregated glacier HRUs
+            if self.glacier_data is not None and self.coupled:
                 mask_unit &= (map_unit_ids == 0)
                 
             # Skip empty HRUs

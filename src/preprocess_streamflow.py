@@ -14,6 +14,7 @@ import logging
 import yaml
 from datetime import datetime
 import matplotlib.pyplot as plt
+from paths import get_paths
 
 #--------------------------------------------------------------------------------
 ############################### StreamflowProcessor Class #######################
@@ -64,8 +65,7 @@ class StreamflowProcessor:
         self.model_type = config.get('model_type')
         self.debug = config.get('debug', False)
         self.coupled = config.get('coupled', False)
-        self.model_dir = self.main_dir / config.get('config_dir')
-        
+
         # Get streamflow file path
         # Keep the raw template so callers can override gauge_id after construction
         self.stream_dir_template = config.get('stream_dir', '')
@@ -74,15 +74,16 @@ class StreamflowProcessor:
             self.stream_file = self.main_dir / stream_dir
         else:
             self.stream_file = Path(stream_dir)
-            
-        # Define output paths
-        self.output_path = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
-        self.plots_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'plots'
-        
+
+        # Centralized path construction
+        paths = get_paths(config)
+        self.output_path = paths['data_obs_dir']
+        self.plots_dir = paths['plots_dir']
+
         # Create output directories if they don't exist
         os.makedirs(self.output_path, exist_ok=True)
         os.makedirs(self.plots_dir, exist_ok=True)
-        
+
         # Define standard output files
         self.output_file = self.output_path / output_filename
         self.plot_file = self.plots_dir / f'streamflow_timeseries_gauge_{self.gauge_id}.png'

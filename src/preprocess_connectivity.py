@@ -18,6 +18,7 @@ from rasterio.transform import xy
 from pyproj import Transformer
 import yaml
 from pysheds.grid import Grid as pyshedsGrid
+from paths import get_paths
 
 #--------------------------------------------------------------------------------
 ############################### HRU connectivity ################################
@@ -56,10 +57,12 @@ class HRUConnectivityCalculator:
             # Extract parameters from namelist
             self.gauge_id = namelist_config['gauge_id']
             self.model_type = namelist_config['model_type']
-            main_dir = Path(namelist_config['main_dir'])
             coupled = namelist_config.get('coupled', False)
-            self.model_dir = main_dir / namelist_config.get('config_dir') / f"catchment_{self.gauge_id}"
-            
+            paths = get_paths(namelist_config)
+            self.model_dir = paths['catchment_dir']
+            self._topo_dir = paths['topo_dir']
+            self.shared_data_dir = paths['data_obs_dir']
+
             # Optional parameters from namelist or defaults
             self.mode = namelist_config.get('nconnect', 'single')
             self.min_area_threshold = namelist_config.get('min_area_threshold', 0.01)
@@ -70,14 +73,13 @@ class HRUConnectivityCalculator:
             # Required parameters
             self.model_dir = Path(config['model_dir'])
             self.gauge_id = config['gauge_id']
-            
+            self._topo_dir = self.model_dir / 'topo_files'
+            self.shared_data_dir = self.model_dir / 'data_obs'
+
             # Optional parameters
             self.mode = config.get('mode', config.get('nconnect', 'single'))
             self.min_area_threshold = config.get('min_area_threshold', 0.01)
             self.debug = config.get('debug', False)
-        
-        # ✅ NEW: Define SHARED catchment-level directory (primary storage)
-        self.shared_data_dir = self.model_dir / 'data_obs'
         
         # ✅ NEW: Define MODEL-SPECIFIC directory (for backward compatibility)
         if hasattr(self, 'model_type'):
@@ -159,12 +161,8 @@ class HRUConnectivityCalculator:
         Path
             Full path to the file
         """
-        # ✅ NEW: Save connectivity files in SHARED data_obs directory
-        if filename in ['connections.rvh', 'HRU_connectivity.csv']:
-            return self.shared_data_dir / filename
-        else:
-            # All other files go to topo_files
-            return self.model_dir / 'topo_files' / filename
+        # All connectivity files go to topo variant directory (HRU-dependent)
+        return self._topo_dir / filename
 
     def load_data(self) -> None:
         """
@@ -889,15 +887,15 @@ class MultiSubbasinConnectivityCalculator:
 
         self.gauge_id     = namelist['gauge_id']
         self.model_type   = namelist.get('model_type', 'HBV')
-        main_dir          = Path(namelist['main_dir'])
         self.nconnect     = namelist.get('nconnect', 'single')
         self.min_area_threshold = namelist.get('min_area_threshold', 0.01)
         self.debug        = namelist.get('debug', False)
         self.subbasins_config = namelist.get('subbasins', [])
 
-        self.catchment_dir = main_dir / namelist['config_dir'] / f'catchment_{self.gauge_id}'
-        self.topo_dir      = self.catchment_dir / 'topo_files'
-        self.output_dir    = self.catchment_dir / 'data_obs'
+        paths = get_paths(namelist)
+        self.catchment_dir = paths['catchment_dir']
+        self.topo_dir      = paths['topo_shared_dir']
+        self.output_dir    = paths['data_obs_dir']
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.logger = logging.getLogger(self.__class__.__name__)

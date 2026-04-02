@@ -26,6 +26,7 @@ import numpy as np
 import rasterio
 from pyproj import Transformer
 import preprocess_general
+from paths import get_paths, get_relative_data_obs, get_relative_topo
 
 #--------------------------------------------------------------------------------
 ############################ MOHYSE Preprocessor Class ##########################
@@ -63,7 +64,6 @@ class MOHYSEPreprocessor:
         # Store basic configuration
         self.gauge_id = str(namelist['gauge_id'])
         self.main_dir = Path(namelist['main_dir'])
-        self.config_dir = namelist['config_dir']
         self.model_type = namelist['model_type']
         self.start_date = namelist['start_date']
         self.end_date = namelist['end_date']
@@ -120,21 +120,23 @@ class MOHYSEPreprocessor:
         self.gauge_lon = None
         self.station_elevation = None
         
-        # Set up directory structure
-        self.model_dir = self.main_dir / self.config_dir
-        self.catchment_dir = self.model_dir / f'catchment_{self.gauge_id}'
-        self.mohyse_dir = self.catchment_dir / self.model_type
-        self.templates_dir = self.mohyse_dir / 'templates'
-        self.data_obs_dir = self.mohyse_dir / 'data_obs'
-        self.topo_files_dir = self.catchment_dir / 'topo_files'
-        self.shared_data_dir = self.catchment_dir / 'data_obs'
+        # Set up directory structure (centralized paths)
+        paths = get_paths(namelist)
+        self.catchment_dir = paths['catchment_dir']
+        self.mohyse_dir = paths['model_dir']
+        self.templates_dir = paths['template_dir']
+        self.topo_files_dir = paths['topo_dir']
+        self.shared_data_dir = paths['data_obs_dir']
+        self.data_obs_dir = self.shared_data_dir
+        self._rel_data_obs = get_relative_data_obs(namelist)
+        self._rel_topo = get_relative_topo(namelist)
 
         # Ensure directories exist
         self._create_directories()
         
     def _create_directories(self):
         """Create necessary directories if they don't exist."""
-        for directory in [self.mohyse_dir, self.templates_dir, self.data_obs_dir]:
+        for directory in [self.mohyse_dir, self.templates_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -389,7 +391,7 @@ class MOHYSEPreprocessor:
         lateral_connections = [
             "",
             "#:LateralConnections",
-            ":RedirectToFile  ../data_obs/connections.rvh",
+            f":RedirectToFile  {self._rel_topo}/connections.rvh",
             "#:EndLateralConnections",
             ""
         ]
@@ -603,7 +605,7 @@ class MOHYSEPreprocessor:
                 for t in f:
                     ff.write(f"{t}\n")
             ff.writelines(gauge_info)
-            ff.write(f":RedirectToFile ../data_obs/Q_daily.rvt\n")
+            ff.write(f":RedirectToFile {self._rel_data_obs}/Q_daily.rvt\n")
 
     def _create_rvt_file_multi_subbasin(self, template: bool = False):
         """Write .rvt for a multi-subbasin namelist (one :Gauge block per subbasin)."""
@@ -633,7 +635,7 @@ class MOHYSEPreprocessor:
                 ff.writelines(gauge_info)
 
                 if gauged:
-                    ff.write(f":RedirectToFile ../data_obs/Q_daily_{sb_gid}.rvt\n\n")
+                    ff.write(f":RedirectToFile {self._rel_data_obs}/Q_daily_{sb_gid}.rvt\n\n")
 
     def _create_gauge_info(self, gauge_lat: float, gauge_lon: float,
                            station_elevation: float,
@@ -718,7 +720,7 @@ class MOHYSEPreprocessor:
     def _create_forcing_block(self, param_or_name: str) -> Dict[str, List[str]]:
         """Create forcing data configuration for RVT file (ERA5-Land or HAR)."""
         if self.meteo_source == 'HAR':
-            grid_weights_file_path = "../data_obs/GridWeights_HAR.txt"
+            grid_weights_file_path = f"{self._rel_topo}/GridWeights_HAR.txt"
             dim_names = "west_east south_north time"
             precip_tuple = ('Rainfall', 'RAINFALL', 'har_precip.nc', 'prcp')
             other_types = [
@@ -727,7 +729,7 @@ class MOHYSEPreprocessor:
                 ('Minimum Temperature', 'TEMP_MIN', 'har_temp_min.nc',  't2_min'),
             ]
         else:  # ERA5 (default)
-            grid_weights_file_path = "../data_obs/GridWeights.txt"
+            grid_weights_file_path = f"{self._rel_topo}/GridWeights.txt"
             dim_names = "longitude latitude time"
             precip_tuple = ('Rainfall', 'RAINFALL', 'era5_land_precip.nc', 'tp')
             other_types = [
@@ -758,7 +760,7 @@ class MOHYSEPreprocessor:
                 ('Minimum Temperature', 'TEMP_MIN',
                  f'cordex_{model_id}_{scenario}_temp_min.nc',  't2m'),
             ]
-            grid_weights_file_path = "../data_obs/GridWeights.txt"
+            grid_weights_file_path = f"{self._rel_topo}/GridWeights.txt"
             precip_weights_file    = grid_weights_file_path
             dim_names        = "longitude latitude time"
             precip_dim_names = dim_names
@@ -782,7 +784,7 @@ class MOHYSEPreprocessor:
                 ('Minimum Temperature', 'TEMP_MIN',
                  f'cmip6_{model_id}_{scenario}_temp_min.nc',  't2m'),
             ]
-            grid_weights_file_path = "../data_obs/GridWeights.txt"
+            grid_weights_file_path = f"{self._rel_topo}/GridWeights.txt"
             precip_weights_file    = grid_weights_file_path
             dim_names        = "longitude latitude time"
             precip_dim_names = dim_names
@@ -791,7 +793,7 @@ class MOHYSEPreprocessor:
         # ✅ Override precipitation source if TPHiPr is requested
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_tuple = ('Rainfall', 'RAINFALL', 'tphipr_precip.nc', 'prcp')
-            precip_weights_file = "../data_obs/GridWeights_TPHiPr.txt"
+            precip_weights_file = f"{self._rel_topo}/GridWeights_TPHiPr.txt"
             precip_dim_names = "longitude latitude time"
 
         # Get optional precip correction parameters
@@ -811,7 +813,7 @@ class MOHYSEPreprocessor:
         forcing_data[name] = [
             f":GriddedForcing           {name}",
             f"    :ForcingType          {forcing_type}",
-            f"    :FileNameNC           ../data_obs/{filename}",
+            f"    :FileNameNC           {self._rel_data_obs}/{filename}",
             f"    :VarNameNC            {var_name}",
             f"    :DimNamesNC           {precip_dim_names}",
             precip_elev_line,
@@ -827,7 +829,7 @@ class MOHYSEPreprocessor:
             forcing_data[name] = [
                 f":GriddedForcing           {name}",
                 f"    :ForcingType          {forcing_type}",
-                f"    :FileNameNC           ../data_obs/{filename}",
+                f"    :FileNameNC           {self._rel_data_obs}/{filename}",
                 f"    :VarNameNC            {var_name}",
                 f"    :DimNamesNC           {dim_names}",
                 "    :ElevationVarNameNC   elevation",
@@ -840,11 +842,11 @@ class MOHYSEPreprocessor:
         forcing_data['Irrigation'] = [
             ":GriddedForcing           Irrigation",
             "    :ForcingType          IRRIGATION",
-            "    :FileNameNC           ../data_obs/irrigation.nc",
+            f"    :FileNameNC           {self._rel_data_obs}/irrigation.nc",
             "    :VarNameNC            data",
             "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
             "    :ElevationVarNameNC   elevation",
-            "    :RedirectToFile       ../data_obs/GridWeights_Irrigation.txt",
+            f"    :RedirectToFile       {self._rel_topo}/GridWeights_Irrigation.txt",
             ":EndGriddedForcing",
             ''
         ]

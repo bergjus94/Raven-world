@@ -9,6 +9,7 @@ from typing import Dict, List, Union, Optional, Any, Tuple
 import yaml
 from datetime import datetime, timedelta
 import traceback
+from paths import get_paths
 
 
 # Maps namelist irrigation_variable value → topo_files CSV filename
@@ -89,16 +90,21 @@ class GloGEMProcessor:
         self.coupled = config.get('coupled', False)
         self.future = config.get('future', False)
 
-        self.model_dir = self.main_dir / config.get('config_dir')
+        # Centralized path construction
+        paths = get_paths(config)
+        self._topo_dir = paths['topo_dir']
 
-        # ✅ UPDATED: GloGEM directory now contains NetCDF files
+        # GloGEM directory now contains NetCDF files
         self.glogem_dir = config.get('glogem_dir')
         if self.glogem_dir:
             self.glogem_dir = Path(self.main_dir, self.glogem_dir.format(gauge_id=self.gauge_id))
-        
+
         # Shared catchment-level directory (canonical location for irrigation files)
-        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        self.shared_data_dir = paths['data_obs_dir']
         self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Backward-compat alias used throughout this file
+        self.model_dir = paths['catchment_dir'].parent  # model_runs/
         
         # Setup logger
         self.logger = self._setup_logger()
@@ -138,7 +144,7 @@ class GloGEMProcessor:
     def _load_glacier_hru_overlap(self) -> pd.DataFrame:
         """Load glacier_hru_overlap.csv (icemelt mode pixel-overlap table)."""
         overlap_path = (
-            Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_hru_overlap.csv"
+            self._topo_dir / "glacier_hru_overlap.csv"
         )
         if not overlap_path.exists():
             raise FileNotFoundError(
@@ -182,7 +188,7 @@ class GloGEMProcessor:
         self.logger.info("Getting glacier IDs from catchment...")
         
         # ✅ NEW: Read from glacier_id_mapping.csv instead of HRU shapefile
-        mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
+        mapping_path = self._topo_dir / "glacier_id_mapping.csv"
         
         if not mapping_path.exists():
             self.logger.error(f"❌ Glacier ID mapping not found: {mapping_path}")
@@ -243,7 +249,7 @@ class GloGEMProcessor:
     def _load_area_map(self) -> Dict[str, float]:
         """Load glacier area mapping (padded numeric_id → area_km2) from glacier_id_mapping.csv."""
         mapping_path = (
-            Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
+            self._topo_dir / "glacier_id_mapping.csv"
         )
         if not mapping_path.exists():
             raise FileNotFoundError(f"Glacier ID mapping not found: {mapping_path}")
@@ -274,7 +280,7 @@ class GloGEMProcessor:
         end = pd.to_datetime(self.end_date)
         
         # Create output directory
-        topo_dir = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files"
+        topo_dir = self._topo_dir
         topo_dir.mkdir(parents=True, exist_ok=True)
         
         # Define output files and corresponding NetCDF components
@@ -455,7 +461,7 @@ class GloGEMProcessor:
         self.logger.info("Creating catchment-averaged glacier data (ALL, LARGE, SMALL)...")
 
         # Output path (model-specific for future runs)
-        topo_dir = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files"
+        topo_dir = self._topo_dir
         if self.future and self.glogem_model:
             output_path = topo_dir / f'GloGEM_catchment_averaged_{self.glogem_model}.csv'
         else:
@@ -566,7 +572,7 @@ class GloGEMProcessor:
         
         # ✅ NEW: Calculate catchment-scaled values
         # Load HRU shapefile to get total catchment area and glacier HRU areas
-        hru_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
+        hru_path = self._topo_dir / "HRU.shp"
         hru_gdf = gpd.read_file(hru_path)
         area_col = 'Area_km2' if 'Area_km2' in hru_gdf.columns else 'area'
         total_catchment_area_km2 = hru_gdf[area_col].sum()
@@ -583,7 +589,7 @@ class GloGEMProcessor:
             # Fall back to clipped_glacier.shp and compute area from GEOMETRY (not the
             # 'Area' attribute, which stores original RGI polygon areas before clipping
             # and is larger than the rasterized HRU-based area used by standard coupled configs).
-            glacier_shp_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "clipped_glacier.shp"
+            glacier_shp_path = self._topo_dir / "clipped_glacier.shp"
             if glacier_shp_path.exists():
                 glacier_gdf = gpd.read_file(glacier_shp_path)
                 # Project to UTM for accurate area calculation, then convert m² to km²
@@ -690,7 +696,7 @@ class GloGEMProcessor:
             return xr.open_dataset(output_path)
         
         # Load HRU data
-        hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+        hru_path = Path(self._topo_dir, 'HRU.shp')
         hru_gdf = gpd.read_file(hru_path)
         hru_gdf = hru_gdf.sort_values(by='HRU_ID').reset_index(drop=True)
         hru_gdf['HRU ID'] = range(1, len(hru_gdf) + 1)
@@ -1097,7 +1103,7 @@ class GloGEMProcessor:
         self.logger.info("Creating irrigation grid weights file...")
         
         # Load HRU data to get number of HRUs
-        hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+        hru_path = Path(self._topo_dir, 'HRU.shp')
         hru_gdf = gpd.read_file(hru_path)
         
         number_hrus = len(hru_gdf)
@@ -1108,7 +1114,7 @@ class GloGEMProcessor:
         rel_areas = np.ones(number_hrus)
         
         # ✅ Use shared directory
-        filename = self.shared_data_dir / 'GridWeights_Irrigation.txt'
+        filename = self._topo_dir / 'GridWeights_Irrigation.txt'
         
         with open(filename, 'w') as f:
             f.write('# ---------------------------------------------- \n')
@@ -1148,7 +1154,7 @@ class GloGEMProcessor:
         
         try:
             # ✅ NEW: Load mapping CSV to get TRUE RGI IDs (not reconstructed!)
-            mapping_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "glacier_id_mapping.csv"
+            mapping_path = self._topo_dir / "glacier_id_mapping.csv"
             
             if not mapping_path.exists():
                 self.logger.warning(f"Glacier ID mapping not found: {mapping_path}")
@@ -1228,8 +1234,8 @@ class GloGEMProcessor:
             
             # Create map visualization using clipped glacier shapefile
             # (HRU.shp Glacier_Cl field is truncated at 254 chars by shapefile format)
-            glacier_shp_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "clipped_glacier.shp"
-            catchment_shp_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "catchment_shape.shp"
+            glacier_shp_path = self._topo_dir / "clipped_glacier.shp"
+            catchment_shp_path = self._topo_dir / "catchment_shape.shp"
             self._create_validation_map(glacier_shp_path, catchment_shp_path, results, rgi_region_code)
             
             return results
@@ -1319,7 +1325,7 @@ class GloGEMProcessor:
                     catchment_gdf = catchment_gdf.to_crs(glacier_gdf.crs)
             else:
                 # Fall back to dissolving HRU.shp for an outline
-                hru_path = Path(self.model_dir) / f"catchment_{self.gauge_id}" / "topo_files" / "HRU.shp"
+                hru_path = self._topo_dir / "HRU.shp"
                 if hru_path.exists():
                     hru_gdf = gpd.read_file(hru_path)
                     if hru_gdf.crs != glacier_gdf.crs:
@@ -1411,7 +1417,7 @@ class GloGEMProcessor:
             # --- 1. Load GloGEM data ---
             # Try CSV first (from .dat files), then fall back to NetCDF
             csv_filename = _GLOGEM_CSV[self.irrigation_variable]
-            glogem_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', csv_filename)
+            glogem_path = Path(self._topo_dir, csv_filename)
 
             if glogem_path.exists():
                 self.logger.info(f"Loading GloGEM {self.irrigation_variable} from CSV: {glogem_path}")
@@ -1484,7 +1490,7 @@ class GloGEMProcessor:
                 return
             
             # --- 2. Load HRU data to get catchment and glacier areas ---
-            hru_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'HRU.shp')
+            hru_path = Path(self._topo_dir, 'HRU.shp')
             hru_gdf = gpd.read_file(hru_path)
             hru_gdf = hru_gdf.sort_values(by='HRU_ID').reset_index(drop=True)
             
@@ -1512,7 +1518,7 @@ class GloGEMProcessor:
             self.logger.info(f"RGI region code: {rgi_region_code}")
             
             # Load glacier shapefile to get individual glacier sizes for classification
-            glacier_shp_path = Path(self.model_dir, f'catchment_{self.gauge_id}', 'topo_files', 'clipped_glacier.shp')
+            glacier_shp_path = Path(self._topo_dir, 'clipped_glacier.shp')
             glacier_size_map = {}  # Maps RGI ID -> glacier size in km²
             if glacier_shp_path.exists():
                 glacier_gdf = gpd.read_file(glacier_shp_path)
@@ -1868,7 +1874,7 @@ class GloGEMProcessor:
             irrigation_nc = self.shared_data_dir / f'irrigation_{self.glogem_model}.nc'
         else:
             irrigation_nc = self.shared_data_dir / 'irrigation.nc'
-        irrigation_gridweights = self.shared_data_dir / 'GridWeights_Irrigation.txt'
+        irrigation_gridweights = self._topo_dir / 'GridWeights_Irrigation.txt'
         
         if irrigation_nc.exists() and irrigation_gridweights.exists() and not force_reprocess:
             self.logger.info("✅ All GloGEM processing outputs already exist")
@@ -1967,14 +1973,16 @@ class MultiSubbasinGloGEMProcessor:
                 f"got '{self.irrigation_variable}'"
             )
 
-        self.model_dir = self.main_dir / config.get('config_dir')
+        # Centralized path construction
+        paths = get_paths(config)
         self.glogem_dir = config.get('glogem_dir')
         if self.glogem_dir:
             self.glogem_dir = Path(self.main_dir, self.glogem_dir.format(gauge_id=self.gauge_id))
 
-        self.topo_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'topo_files'
-        self.shared_data_dir = self.model_dir / f'catchment_{self.gauge_id}' / 'data_obs'
+        self.topo_dir = paths['topo_dir']
+        self.shared_data_dir = paths['data_obs_dir']
         self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+        self.model_dir = paths['catchment_dir'].parent  # model_runs/
 
         self.subbasin_configs = config.get('subbasins', [])
 
@@ -2008,7 +2016,7 @@ class MultiSubbasinGloGEMProcessor:
             output_nc = self.shared_data_dir / f'irrigation_{self.glogem_model}.nc'
         else:
             output_nc = self.shared_data_dir / 'irrigation.nc'
-        output_gw = self.shared_data_dir / 'GridWeights_Irrigation.txt'
+        output_gw = self._topo_dir / 'GridWeights_Irrigation.txt'
 
         if output_nc.exists() and output_gw.exists() and not force_reprocess:
             self.logger.info(f"✅ {output_nc.name} + GridWeights already exist — skipping.")

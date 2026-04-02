@@ -26,6 +26,7 @@ import preprocess_general
 import numpy as np
 import rasterio
 import pyproj
+from paths import get_paths, get_relative_data_obs, get_relative_topo
 
 #--------------------------------------------------------------------------------
 ############################ HBV Preprocessor Class ############################
@@ -67,7 +68,6 @@ class HBVProcessor:
         # Store basic configuration
         self.gauge_id = str(namelist['gauge_id'])
         self.main_dir = Path(namelist['main_dir'])
-        self.config_dir = namelist['config_dir']
         self.model_type = namelist['model_type']
         self.start_date = namelist['start_date']
         self.end_date = namelist['end_date']
@@ -111,21 +111,23 @@ class HBVProcessor:
         self.gauge_lon = None
         self.station_elevation = None
         
-        # Set up directory structure
-        self.model_dir = self.main_dir / self.config_dir
-        self.catchment_dir = self.model_dir / f'catchment_{self.gauge_id}'
-        self.hbv_dir = self.catchment_dir / self.model_type
-        self.templates_dir = self.hbv_dir / 'templates'
-        self.data_obs_dir = self.hbv_dir / 'data_obs'
-        self.topo_files_dir = self.catchment_dir / 'topo_files'
-        self.shared_data_dir = self.catchment_dir / 'data_obs'
+        # Centralized path construction
+        paths = get_paths(namelist)
+        self.catchment_dir = paths['catchment_dir']
+        self.hbv_dir = paths['model_dir']
+        self.templates_dir = paths['template_dir']
+        self.topo_files_dir = paths['topo_dir']
+        self.shared_data_dir = paths['data_obs_dir']
+        self.data_obs_dir = self.shared_data_dir  # backward-compat alias
+        self._rel_data_obs = get_relative_data_obs(namelist)
+        self._rel_topo = get_relative_topo(namelist)
         
         # Ensure directories exist
         self._create_directories()
         
     def _create_directories(self):
         """Create necessary directories if they don't exist."""
-        for directory in [self.hbv_dir, self.templates_dir, self.data_obs_dir]:
+        for directory in [self.hbv_dir, self.templates_dir, self.shared_data_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -409,7 +411,7 @@ class HBVProcessor:
         lateral_connections = [
             "",
             "#:LateralConnections",
-            ":RedirectToFile  ../data_obs/connections.rvh",
+            f":RedirectToFile  {self._rel_topo}/connections.rvh",
             "#:EndLateralConnections",
             ""
         ]
@@ -692,7 +694,7 @@ class HBVProcessor:
         with open(file_path, 'w') as ff:
             self._write_rvt_header(ff, param_or_name)
             ff.writelines(gauge_info)
-            ff.write(f":RedirectToFile ../data_obs/Q_daily.rvt\n")
+            ff.write(f":RedirectToFile {self._rel_data_obs}/Q_daily.rvt\n")
 
         print(f"✅ Successfully wrote HBV RVT file to {file_path}")
         print(f"   Meteo source: {self.meteo_source}")
@@ -729,8 +731,8 @@ class HBVProcessor:
                 ff.writelines(gauge_info)
 
                 if gauged:
-                    ff.write(f":RedirectToFile ../data_obs/Q_daily_{sb_gid}.rvt\n\n")
-                    print(f"  → Streamflow redirect: ../data_obs/Q_daily_{sb_gid}.rvt")
+                    ff.write(f":RedirectToFile {self._rel_data_obs}/Q_daily_{sb_gid}.rvt\n\n")
+                    print(f"  → Streamflow redirect: {self._rel_data_obs}/Q_daily_{sb_gid}.rvt")
 
         print(f"✅ Successfully wrote multi-subbasin HBV RVT file to {file_path}")
         print(f"   Meteo source: {self.meteo_source}")
@@ -891,7 +893,7 @@ class HBVProcessor:
             temp_mean_file = 'har_temp_mean.nc'
             temp_max_file = 'har_temp_max.nc'
             temp_min_file = 'har_temp_min.nc'
-            grid_weights_file = '../data_obs/GridWeights_HAR.txt'
+            grid_weights_file = f'{self._rel_topo}/GridWeights_HAR.txt'
 
             # HAR variable names
             precip_var = 'prcp'
@@ -910,7 +912,7 @@ class HBVProcessor:
             temp_mean_file = 'era5_land_temp_mean.nc'
             temp_max_file = 'era5_land_temp_max.nc'
             temp_min_file = 'era5_land_temp_min.nc'
-            grid_weights_file = '../data_obs/GridWeights.txt'
+            grid_weights_file = f'{self._rel_topo}/GridWeights.txt'
 
             # ERA5-Land variable names
             precip_var = 'tp'
@@ -945,7 +947,7 @@ class HBVProcessor:
             temp_var      = 't2m'
             temp_max_var  = 't2m'
             temp_min_var  = 't2m'
-            grid_weights_file = '../data_obs/GridWeights.txt'
+            grid_weights_file = f'{self._rel_topo}/GridWeights.txt'
             precip_weights_file = grid_weights_file
             dim_names       = "lon lat time"
             precip_dim_names = dim_names
@@ -968,7 +970,7 @@ class HBVProcessor:
             temp_var      = 't2m'
             temp_max_var  = 't2m'
             temp_min_var  = 't2m'
-            grid_weights_file = '../data_obs/GridWeights.txt'
+            grid_weights_file = f'{self._rel_topo}/GridWeights.txt'
             precip_weights_file = grid_weights_file
             dim_names       = "lon lat time"
             precip_dim_names = dim_names
@@ -978,7 +980,7 @@ class HBVProcessor:
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_file = 'tphipr_precip.nc'
             precip_var = 'prcp'
-            precip_weights_file = '../data_obs/GridWeights_TPHiPr.txt'
+            precip_weights_file = f'{self._rel_topo}/GridWeights_TPHiPr.txt'
             precip_dim_names = 'longitude latitude time'
             print(f"📊 Overriding precipitation source: TPHiPr")
 
@@ -998,7 +1000,7 @@ class HBVProcessor:
         forcing_data['Rainfall'] = [
             f":GriddedForcing           Rainfall",
             f"    :ForcingType          RAINFALL",
-            f"    :FileNameNC           ../data_obs/{precip_file}",
+            f"    :FileNameNC           {self._rel_data_obs}/{precip_file}",
             f"    :VarNameNC            {precip_var}",
             f"    :DimNamesNC           {precip_dim_names}",
             precip_elev_line,
@@ -1013,7 +1015,7 @@ class HBVProcessor:
         forcing_data['Average Temperature'] = [
             f":GriddedForcing           Average Temperature",
             f"    :ForcingType          TEMP_AVE",
-            f"    :FileNameNC           ../data_obs/{temp_mean_file}",
+            f"    :FileNameNC           {self._rel_data_obs}/{temp_mean_file}",
             f"    :VarNameNC            {temp_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
@@ -1026,7 +1028,7 @@ class HBVProcessor:
         forcing_data['Maximum Temperature'] = [
             f":GriddedForcing           Maximum Temperature",
             f"    :ForcingType          TEMP_MAX",
-            f"    :FileNameNC           ../data_obs/{temp_max_file}",
+            f"    :FileNameNC           {self._rel_data_obs}/{temp_max_file}",
             f"    :VarNameNC            {temp_max_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
@@ -1039,7 +1041,7 @@ class HBVProcessor:
         forcing_data['Minimum Temperature'] = [
             f":GriddedForcing           Minimum Temperature",
             f"    :ForcingType          TEMP_MIN",
-            f"    :FileNameNC           ../data_obs/{temp_min_file}",
+            f"    :FileNameNC           {self._rel_data_obs}/{temp_min_file}",
             f"    :VarNameNC            {temp_min_var}",
             f"    :DimNamesNC           {dim_names}",
             "    :ElevationVarNameNC   elevation",
@@ -1053,11 +1055,11 @@ class HBVProcessor:
             forcing_data['Irrigation'] = [
                 ":GriddedForcing           Irrigation",
                 "    :ForcingType          IRRIGATION",
-                "    :FileNameNC           ../data_obs/irrigation.nc",
+                f"    :FileNameNC           {self._rel_data_obs}/irrigation.nc",
                 "    :VarNameNC            data",
                 "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
                 "    :ElevationVarNameNC   elevation",
-                "    :RedirectToFile       ../data_obs/GridWeights_Irrigation.txt",
+                f"    :RedirectToFile       {self._rel_topo}/GridWeights_Irrigation.txt",
                 ":EndGriddedForcing",
                 ''
             ]

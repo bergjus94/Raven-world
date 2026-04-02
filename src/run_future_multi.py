@@ -221,21 +221,18 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                 cmd.append("--force")
 
             try:
-                process = subprocess.run(
-                    cmd, check=True, capture_output=True, text=True,
-                    timeout=7200,  # 2 hours (scipy regridding can be slow)
+                process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
                 )
+                for line in process.stdout:
+                    logger.info(f"    {line.rstrip()}")
+                process.wait()
+                if process.returncode != 0:
+                    raise subprocess.CalledProcessError(process.returncode, cmd)
                 logger.info(f"  Input creation complete for {model_id}")
-                # Log Step 6 (GloGEM) output for debugging
-                if process.stdout:
-                    for line in process.stdout.splitlines():
-                        if any(kw in line.lower() for kw in ['step 6', 'irrigation', 'glogem', 'error', '❌', '✅']):
-                            logger.info(f"    {line.strip()}")
-            except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError:
                 logger.error(f"  Input creation failed for {model_id}")
-                logger.error(e.stdout[-2000:] if e.stdout else "")
-                if e.stderr:
-                    logger.error(e.stderr[-1000:])
                 return False
 
         # Step 3: Fix leap days in CMIP6 files (noleap → standard)
