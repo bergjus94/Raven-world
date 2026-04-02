@@ -633,8 +633,11 @@ class GloGEMProcessor:
         self.logger.info(f"  Large glacier area (from HRU): {large_glacier_area_km2:.2f} km² → fraction: {fraction_large*100:.2f}%")
         self.logger.info(f"  Small glacier area (from HRU): {small_glacier_area_km2:.2f} km² → fraction: {fraction_small*100:.2f}%")
         
-        # Add catchment-scaled columns for each component
+        # Add catchment-scaled columns for each component (skip if NetCDF was missing)
         for component in components.keys():
+            if f'{component}_all' not in all_daily_weighted.columns:
+                self.logger.info(f"  Skipping catchment scaling for {component} (no data)")
+                continue
             all_daily_weighted[f'{component}_all_catchment'] = all_daily_weighted[f'{component}_all'] * fraction_all
             all_daily_weighted[f'{component}_large_catchment'] = all_daily_weighted[f'{component}_large'] * fraction_large
             all_daily_weighted[f'{component}_small_catchment'] = all_daily_weighted[f'{component}_small'] * fraction_small
@@ -647,12 +650,16 @@ class GloGEMProcessor:
         self.logger.info(f"   Columns:")
         self.logger.info(f"     - date: Date")
         for component in components.keys():
+            if f'{component}_all' not in all_daily_weighted.columns:
+                continue
             self.logger.info(f"     - {component}_all: All glaciers (mm/day over glacier area)")
             self.logger.info(f"     - {component}_large: Large glaciers >=2km² (mm/day over large glacier area)")
             self.logger.info(f"     - {component}_small: Small glaciers <2km² (mm/day over small glacier area)")
-        
+
         self.logger.info(f"\n   Summary Statistics:")
         for component in components.keys():
+            if f'{component}_all' not in all_daily_weighted.columns:
+                continue
             self.logger.info(f"   {component}:")
             for category in ['all', 'large', 'small']:
                 col = f'{component}_{category}'
