@@ -654,6 +654,108 @@ def _plot_ensemble(all_hydro, gauge_id, output_dir, logger):
 
 
 # =============================================================================
+# Multi-config catchment runner
+# =============================================================================
+
+def _run_multi_config(catchment_nml, args):
+    """Run the full pipeline for each model × configuration in a catchment namelist.
+
+    Returns 0 if all succeeded, 1 if any failed.
+    """
+    from config_merge import load_config
+
+    catchment_id = str(catchment_nml['catchment'])
+    models = catchment_nml.get('models', ['HBV'])
+    configurations = catchment_nml['configurations']
+    overrides = {}
+    if 'calibration' in catchment_nml:
+        overrides['calibration'] = catchment_nml['calibration']
+    if 'future' in catchment_nml:
+        overrides['future_projections'] = catchment_nml['future']
+
+    total = len(models) * len(configurations)
+    print("=" * 70)
+    print(f"MULTI-CONFIG PIPELINE: catchment {catchment_id}")
+    print(f"  Models: {models}")
+    print(f"  Configurations: {configurations}")
+    print(f"  Total runs: {total}")
+    print("=" * 70)
+
+    results = {}
+    for model in models:
+        for config in configurations:
+            run_key = f"{config}/{model}"
+            print(f"\n{'='*70}")
+            print(f"  [{run_key}] Starting...")
+            print(f"{'='*70}")
+
+            try:
+                nml, tmp_path = load_config(
+                    catchment=catchment_id,
+                    configuration=config,
+                    model=model,
+                    env=args.env,
+                    overrides=overrides if overrides else None,
+                )
+                namelist_path = Path(tmp_path).resolve()
+            except Exception as e:
+                print(f"  [{run_key}] Failed to load config: {e}")
+                results[run_key] = False
+                continue
+
+            # Build argv for the single-config pipeline
+            sub_argv = [str(namelist_path)]
+            if args.skip_preprocessing:
+                sub_argv.append('--skip-preprocessing')
+            if args.skip_calibration:
+                sub_argv.append('--skip-calibration')
+            if args.skip_download:
+                sub_argv.append('--skip-download')
+            if args.skip_future:
+                sub_argv.append('--skip-future')
+            if args.force:
+                sub_argv.append('--force')
+            if args.verbose:
+                sub_argv.append('--verbose')
+            if args.iterations:
+                sub_argv.extend(['--iterations', str(args.iterations)])
+            if args.ngs:
+                sub_argv.extend(['--ngs', str(args.ngs)])
+            if args.bbox:
+                sub_argv.extend(['--bbox'] + [str(b) for b in args.bbox])
+
+            # Run as subprocess so each run gets a clean state
+            cmd = [sys.executable, str(Path(__file__).resolve())] + sub_argv
+            try:
+                proc = subprocess.run(cmd, timeout=28800)  # 8 hours max
+                ok = proc.returncode == 0
+            except subprocess.TimeoutExpired:
+                print(f"  [{run_key}] Timed out")
+                ok = False
+
+            results[run_key] = ok
+            status = "OK" if ok else "FAILED"
+            print(f"  [{run_key}] {status}")
+
+            # Clean up temp file
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    # Summary
+    print(f"\n{'='*70}")
+    print(f"MULTI-CONFIG SUMMARY: catchment {catchment_id}")
+    print(f"{'='*70}")
+    for run_key, ok in results.items():
+        print(f"  {'✓' if ok else '✗'} {run_key}")
+    n_ok = sum(results.values())
+    print(f"\n  {n_ok}/{total} succeeded")
+
+    return 0 if all(results.values()) else 1
+
+
+# =============================================================================
 # Main Pipeline
 # =============================================================================
 
@@ -705,7 +807,7 @@ Examples:
 
     args = parser.parse_args()
 
-    # Load namelist (legacy or composable mode)
+    # Load namelist (legacy, composable, or multi-config catchment mode)
     if args.namelist:
         namelist_path = Path(args.namelist).resolve()
         if not namelist_path.exists():
@@ -713,6 +815,11 @@ Examples:
             sys.exit(1)
         with open(namelist_path) as f:
             nml = yaml.safe_load(f)
+
+        # Detect multi-config catchment namelist (has 'catchment' + 'configurations')
+        if 'catchment' in nml and 'configurations' in nml:
+            sys.exit(_run_multi_config(nml, args))
+
     elif args.catchment:
         from config_merge import load_config
         nml, namelist_path = load_config(

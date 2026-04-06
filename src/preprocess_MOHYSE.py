@@ -730,7 +730,7 @@ class MOHYSEPreprocessor:
             ]
         else:  # ERA5 (default)
             grid_weights_file_path = f"{self._rel_topo}/GridWeights.txt"
-            dim_names = "longitude latitude time"
+            dim_names = "lon lat time"
             precip_tuple = ('Rainfall', 'RAINFALL', 'era5_land_precip.nc', 'tp')
             other_types = [
                 ('Average Temperature', 'TEMP_AVE', 'era5_land_temp_mean.nc', 't2m'),
@@ -762,7 +762,7 @@ class MOHYSEPreprocessor:
             ]
             grid_weights_file_path = f"{self._rel_topo}/GridWeights.txt"
             precip_weights_file    = grid_weights_file_path
-            dim_names        = "longitude latitude time"
+            dim_names        = "lon lat time"
             precip_dim_names = dim_names
 
         # Override all forcing files when running CMIP6 climate projections.
@@ -786,7 +786,7 @@ class MOHYSEPreprocessor:
             ]
             grid_weights_file_path = f"{self._rel_topo}/GridWeights.txt"
             precip_weights_file    = grid_weights_file_path
-            dim_names        = "longitude latitude time"
+            dim_names        = "lon lat time"
             precip_dim_names = dim_names
             print(f"Using CMIP6 forcing: {model_id} / {scenario}")
 
@@ -794,7 +794,7 @@ class MOHYSEPreprocessor:
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_tuple = ('Rainfall', 'RAINFALL', 'tphipr_precip.nc', 'prcp')
             precip_weights_file = f"{self._rel_topo}/GridWeights_TPHiPr.txt"
-            precip_dim_names = "longitude latitude time"
+            precip_dim_names = "lon lat time"
 
         # Get optional precip correction parameters
         rain_corr = self.params['MOHYSE'][param_or_name].get('X11', 1.0)
@@ -838,18 +838,19 @@ class MOHYSEPreprocessor:
                 ''
             ]
 
-        # Add Irrigation forcing block
-        forcing_data['Irrigation'] = [
-            ":GriddedForcing           Irrigation",
-            "    :ForcingType          IRRIGATION",
-            f"    :FileNameNC           {self._rel_data_obs}/irrigation.nc",
-            "    :VarNameNC            data",
-            "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
-            "    :ElevationVarNameNC   elevation",
-            f"    :RedirectToFile       {self._rel_topo}/GridWeights_Irrigation.txt",
-            ":EndGriddedForcing",
-            ''
-        ]
+        # Irrigation forcing block (only for coupled mode)
+        if self.coupled:
+            forcing_data['Irrigation'] = [
+                ":GriddedForcing           Irrigation",
+                "    :ForcingType          IRRIGATION",
+                f"    :FileNameNC           {self._rel_data_obs}/irrigation.nc",
+                "    :VarNameNC            data",
+                "    :DimNamesNC           x y time     # must be in the order of (x,y,t)",
+                "    :ElevationVarNameNC   elevation",
+                f"    :RedirectToFile       {self._rel_topo}/GridWeights_Irrigation.txt",
+                ":EndGriddedForcing",
+                ''
+            ]
 
         return forcing_data
 
@@ -996,6 +997,28 @@ class MOHYSEPreprocessor:
             print(f"No elevation bands available for catchment {self.gauge_id}, only defining base groups")
             return f":DefineHRUGroups {base_groups}"
 
+    def _transport_lines(self) -> list:
+        """Build transport tracer lines. Glacier tracers only for coupled mode."""
+        lines = [
+            "",
+            ":Transport SNOWMELT TRACER",
+            ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0",
+            ":FixedConcentration SNOWMELT GWSOIL 0.0",
+        ]
+        if self.coupled:
+            lines += [
+                "",
+                ":Transport GLACIERMELT_ALL TRACER",
+                ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER",
+                "",
+                ":Transport GLACIERMELT_SMALL TRACER",
+                ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER",
+                "",
+                ":Transport GLACIERMELT_LARGE TRACER",
+                ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER",
+            ]
+        return lines
+
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
                            hru_groups_definition: str) -> Dict[str, List[str]]:
         """Create all sections for RVI file."""
@@ -1051,21 +1074,7 @@ class MOHYSEPreprocessor:
             ],
             "#Output Options": [
             ],
-            "#Transport for Snowmelt and Glacier Melt Tracking": [
-                "",
-                ":Transport SNOWMELT TRACER",
-                ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0",
-                ":FixedConcentration SNOWMELT SLOW_RESERVOIR 0.0",
-                "",
-                ":Transport GLACIERMELT_ALL TRACER",
-                ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER",
-                "",
-                ":Transport GLACIERMELT_SMALL TRACER",
-                ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER",
-                "",
-                ":Transport GLACIERMELT_LARGE TRACER",
-                ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER"
-            ]
+            "#Transport for Snowmelt and Glacier Melt Tracking": self._transport_lines()
         }
     
     def create_rvc_file(self, template: bool = False):

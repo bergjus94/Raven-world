@@ -1,0 +1,19 @@
+# =============================================================================
+# Catchment 0122 - Swat @ Kalam
+# =============================================================================
+
+catchment: '0122'
+
+models:
+  - HBV
+  - HMETS
+  - HYMOD
+  - MOHYSE
+
+configurations:
+  - baseline
+
+# Low iterations for testing
+calibration:
+  iterations: 10
+  ngs: 2
