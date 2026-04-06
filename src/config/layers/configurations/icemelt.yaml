@@ -1,0 +1,11 @@
+# Coupled GloGEM icemelt injection, ERA5 forcing
+_config_key: 'icemelt'
+display_name: 'HBV Icemelt'
+color: '#8c564b'
+coupled: true
+glacier_source: 'glogem'
+icemelt_mode: true
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'icemelt'

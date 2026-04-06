@@ -1,0 +1,10 @@
+# Coupled GloGEM TSLA, ERA5, subdaily melt
+_config_key: 'glogem_subdaily'
+display_name: 'HBV GloGEM Subdaily'
+color: '#e377c2'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'

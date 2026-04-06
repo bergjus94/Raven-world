@@ -1,0 +1,11 @@
+# Coupled GloGEM GMB, ERA5 forcing
+_config_key: 'glogem_gmb'
+display_name: 'HBV GloGEM GMB'
+color: '#2ca02c'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+glogem_dir: '01_data/GloGEM/Indus/GMB'

@@ -27,6 +27,7 @@ import geopandas as gpd
 from datetime import datetime, timedelta
 import csv
 import yaml
+from paths import get_paths
 
 #--------------------------------------------------------------------------------
 ################################## setup ########################################
@@ -42,8 +43,8 @@ def load_namelist(namelist_path='namelist.yaml'):
 def setup_output_directories(config):
     """Create output directories for different plot types"""
     gauge_id = config['gauge_id']
-    config_dir = Path(config['main_dir']) / config['config_dir']
-    base_plots_dir = config_dir / f"catchment_{gauge_id}" / config['model_type'] / "output" / "plots"
+    paths = get_paths(config)
+    base_plots_dir = paths['output_dir'] / "plots"
 
     
     plot_dirs = {
@@ -67,9 +68,9 @@ def setup_output_directories(config):
 
 def load_hydrograph_data(config):
     """Load hydrograph data from model directory"""
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
-    hydro_file = config_dir/ f"catchment_{gauge_id}" / config['model_type'] / "output" / f"{gauge_id}_{config['model_type']}_Hydrographs.csv"
+    hydro_file = paths['output_dir'] / f"{gauge_id}_{config['model_type']}_Hydrographs.csv"
 
     print(f"Loading hydrograph data:")
     print(f"  - File: {hydro_file}")
@@ -156,9 +157,9 @@ def plot_hydrological_regime(config, plot_dirs, validation_start=None, validatio
     # Load catchment area for conversion if unit='mm'
     conversion_factor = None
     if unit == 'mm':
-        config_dir = Path(config['main_dir']) / config['config_dir']
+        paths = get_paths(config)
         gauge_id = config['gauge_id']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+        topo_dir = paths['topo_dir']
         catchment_shape_file = topo_dir / "HRU.shp"
         
         try:
@@ -296,9 +297,9 @@ def plot_hydrograph_timeseries(config, plot_dirs, validation_start=None, validat
     # Load catchment area for conversion if unit='mm'
     conversion_factor = None
     if unit == 'mm':
-        config_dir = Path(config['main_dir']) / config['config_dir']
+        paths = get_paths(config)
         gauge_id = config['gauge_id']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+        topo_dir = paths['topo_dir']
         catchment_shape_file = topo_dir / "HRU.shp"
         
         try:
@@ -1057,9 +1058,9 @@ def load_forcing_by_hrugroup(config, forcing_type='SNOWFALL'):
     pandas.DataFrame
         DataFrame with date and NO_GLACIER columns
     """
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
-    forcing_file = config_dir / f"catchment_{gauge_id}" / config['model_type'] / "output" / f"{gauge_id}_{config['model_type']}_{forcing_type}_Daily_Average_ByHRUGroup.csv"
+    forcing_file = paths['output_dir'] / f"{gauge_id}_{config['model_type']}_{forcing_type}_Daily_Average_ByHRUGroup.csv"
     
     print(f"Loading {forcing_type} data:")
     print(f"  - File: {forcing_file}")
@@ -1117,7 +1118,7 @@ def plot_precipitation_partitioning(config, plot_dirs, validation_start=None, va
         End date for analysis period
     """
     gauge_id = config['gauge_id']
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     
     # Use dates from namelist if not provided
     if validation_start is None:
@@ -1129,7 +1130,7 @@ def plot_precipitation_partitioning(config, plot_dirs, validation_start=None, va
     print(f"  - Period: {validation_start} to {validation_end}")
     
     # Load HRU shapefile to get areas
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    topo_dir = paths['topo_dir']
     hru_shapefile = topo_dir / "HRU.shp"
     
     print(f"  - Loading HRU shapefile: {hru_shapefile}")
@@ -1390,7 +1391,7 @@ def plot_actual_evapotranspiration(config, plot_dirs, validation_start=None, val
         End date for analysis period
     """
     gauge_id = config['gauge_id']
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     
     # Use dates from namelist if not provided
     if validation_start is None:
@@ -1402,7 +1403,7 @@ def plot_actual_evapotranspiration(config, plot_dirs, validation_start=None, val
     print(f"  - Period: {validation_start} to {validation_end}")
     
     # Load HRU shapefile to get areas
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    topo_dir = paths['topo_dir']
     hru_shapefile = topo_dir / "HRU.shp"
     
     print(f"  - Loading HRU shapefile: {hru_shapefile}")
@@ -1448,7 +1449,7 @@ def plot_actual_evapotranspiration(config, plot_dirs, validation_start=None, val
         return None
     
     # Load AET data
-    aet_file = config_dir / f"catchment_{gauge_id}" / config['model_type'] / "output" / f"{gauge_id}_{config['model_type']}_AET_Daily_Average_ByHRUGroup.csv"
+    aet_file = paths['output_dir'] / f"{gauge_id}_{config['model_type']}_AET_Daily_Average_ByHRUGroup.csv"
     
     print(f"  - Loading AET data: {aet_file}")
     
@@ -1628,7 +1629,7 @@ def plot_precipitation_and_aet_combined(config, plot_dirs, validation_start=None
         End date for analysis period
     """
     gauge_id = config['gauge_id']
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     
     # Use dates from namelist if not provided
     if validation_start is None:
@@ -1640,7 +1641,7 @@ def plot_precipitation_and_aet_combined(config, plot_dirs, validation_start=None
     print(f"  - Period: {validation_start} to {validation_end}")
     
     # Load HRU shapefile to get areas
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    topo_dir = paths['topo_dir']
     hru_shapefile = topo_dir / "HRU.shp"
     
     print(f"  - Loading HRU shapefile: {hru_shapefile}")
@@ -1697,7 +1698,7 @@ def plot_precipitation_and_aet_combined(config, plot_dirs, validation_start=None
         return None
     
     # Load AET data
-    aet_file = config_dir / f"catchment_{gauge_id}" / config['model_type'] / "output" / f"{gauge_id}_{config['model_type']}_AET_Daily_Average_ByHRUGroup.csv"
+    aet_file = paths['output_dir'] / f"{gauge_id}_{config['model_type']}_AET_Daily_Average_ByHRUGroup.csv"
     
     print(f"  - Loading AET data: {aet_file}")
     
@@ -1917,7 +1918,7 @@ def plot_temperature_by_elevation(config, plot_dirs, validation_start=None, vali
         End date for analysis period
     """
     gauge_id = config['gauge_id']
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     
     # Use dates from namelist if not provided
     if validation_start is None:
@@ -1929,7 +1930,7 @@ def plot_temperature_by_elevation(config, plot_dirs, validation_start=None, vali
     print(f"  - Period: {validation_start} to {validation_end}")
     
     # Load temperature data
-    temp_file = config_dir / f"catchment_{gauge_id}" / config['model_type'] / "output" / f"{gauge_id}_{config['model_type']}_TEMP_AVE_Daily_Average_ByHRUGroup.csv"
+    temp_file = paths['output_dir'] / f"{gauge_id}_{config['model_type']}_TEMP_AVE_Daily_Average_ByHRUGroup.csv"
     
     print(f"  - Loading temperature data: {temp_file}")
     
@@ -2151,11 +2152,11 @@ def load_glogem_data(config, unit='mm', plot=True):
     with both glacier area and catchment area normalized values.
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     
     # Define topo_dir where GloGEM files are located
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    topo_dir = paths['topo_dir']
     
     # NEW: Look for the catchment-averaged file with ALL components
     catchment_avg_file = topo_dir / "GloGEM_catchment_averaged.csv"
@@ -2225,7 +2226,7 @@ def load_glogem_data(config, unit='mm', plot=True):
         if (result_df['icemelt_normalized'].abs().sum() == 0 and
                 result_df['icemelt'].abs().sum() > 0):
             import geopandas as gpd
-            topo_dir_path = config_dir / f"catchment_{gauge_id}" / "topo_files"
+            topo_dir_path = paths['topo_dir']
             glacier_shp = topo_dir_path / "clipped_glacier.shp"
             hru_shp = topo_dir_path / "HRU.shp"
             if glacier_shp.exists() and hru_shp.exists():
@@ -2675,8 +2676,8 @@ def plot_glogem_vs_observed_regime(config, plot_dirs, start_date=None, end_date=
     
     # Load catchment area from HRU shapefile
     print("\nLoading catchment area from HRU shapefile...")
-    config_dir = Path(config['main_dir']) / config['config_dir']
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    paths = get_paths(config)
+    topo_dir = paths['topo_dir']
     catchment_shape_file = topo_dir / "HRU.shp"
     
     try:
@@ -2947,15 +2948,15 @@ def create_irrigation_timeseries(config):
         DataFrame with date and area-weighted irrigation values (mm/day)
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
     # Define paths
-    data_obs_dir = config_dir / f"catchment_{gauge_id}" / model_type / "data_obs"
+    data_obs_dir = paths['model_dir'] / "data_obs"
     irrigation_file = data_obs_dir / "irrigation.nc"
     
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    topo_dir = paths['topo_dir']
     hru_shapefile = topo_dir / "HRU.shp"
     
     print(f"Creating irrigation time series for catchment {gauge_id}:")
@@ -3144,9 +3145,9 @@ def plot_irrigation_vs_glogem_regime(config, plot_dirs, validation_start=None, v
     print(f"  - Period: {validation_start} to {validation_end}")
     
     # 1. Load or create irrigation time series
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     model_type = config['model_type']
-    data_obs_dir = config_dir / f"catchment_{gauge_id}" / model_type / "data_obs"
+    data_obs_dir = paths['model_dir'] / "data_obs"
     irrigation_ts_file = data_obs_dir / "irrigation_timeseries.csv"
     
     if not irrigation_ts_file.exists():
@@ -3314,7 +3315,7 @@ def load_snowmelt_mass_loadings(config, validation_start=None, validation_end=No
         DataFrame containing date and snowmelt in specified units
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
@@ -3331,7 +3332,7 @@ def load_snowmelt_mass_loadings(config, validation_start=None, validation_end=No
     # Load catchment area for unit conversion
     conversion_m3s_to_mm_day = None
     if unit == 'mm':
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+        topo_dir = paths['topo_dir']
         catchment_shape_file = topo_dir / "HRU.shp"
         
         try:
@@ -3353,7 +3354,7 @@ def load_snowmelt_mass_loadings(config, validation_start=None, validation_end=No
             unit = 'm3'
     
     # Load snowmelt data file
-    mass_loadings_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_SNOWMELTMassLoadings.csv"
+    mass_loadings_file = paths['output_dir'] / f"{gauge_id}_{model_type}_SNOWMELTMassLoadings.csv"
     
     if not mass_loadings_file.exists():
         print(f"ERROR: Mass loadings file not found: {mass_loadings_file}")
@@ -3669,7 +3670,7 @@ def plot_snowmelt_comparison_lake_vs_mass(config, plot_dirs, validation_start=No
     dict : Results including combined data, regimes, and statistics
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
@@ -3691,7 +3692,7 @@ def plot_snowmelt_comparison_lake_vs_mass(config, plot_dirs, validation_start=No
     # 1. LOAD SNOW_LIQ->PONDED_WATER SNOWMELT (CUMULATIVE)
     # =============================
     
-    output_dir = config_dir / f"catchment_{gauge_id}" / model_type / "output"
+    output_dir = paths['output_dir']
     snow_flux_file = output_dir / f"{gauge_id}_{model_type}_BETWEEN_SNOW_LIQ_AND_PONDED_WATER_Daily_Average_BySubbasin.csv"
  
     if not snow_flux_file.exists():
@@ -3995,7 +3996,7 @@ def load_glacier_melt_mass_loadings(config, validation_start=None, validation_en
         Dictionary containing dataframes for each glacier type with data in specified units
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
@@ -4012,7 +4013,7 @@ def load_glacier_melt_mass_loadings(config, validation_start=None, validation_en
     # Load catchment area for unit conversion
     conversion_m3s_to_mm_day = None
     if unit == 'mm':
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+        topo_dir = paths['topo_dir']
         catchment_shape_file = topo_dir / "HRU.shp"
         
         try:
@@ -4043,7 +4044,7 @@ def load_glacier_melt_mass_loadings(config, validation_start=None, validation_en
     results = {}
     
     for glacier_type, file_suffix in glacier_types.items():
-        glacier_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_{file_suffix}MassLoadings.csv"
+        glacier_file = paths['output_dir'] / f"{gauge_id}_{model_type}_{file_suffix}MassLoadings.csv"
         
         # Check if file exists
         if not glacier_file.exists():
@@ -4484,8 +4485,8 @@ def plot_streamflow_with_all_glacier_snowmelt_regime(config, plot_dirs, validati
     # Load catchment area for unit conversion
     conversion_m3s_to_mm_day = None
     if unit == 'mm':
-        config_dir = Path(config['main_dir']) / config['config_dir']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+        paths = get_paths(config)
+        topo_dir = paths['topo_dir']
         catchment_shape_file = topo_dir / "HRU.shp"
         
         try:
@@ -4689,8 +4690,8 @@ def plot_streamflow_with_separated_glacier_snowmelt_regime(config, plot_dirs, va
     # Load catchment area for unit conversion
     conversion_m3s_to_mm_day = None
     if unit == 'mm':
-        config_dir = Path(config['main_dir']) / config['config_dir']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+        paths = get_paths(config)
+        topo_dir = paths['topo_dir']
         catchment_shape_file = topo_dir / "HRU.shp"
         
         try:
@@ -4953,8 +4954,8 @@ def plot_streamflow_with_glogem_icemelt_and_total_snowmelt_regime(config, plot_d
     # Load catchment area for unit conversion
     conversion_m3s_to_mm_day = None
     if unit == 'mm':
-        config_dir = Path(config['main_dir']) / config['config_dir']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+        paths = get_paths(config)
+        topo_dir = paths['topo_dir']
         catchment_shape_file = topo_dir / "HRU.shp"
         
         try:
@@ -5220,7 +5221,7 @@ def load_rainfall_mass_loadings(config, validation_start=None, validation_end=No
         DataFrame containing date and rainfall in mm/day
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
@@ -5237,7 +5238,7 @@ def load_rainfall_mass_loadings(config, validation_start=None, validation_end=No
     # 1. LOAD CATCHMENT AREA FOR UNIT CONVERSION
     # =============================
     
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    topo_dir = paths['topo_dir']
     catchment_shape_file = topo_dir / "HRU.shp"
     
     try:
@@ -5261,7 +5262,7 @@ def load_rainfall_mass_loadings(config, validation_start=None, validation_end=No
     # =============================
     
     # Define file path
-    rainfall_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_RAINMassLoadings.csv"
+    rainfall_file = paths['output_dir'] / f"{gauge_id}_{model_type}_RAINMassLoadings.csv"
     
     # Check if file exists
     if not rainfall_file.exists():
@@ -5388,8 +5389,8 @@ def plot_comprehensive_annual_water_balance(config, plot_dirs, validation_start=
     # 1. LOAD CATCHMENT AREA FOR UNIT CONVERSION
     # =============================
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    paths = get_paths(config)
+    topo_dir = paths['topo_dir']
     catchment_shape_file = topo_dir / "HRU.shp"
     
     try:
@@ -5845,7 +5846,7 @@ def plot_comprehensive_annual_water_balance(config, plot_dirs, validation_start=
 
     print(f"\n11. Saving data to CSV...")
 
-    results_dir = config_dir / f"catchment_{gauge_id}" / config['model_type'] / "results"
+    results_dir = paths['results_dir']
     results_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = results_dir / f'comprehensive_annual_water_balance_{gauge_id}.csv'
@@ -5931,12 +5932,12 @@ def load_parameter_values(config, top_n=100):
     
     gauge_id = config['gauge_id']
     model_type = config['model_type']
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     
     print(f"\n{'-'*40}\nAnalyzing parameters for {gauge_id}\n{'-'*40}")
     
     # Build path to model output directory
-    model_dir = config_dir / f"catchment_{gauge_id}" / model_type / "output"
+    model_dir = paths['output_dir']
     
     # Look for calibration results files
     calibration_files = list(model_dir.glob(f"calibration_results_{gauge_id}_{model_type}_*.csv"))
@@ -6168,12 +6169,12 @@ def load_storage_data(config):
     pandas.DataFrame
         DataFrame containing storage data with datetime index
     """
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
     # Construct path to storage file
-    storage_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_WatershedStorage.csv"
+    storage_file = paths['output_dir'] / f"{gauge_id}_{model_type}_WatershedStorage.csv"
     
     print(f"Loading storage data:")
     print(f"  - File: {storage_file}")
@@ -6394,12 +6395,12 @@ def load_swe_data(config):
         sim_data: DataFrame with date and all HRU group SWE data
         area_data: DataFrame with HRU areas (or None if not available)
     """
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
     # Construct path to SWE file
-    swe_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
+    swe_file = paths['output_dir'] / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
     
     print(f"Loading SWE data for all HRU groups:")
     print(f"  - File: {swe_file}")
@@ -6444,7 +6445,7 @@ def load_swe_data(config):
         # Try to load area data from HRU shapefile
         area_data = None
         try:
-            topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+            topo_dir = paths['topo_dir']
             hru_shapefile = topo_dir / "HRU.shp"
             if hru_shapefile.exists():
                 import geopandas as gpd
@@ -6588,7 +6589,7 @@ def plot_swe_time_series_by_elevation(config, plot_dirs, water_year=None, valida
     Simplified version that just plots the data without area weighting.
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
@@ -6602,7 +6603,7 @@ def plot_swe_time_series_by_elevation(config, plot_dirs, water_year=None, valida
     print(f"  - Period: {validation_start} to {validation_end}")
     
     # Load SWE file
-    sim_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
+    sim_file = paths['output_dir'] / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
     
     if not sim_file.exists():
         print(f"ERROR: SWE file not found: {sim_file}")
@@ -7004,7 +7005,7 @@ def plot_spatial_swe_distribution(config, plot_dirs, validation_start=None, vali
         Dictionary containing plot information and peak SWE data
     """
     
-    config_dir = Path(config['main_dir']) / config['config_dir']
+    paths = get_paths(config)
     gauge_id = config['gauge_id']
     model_type = config['model_type']
     
@@ -7024,7 +7025,7 @@ def plot_spatial_swe_distribution(config, plot_dirs, validation_start=None, vali
     print(f"  - Excluding HRUs with SWE > 1000mm")
     
     # 1. Load HRU shapefile for spatial information
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
+    topo_dir = paths['topo_dir']
     hru_shapefile = topo_dir / "HRU.shp"
     
     if not hru_shapefile.exists():
@@ -7048,8 +7049,7 @@ def plot_spatial_swe_distribution(config, plot_dirs, validation_start=None, vali
         return None
     
     # 2. Load simulated SWE data
-    model_dir = config_dir / f"catchment_{gauge_id}" / model_type
-    sim_swe_file = model_dir / "output" / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRU.csv"
+    sim_swe_file = paths['output_dir'] / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRU.csv"
     
     if not sim_swe_file.exists():
         print(f"ERROR: Simulated SWE file not found: {sim_swe_file}")

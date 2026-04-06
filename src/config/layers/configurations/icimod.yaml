@@ -1,0 +1,7 @@
+# Uncoupled, ERA5, ICIMOD landuse source
+_config_key: 'icimod'
+display_name: 'HBV ICIMOD'
+color: '#9467bd'
+coupled: false
+glacier_source: 'none'
+landuse_source: 'ICIMOD'

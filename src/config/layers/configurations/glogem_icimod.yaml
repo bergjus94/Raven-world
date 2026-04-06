@@ -1,0 +1,11 @@
+# Coupled GloGEM TSLA, ERA5, ICIMOD landuse source
+_config_key: 'glogem_icimod'
+display_name: 'HBV GloGEM ICIMOD'
+color: '#ff9896'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+landuse_source: 'ICIMOD'

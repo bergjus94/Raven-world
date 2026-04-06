@@ -1,0 +1,12 @@
+gauge_id: '0116'
+display_name: 'Gilgit @ Gilgit'
+start_date: '1980-01-01'
+end_date: '1998-12-31'
+cali_end_date: '1990-12-31'
+warm_up_date: '1978-01-01'
+validation_start: '1990-12-31'
+validation_end: '1998-12-31'
+
+calibration:
+  cali_end_date: '1990-12-31'
+  vali_end_date: '1998-12-31'

@@ -1,0 +1,12 @@
+gauge_id: '0101'
+display_name: 'Chandra @ Tandi'
+start_date: '2016-06-22'
+end_date: '2022-12-31'
+cali_end_date: '2020-12-31'
+warm_up_date: '2015-06-22'
+validation_start: '2020-12-31'
+validation_end: '2022-12-31'
+
+calibration:
+  cali_end_date: '2020-12-31'
+  vali_end_date: '2022-12-31'

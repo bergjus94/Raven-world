@@ -1,0 +1,11 @@
+gauge_id: '0105'
+start_date: '1980-01-01'
+end_date: '2009-12-31'
+cali_end_date: '1995-12-31'
+warm_up_date: '1978-01-01'
+validation_start: '1995-12-31'
+validation_end: '2009-12-31'
+
+calibration:
+  cali_end_date: '1995-12-31'
+  vali_end_date: '2009-12-31'

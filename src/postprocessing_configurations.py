@@ -7,6 +7,7 @@
 
 # Import all functions from postprocessing.py
 from postprocessing import *
+from paths import get_paths
 
 import pandas as pd
 import numpy as np
@@ -36,24 +37,17 @@ def create_multi_plot_dir(multi_config):
         Path to the multi-configuration plot directory
     """
 
-    main_dir = Path(multi_config['main_dir'])
-    gauge_id = multi_config['gauge_id']
     configs = multi_config['configs']
 
-    # Find common prefix directory of all config_dirs
-    # e.g., ['chandra_1/03_model_setups', 'chandra_1/03_model_setups_glogem']
-    #        → common prefix = 'chandra_1'
     if configs:
-        common = Path(configs[0]).parts
-        for cfg in configs[1:]:
-            parts = Path(cfg).parts
-            common = common[:len(parts)]
-            common = tuple(c for c, p in zip(common, parts) if c == p)
-        common_prefix = Path(*common) if common else Path('.')
+        ind_config = _build_individual_config(multi_config, configs[0])
+        paths = get_paths(ind_config)
+        plot_dir = paths['plots_dir']
     else:
-        common_prefix = Path('.')
+        main_dir = Path(multi_config['main_dir'])
+        gauge_id = multi_config['gauge_id']
+        plot_dir = main_dir / 'model_runs' / f'catchment_{gauge_id}' / 'plots'
 
-    plot_dir = main_dir / common_prefix / f"multi_config_plots_catchment_{gauge_id}"
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Plot directory: {plot_dir}")
@@ -116,33 +110,23 @@ def plot_hydrological_regime_comparison(multi_config, validation_start=None, val
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),  # Assume coupled if 'coupled' in name
-        }
-        
+        individual_config = _build_individual_config(multi_config, config_dir)
+
         try:
             # Load hydrograph data for this configuration
             data = load_hydrograph_data(individual_config)
             if data is None:
                 print(f"  Warning: No hydrograph data loaded for {config_dir}")
                 continue
-            
+
             # Filter for validation period
             validation_mask = (data['date'] >= validation_start) & (data['date'] <= validation_end)
             df_validation = data[validation_mask].copy()
-            
+
             if len(df_validation) == 0:
                 print(f"  Warning: No data found for validation period in {config_dir}")
                 continue
-            
+
             # Calculate monthly means
             df_validation['month'] = df_validation['date'].dt.month
             monthly_data = {}
@@ -313,17 +297,7 @@ def plot_hydrological_regime_subplots(multi_config, validation_start=None, valid
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load hydrograph data for this configuration
@@ -342,8 +316,8 @@ def plot_hydrological_regime_subplots(multi_config, validation_start=None, valid
             
             # Convert to mm/day if needed
             if unit == 'mm':
-                config_path = Path(multi_config['main_dir']) / config_dir
-                topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                paths = get_paths(individual_config)
+                topo_dir = paths['topo_dir']
                 hru_shapefile = topo_dir / "HRU.shp"
                 if hru_shapefile.exists():
                     import geopandas as gpd
@@ -352,12 +326,12 @@ def plot_hydrological_regime_subplots(multi_config, validation_start=None, valid
                     # Conversion factor: m³/s to mm/day
                     # mm/day = (m³/s * 86400 s/day) / (area_m² ) * 1000 mm/m
                     conversion = 86400 / (total_area_km2 * 1000000) * 1000
-                    
+
                     if 'sim_Q' in df_validation.columns:
                         df_validation['sim_Q'] = df_validation['sim_Q'] * conversion
                     if 'obs_Q' in df_validation.columns:
                         df_validation['obs_Q'] = df_validation['obs_Q'] * conversion
-                    
+
                     print(f"  ✓ Converted discharge to mm/day (catchment area: {total_area_km2:.2f} km²)")
                 else:
                     print(f"  ⚠️  Warning: Could not find HRU shapefile for area calculation, using m³/s")
@@ -586,17 +560,7 @@ def plot_hydrograph_timeseries_comparison(multi_config, validation_start=None, v
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load hydrograph data for this configuration
@@ -766,17 +730,7 @@ def plot_swe_timeseries_comparison(multi_config, validation_start=None, validati
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load SWE data for this configuration (obs_data can be None now)
@@ -1020,17 +974,7 @@ def plot_swe_elevation_bands_comparison(multi_config, validation_start=None, val
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load and process SWE data for this configuration
@@ -1294,17 +1238,7 @@ def plot_streamflow_metrics_comparison(multi_config, validation_start=None, vali
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load hydrograph data for this configuration
@@ -1584,17 +1518,7 @@ def plot_parameter_boxplots_comparison(multi_config, top_n=100):
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load parameter data for this configuration
@@ -1829,17 +1753,7 @@ def plot_storage_timeseries_comparison(multi_config, validation_start=None, vali
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
-            'model_type': model_type,
-            'coupled': 'coupled' in config_dir.lower(),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load storage data for this configuration
@@ -2124,18 +2038,7 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
         print(f"Processing: {config_names.get(config_dir, config_dir)}")
         print(f"{'='*60}")
         
-        # Create individual config dictionary for this configuration
-        individual_config = {
-            'main_dir': multi_config['main_dir'],
-            'config_dir': config_dir,
-            'gauge_id': gauge_id,
-            'model_type': model_type,
-            'start_date': multi_config.get('start_date', '2000-01-01'),
-            'end_date': multi_config.get('end_date', '2020-12-31'),
-            'cali_end_date': multi_config.get('cali_end_date', '2010-12-31'),
-            'glogem_dir': multi_config.get('glogem_dir'),
-            'coupled': multi_config.get('config_coupled', {}).get(config_dir, False),
-        }
+        individual_config = _build_individual_config(multi_config, config_dir)
         
         try:
             # Load observed streamflow data (same for all configs)
@@ -2150,8 +2053,8 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
                     
                     # Convert to mm/day if needed
                     if unit == 'mm':
-                        config_path = Path(multi_config['main_dir']) / config_dir
-                        topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                        paths = get_paths(individual_config)
+                        topo_dir = paths['topo_dir']
                         hru_shapefile = topo_dir / "HRU.shp"
                         if hru_shapefile.exists():
                             import geopandas as gpd
@@ -2159,7 +2062,7 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
                             total_area_km2 = hru_gdf['Area_km2'].sum()
                             conversion = 86400 / (total_area_km2 * 1000000) * 1000
                             obs_data['obs_Q_converted'] = obs_data['obs_Q'] * conversion
-            
+
             # Load simulated streamflow
             streamflow_data = load_hydrograph_data(individual_config)
             if streamflow_data is None:
@@ -2174,8 +2077,8 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
             
             # Convert simulated to mm/day if needed
             if unit == 'mm':
-                config_path = Path(multi_config['main_dir']) / config_dir
-                topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                paths = get_paths(individual_config)
+                topo_dir = paths['topo_dir']
                 hru_shapefile = topo_dir / "HRU.shp"
                 if hru_shapefile.exists():
                     import geopandas as gpd
@@ -2259,8 +2162,8 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
                 print(f"  - Loading glacier melt mass loadings (non-coupled configuration)...")
                 
                 # Load glacier melt mass loadings - SAME STRUCTURE AS HYDROGRAPHS (has gauge_id column)
-                config_path = Path(multi_config['main_dir']) / config_dir
-                glacier_file = config_path / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
+                paths = get_paths(individual_config)
+                glacier_file = paths['output_dir'] / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
                 
                 if not glacier_file.exists():
                     print(f"  ⚠️  Glacier melt file not found: {glacier_file}")
@@ -2286,8 +2189,8 @@ def plot_streamflow_glogem_snowmelt_regime_subplots(multi_config, validation_sta
                     # Convert to mm/day if needed (same as for streamflow)
                     if unit == 'mm':
                         # Use the same conversion factor as for streamflow
-                        config_path = Path(multi_config['main_dir']) / config_dir
-                        topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                        paths = get_paths(individual_config)
+                        topo_dir = paths['topo_dir']
                         hru_shapefile = topo_dir / "HRU.shp"
                         if hru_shapefile.exists():
                             import geopandas as gpd
@@ -2525,29 +2428,29 @@ def plot_glacier_hru_temperatures_comparison(multi_config, validation_start=None
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create paths for this configuration
-        config_dir_path = Path(multi_config['main_dir']) / config_dir
-        
+        individual_config = _build_individual_config(multi_config, config_dir)
+        paths = get_paths(individual_config)
+
         try:
             # Load HRU shapefile to identify glacier HRUs
-            topo_dir = config_dir_path / f"catchment_{gauge_id}" / "topo_files"
+            topo_dir = paths['topo_dir']
             hru_shp_path = topo_dir / "HRU.shp"
-            
+
             if not hru_shp_path.exists():
                 print(f"  ❌ HRU shapefile not found: {hru_shp_path}")
                 continue
-            
+
             # Load shapefile and find glacier HRUs (only need to do this once)
             if glacier_hru_ids is None:
                 import geopandas as gpd
                 hru_gdf = gpd.read_file(hru_shp_path)
-                
+
                 # Find glacier HRUs (landuse class 7)
                 glacier_hrus = hru_gdf[hru_gdf['Landuse_Cl'] == 7]
                 if len(glacier_hrus) == 0:
                     print(f"  ⚠️  No glacier HRUs found (landuse class 7) in shapefile")
                     continue
-                
+
                 # Get HRU IDs - try different possible column names
                 if 'HRU_ID' in hru_gdf.columns:
                     glacier_hru_ids = glacier_hrus['HRU_ID'].tolist()
@@ -2556,11 +2459,11 @@ def plot_glacier_hru_temperatures_comparison(multi_config, validation_start=None
                 else:
                     # Use index + 1 (assuming 1-based HRU numbering)
                     glacier_hru_ids = [idx + 1 for idx in glacier_hrus.index.tolist()]
-                
+
                 print(f"  📍 Found {len(glacier_hru_ids)} glacier HRUs: {glacier_hru_ids}")
-            
+
             # Load temperature data
-            output_dir = config_dir_path / f"catchment_{gauge_id}" / model_type / "output"
+            output_dir = paths['output_dir']
             temp_csv_path = output_dir / f"{gauge_id}_{model_type}_TEMP_AVE_Daily_Average_ByHRU.csv"
             
             if not temp_csv_path.exists():
@@ -2946,12 +2849,12 @@ def plot_hru_group_temperatures_comparison(multi_config, validation_start=None, 
     for config_dir in configs:
         print(f"\nProcessing configuration: {config_dir}")
         
-        # Create paths for this configuration
-        config_dir_path = Path(multi_config['main_dir']) / config_dir
-        
+        individual_config = _build_individual_config(multi_config, config_dir)
+        paths = get_paths(individual_config)
+
         try:
             # Load HRU group temperature data
-            output_dir = config_dir_path / f"catchment_{gauge_id}" / model_type / "output"
+            output_dir = paths['output_dir']
             temp_csv_path = output_dir / f"{gauge_id}_{model_type}_TEMP_AVE_Daily_Average_ByHRUGroup.csv"
             
             if not temp_csv_path.exists():
@@ -3820,19 +3723,23 @@ def check_temperature_netcdf_flipping(netcdf_path, sample_date=None):
 ########################## configuration loader #################################
 #--------------------------------------------------------------------------------
 
-def load_configurations(yaml_path, gauge_id):
+def load_configurations(gauge_id, model='HBV', env=None, configs=None):
     """
     Load configuration registry and build multi_config dict for a given catchment.
 
-    Reads configurations.yaml, resolves each config's namelist, loads it to get
-    config_dir, main_dir, dates, etc., and returns a fully populated multi_config dict.
+    Uses the composable config layer system (config_merge) — no individual
+    namelist files needed.
 
     Parameters:
     -----------
-    yaml_path : str or Path
-        Path to configurations.yaml
     gauge_id : str
         Gauge identifier (e.g., '0101')
+    model : str
+        Hydrological model type (default 'HBV')
+    env : str, optional
+        Environment ('local' or 'server'). Auto-detected if None.
+    configs : list, optional
+        List of config keys to include. If None, loads all from layers.
 
     Returns:
     --------
@@ -3841,88 +3748,68 @@ def load_configurations(yaml_path, gauge_id):
         'start_date', 'end_date', 'cali_end_date', 'configs', 'config_colors',
         'config_names', 'config_coupled', 'config_glacier_source', 'glogem_dir'
     """
+    from config_merge import load_config, load_configurations_registry
 
-    yaml_path = Path(yaml_path)
-    print(f"Loading configurations from: {yaml_path}")
-    print(f"Gauge ID: {gauge_id}")
+    print(f"Loading configurations for gauge {gauge_id}")
 
-    # Load configurations registry
-    with open(yaml_path, 'r') as f:
-        registry = yaml.safe_load(f)
+    registry = load_configurations_registry()
+    if configs:
+        registry = [cfg for cfg in registry if cfg['key'] in configs]
+    print(f"Found {len(registry)} configurations in registry")
 
-    configurations = registry['configurations']
-    print(f"Found {len(configurations)} configurations in registry")
-
-    # main_dir from configurations.yaml takes priority (user-configurable)
-    main_dir_override = registry.get('main_dir')
-    if main_dir_override:
-        print(f"Using main_dir from configurations.yaml: {main_dir_override}")
-
-    # Determine namelist directory: use registry override or default (namelists_server/)
-    namelists_dir_override = registry.get('namelists_dir')
-    if namelists_dir_override:
-        namelists_dir = Path(namelists_dir_override)
-        if not namelists_dir.is_absolute():
-            namelists_dir = yaml_path.parent.parent.parent / namelists_dir
-        print(f"Using namelists_dir from configurations.yaml: {namelists_dir}")
-    else:
-        namelists_dir = yaml_path.parent.parent.parent / 'namelists_server'
-
-    # Build multi_config
-    configs = []
+    config_keys = []
     config_colors = {}
     config_names = {}
     config_coupled = {}
     config_glacier_source = {}
     config_icemelt_mode = {}
 
-    # Track shared settings from first successfully loaded namelist
-    main_dir = main_dir_override  # Use override if set, otherwise filled from first namelist
+    main_dir = None
     model_type = None
     start_date = None
     end_date = None
     cali_end_date = None
     glogem_dir = None
 
-    for cfg in configurations:
+    for cfg in registry:
         key = cfg['key']
 
-        # Resolve namelist path
-        if key == 'baseline':
-            namelist_path = namelists_dir / f'namelist_{gauge_id}.yaml'
-        else:
-            namelist_path = namelists_dir / f'namelist_{gauge_id}_{key}.yaml'
-
-        if not namelist_path.exists():
-            print(f"  WARNING: Namelist not found: {namelist_path} - skipping {key}")
+        try:
+            nml, tmp_path = load_config(str(gauge_id), key, model, env=env)
+            # Clean up temp file immediately
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        except Exception as e:
+            print(f"  WARNING: Could not load config {key} for {gauge_id}: {e}")
             continue
 
-        # Load namelist
-        with open(namelist_path, 'r') as f:
-            namelist = yaml.safe_load(f)
+        # Check that output actually exists before including
+        paths = get_paths(nml)
+        hydro_file = paths['output_dir'] / f"{gauge_id}_{model}_Hydrographs.csv"
+        if not hydro_file.exists():
+            print(f"  - {cfg['display_name']:40s}  (no output, skipping)")
+            continue
 
-        config_dir = namelist['config_dir']
-
-        # Store shared settings from first successful namelist
         if model_type is None:
-            if main_dir is None:
-                main_dir = namelist['main_dir']
-            model_type = namelist.get('model_type', 'HBV')
-            start_date = namelist.get('start_date', '2016-06-22')
-            end_date = namelist.get('end_date', '2022-12-31')
-            cali_end_date = namelist.get('cali_end_date', '2020-12-31')
-            glogem_dir = namelist.get('glogem_dir')
+            main_dir = nml['main_dir']
+            model_type = nml.get('model_type', 'HBV')
+            start_date = nml.get('start_date')
+            end_date = nml.get('end_date')
+            cali_end_date = nml.get('cali_end_date')
+            glogem_dir = nml.get('glogem_dir')
 
-        configs.append(config_dir)
-        config_colors[config_dir] = cfg['color']
-        config_names[config_dir] = cfg['display_name']
-        config_coupled[config_dir] = cfg['coupled']
-        config_glacier_source[config_dir] = cfg['glacier_source']
-        config_icemelt_mode[config_dir] = cfg.get('icemelt_mode', False)
+        config_keys.append(key)
+        config_colors[key] = cfg['color']
+        config_names[key] = cfg['display_name']
+        config_coupled[key] = cfg['coupled']
+        config_glacier_source[key] = cfg['glacier_source']
+        config_icemelt_mode[key] = cfg.get('icemelt_mode', False)
 
-        print(f"  + {cfg['display_name']:40s} -> {config_dir}")
+        print(f"  + {cfg['display_name']:40s} -> {key}")
 
-    if len(configs) == 0:
+    if len(config_keys) == 0:
         print("ERROR: No configurations were successfully loaded")
         return None
 
@@ -3933,7 +3820,7 @@ def load_configurations(yaml_path, gauge_id):
         'start_date': start_date,
         'end_date': end_date,
         'cali_end_date': cali_end_date,
-        'configs': configs,
+        'configs': config_keys,
         'config_colors': config_colors,
         'config_names': config_names,
         'config_coupled': config_coupled,
@@ -3942,7 +3829,7 @@ def load_configurations(yaml_path, gauge_id):
         'glogem_dir': glogem_dir,
     }
 
-    print(f"\nSuccessfully loaded {len(configs)} configurations")
+    print(f"\nSuccessfully loaded {len(config_keys)} configurations")
     return multi_config
 
 
@@ -3974,17 +3861,17 @@ def _calc_subplot_layout(n_configs):
     return n_rows, n_cols, figsize
 
 
-def _build_individual_config(multi_config, config_dir):
-    """Build an individual config dict from multi_config for a given config_dir."""
+def _build_individual_config(multi_config, config_key):
+    """Build an individual config dict from multi_config for a given config_key."""
     return {
         'main_dir': multi_config['main_dir'],
-        'config_dir': config_dir,
+        '_config_key': config_key,
         'gauge_id': multi_config['gauge_id'],
         'start_date': multi_config.get('start_date', '2000-01-01'),
         'end_date': multi_config.get('end_date', '2020-12-31'),
         'cali_end_date': multi_config.get('cali_end_date', '2009-12-31'),
         'model_type': multi_config.get('model_type', 'HBV'),
-        'coupled': multi_config.get('config_coupled', {}).get(config_dir, 'coupled' in config_dir.lower()),
+        'coupled': multi_config.get('config_coupled', {}).get(config_key, False),
         'glogem_dir': multi_config.get('glogem_dir'),
     }
 
@@ -4320,8 +4207,8 @@ def plot_precipitation_partitioning_subplots(multi_config, validation_start=None
                 continue
 
             # Load area scaling
-            config_path = Path(multi_config['main_dir']) / config_dir
-            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            paths = get_paths(individual_config)
+            topo_dir = paths['topo_dir']
             hru_shapefile = topo_dir / "HRU.shp"
 
             area_fraction = 1.0
@@ -4592,8 +4479,8 @@ def plot_glacier_melt_regime_subplots(multi_config, validation_start=None, valid
 
             elif glacier_source == 'raven_deltah':
                 # DeltaH: use glacier melt mass loadings
-                config_path = Path(multi_config['main_dir']) / config_dir
-                glacier_file = config_path / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
+                paths = get_paths(individual_config)
+                glacier_file = paths['output_dir'] / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
 
                 if not glacier_file.exists():
                     print(f"  Skipping {config_dir}: glacier melt file not found")
@@ -4614,7 +4501,7 @@ def plot_glacier_melt_regime_subplots(multi_config, validation_start=None, valid
 
                 # Convert to mm/day if needed
                 if unit == 'mm':
-                    topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+                    topo_dir = paths['topo_dir']
                     hru_shapefile = topo_dir / "HRU.shp"
                     if hru_shapefile.exists():
                         import geopandas as gpd
@@ -4730,10 +4617,11 @@ def plot_water_balance_subplots(multi_config, validation_start=None, validation_
     for config_dir in configs:
         individual_config = _build_individual_config(multi_config, config_dir)
 
+        paths = get_paths(individual_config)
+
         try:
             # Load catchment area for unit conversion
-            config_path = Path(multi_config['main_dir']) / config_dir
-            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            topo_dir = paths['topo_dir']
             hru_shapefile = topo_dir / "HRU.shp"
 
             if not hru_shapefile.exists():
@@ -4793,7 +4681,7 @@ def plot_water_balance_subplots(multi_config, validation_start=None, validation_
                         glogem_filtered['year'] = glogem_filtered['date'].dt.year
                         mean_glacier_melt = glogem_filtered.groupby('year')['icemelt_normalized'].sum().mean()
                 elif glacier_source == 'raven_deltah':
-                    glacier_file = config_path / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
+                    glacier_file = paths['output_dir'] / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv"
                     if glacier_file.exists():
                         glacier_df = pd.read_csv(glacier_file)
                         glacier_df['date'] = pd.to_datetime(glacier_df['date'])
@@ -5134,9 +5022,9 @@ def plot_swe_catchment_average_comparison(multi_config, validation_start=None, v
 
     for config_dir in configs:
         try:
-            config_path = Path(multi_config['main_dir']) / config_dir
-            swe_file = config_path / f"catchment_{gauge_id}" / model_type / "output" / \
-                       f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
+            ind_config = _build_individual_config(multi_config, config_dir)
+            paths = get_paths(ind_config)
+            swe_file = paths['output_dir'] / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
 
             if not swe_file.exists():
                 print(f"  Skipping {config_names.get(config_dir, config_dir)}: SWE file not found")
@@ -5258,8 +5146,9 @@ def plot_aet_subplots(multi_config, validation_start=None, validation_end=None):
 
     for config_dir in configs:
         try:
-            config_path = Path(multi_config['main_dir']) / config_dir
-            output_dir = config_path / f"catchment_{gauge_id}" / model_type / "output"
+            ind_config = _build_individual_config(multi_config, config_dir)
+            paths = get_paths(ind_config)
+            output_dir = paths['output_dir']
 
             # Load AET data
             aet_file = output_dir / f"{gauge_id}_{model_type}_AET_Daily_Average_ByHRUGroup.csv"
@@ -5281,7 +5170,7 @@ def plot_aet_subplots(multi_config, validation_start=None, validation_end=None):
             df = df.rename(columns={'NO_GLACIER': 'aet'})
 
             # Load area scaling
-            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            topo_dir = paths['topo_dir']
             hru_shapefile = topo_dir / "HRU.shp"
 
             area_fraction = 1.0
@@ -5426,8 +5315,8 @@ def plot_precipitation_and_aet_combined_subplots(multi_config, validation_start=
                 continue
 
             # Load AET data
-            config_path = Path(multi_config['main_dir']) / config_dir
-            output_dir = config_path / f"catchment_{gauge_id}" / model_type / "output"
+            paths = get_paths(individual_config)
+            output_dir = paths['output_dir']
             aet_file = output_dir / f"{gauge_id}_{model_type}_AET_Daily_Average_ByHRUGroup.csv"
 
             if not aet_file.exists():
@@ -5462,7 +5351,7 @@ def plot_precipitation_and_aet_combined_subplots(multi_config, validation_start=
                 continue
 
             # Load area scaling
-            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            topo_dir = paths['topo_dir']
             hru_shapefile = topo_dir / "HRU.shp"
 
             area_fraction = 1.0
@@ -5632,8 +5521,8 @@ def plot_glogem_vs_observed_regime_subplots(multi_config, validation_start=None,
             hydro_df = hydro_df[(hydro_df['date'] >= start) & (hydro_df['date'] <= end)].copy()
 
             # Get catchment area for Q conversion
-            config_path = Path(multi_config['main_dir']) / config_dir
-            topo_dir = config_path / f"catchment_{gauge_id}" / "topo_files"
+            paths = get_paths(individual_config)
+            topo_dir = paths['topo_dir']
             hru_shapefile = topo_dir / "HRU.shp"
 
             if not hru_shapefile.exists():

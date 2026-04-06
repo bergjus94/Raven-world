@@ -1,0 +1,11 @@
+# Coupled GloGEM TSLA, HAR forcing
+_config_key: 'glogem_har'
+display_name: 'HBV GloGEM HAR'
+color: '#bcbd22'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+meteo_source: 'HAR'

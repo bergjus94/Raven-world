@@ -1,0 +1,7 @@
+# Uncoupled, ERA5 with TPHiPr precipitation override
+_config_key: 'tphipr'
+display_name: 'HBV TPHiPr'
+color: '#843c39'
+coupled: false
+glacier_source: 'none'
+precip_source: 'TPHiPr'

@@ -1,0 +1,6 @@
+# Uncoupled, ERA5 forcing (default configuration)
+_config_key: 'baseline'
+display_name: 'HBV'
+color: '#1f77b4'
+coupled: false
+glacier_source: 'none'

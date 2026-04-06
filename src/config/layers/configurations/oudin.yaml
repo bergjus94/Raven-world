@@ -1,0 +1,7 @@
+# Uncoupled, ERA5, Oudin PET method
+_config_key: 'oudin'
+display_name: 'HBV Oudin'
+color: '#c5b0d5'
+coupled: false
+glacier_source: 'none'
+pet_method: 'OUDIN'

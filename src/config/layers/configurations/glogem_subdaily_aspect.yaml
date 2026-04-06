@@ -1,0 +1,14 @@
+# Coupled GloGEM TSLA, ERA5, subdaily melt, aspect discretization
+_config_key: 'glogem_subdaily_aspect'
+display_name: 'HBV GloGEM Subdaily Aspect'
+color: '#17becf'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+criteria:
+  - elevation
+  - landuse
+  - aspect

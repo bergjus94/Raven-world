@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import yaml
 import matplotlib.dates as mdates
+from paths import get_paths
 
 #--------------------------------------------------------------------------------
 ################################### setup #######################################
@@ -34,10 +35,16 @@ def setup_multi_model_directories(multi_config):
     """
     
     gauge_id = multi_config['gauge_id']
-    config_dir = Path(multi_config['main_dir']) / multi_config['config']
-    
+    ind_config = {
+        'main_dir': multi_config['main_dir'],
+        'gauge_id': gauge_id,
+        'model_type': multi_config['model_type'][0],
+        '_config_key': Path(multi_config['config']).name,
+    }
+    paths = get_paths(ind_config)
+
     # Create base comparison directory
-    comparison_base = config_dir / f"catchment_{gauge_id}" / "model_comparisons"
+    comparison_base = paths['model_comparisons_dir']
     
     # Create subdirectories for different plot types
     plot_dirs = {
@@ -145,10 +152,15 @@ def plot_multi_model_hydrograph_regime(multi_config, plot_dirs, validation_start
         # Convert to requested unit
         conversion_factor = None
         if unit == 'mm':
-            config_dir = Path(multi_config['main_dir']) / multi_config['config']
-            topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-            catchment_shape_file = topo_dir / "HRU.shp"
-            
+            ind_config = {
+                'main_dir': multi_config['main_dir'],
+                'gauge_id': gauge_id,
+                'model_type': model_type,
+                '_config_key': Path(multi_config['config']).name,
+            }
+            topo_paths = get_paths(ind_config)
+            catchment_shape_file = topo_paths['topo_dir'] / "HRU.shp"
+
             try:
                 import geopandas as gpd
                 if catchment_shape_file.exists():
@@ -158,7 +170,7 @@ def plot_multi_model_hydrograph_regime(multi_config, plot_dirs, validation_start
                     print(f"    - Catchment area: {total_area_km2:.2f} km²")
             except Exception as e:
                 print(f"    ⚠️  Could not load catchment area: {e}")
-        
+
         # Convert discharge
         if unit == 'mm' and conversion_factor is not None:
             if 'sim_Q' in df_validation.columns:
@@ -172,7 +184,7 @@ def plot_multi_model_hydrograph_regime(multi_config, plot_dirs, validation_start
             if 'obs_Q' in df_validation.columns:
                 df_validation['obs_Q_converted'] = df_validation['obs_Q']
             unit_label = 'm³/s'
-        
+
         # Calculate monthly means
         df_validation['month'] = df_validation['date'].dt.month
         
@@ -299,10 +311,15 @@ def plot_multi_model_hydrograph_timeseries(multi_config, plot_dirs, validation_s
     # Get conversion factor
     conversion_factor = None
     if unit == 'mm':
-        config_dir = Path(multi_config['main_dir']) / multi_config['config']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-        catchment_shape_file = topo_dir / "HRU.shp"
-        
+        ind_config = {
+            'main_dir': multi_config['main_dir'],
+            'gauge_id': gauge_id,
+            'model_type': model_types[0],
+            '_config_key': Path(multi_config['config']).name,
+        }
+        topo_paths = get_paths(ind_config)
+        catchment_shape_file = topo_paths['topo_dir'] / "HRU.shp"
+
         try:
             import geopandas as gpd
             if catchment_shape_file.exists():
@@ -311,13 +328,13 @@ def plot_multi_model_hydrograph_timeseries(multi_config, plot_dirs, validation_s
                 conversion_factor = 86400 / (total_area_km2 * 1000000) * 1000
         except Exception as e:
             print(f"  ⚠️  Could not load catchment area: {e}")
-    
+
     unit_label = 'mm/day' if unit == 'mm' and conversion_factor is not None else 'm³/s'
-    
+
     # Store results for each model
     all_data = {}
     obs_data = None
-    
+
     # Load data for each model
     for model_type in model_types:
         print(f"\n  Loading {model_type} data...")
@@ -476,10 +493,15 @@ def plot_multi_model_random_year_hydrograph(multi_config, plot_dirs, validation_
     # Get conversion factor if needed
     conversion_factor = None
     if unit == 'mm':
-        config_dir = Path(multi_config['main_dir']) / multi_config['config']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-        catchment_shape_file = topo_dir / "HRU.shp"
-        
+        ind_config = {
+            'main_dir': multi_config['main_dir'],
+            'gauge_id': gauge_id,
+            'model_type': model_types[0],
+            '_config_key': Path(multi_config['config']).name,
+        }
+        topo_paths = get_paths(ind_config)
+        catchment_shape_file = topo_paths['topo_dir'] / "HRU.shp"
+
         try:
             import geopandas as gpd
             if catchment_shape_file.exists():
@@ -488,7 +510,7 @@ def plot_multi_model_random_year_hydrograph(multi_config, plot_dirs, validation_
                 conversion_factor = 86400 / (total_area_km2 * 1000000) * 1000
         except Exception as e:
             print(f"  ⚠️  Could not load catchment area: {e}")
-    
+
     unit_label = 'mm/day' if unit == 'mm' and conversion_factor is not None else 'm³/s'
     
     # Store results for each model
@@ -1201,8 +1223,14 @@ def plot_multi_model_swe_by_elevation(multi_config, plot_dirs, validation_start=
         }
         
         # Load SWE data
-        config_dir = Path(multi_config['main_dir']) / multi_config['config']
-        sim_file = config_dir / f"catchment_{gauge_id}" / model_type / "output" / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
+        ind_config = {
+            'main_dir': multi_config['main_dir'],
+            'gauge_id': gauge_id,
+            'model_type': model_type,
+            '_config_key': Path(multi_config['config']).name,
+        }
+        model_paths = get_paths(ind_config)
+        sim_file = model_paths['output_dir'] / f"{gauge_id}_{model_type}_SNOW_Daily_Average_ByHRUGroup.csv"
         
         if not sim_file.exists():
             print(f"    ✗ SWE file not found for {model_type}")
@@ -1368,9 +1396,14 @@ def plot_multi_model_glogem_icemelt_snowmelt_regime(multi_config, plot_dirs, val
     print(f"  - Models: {', '.join(model_types)}")
     
     # Load catchment area for unit conversion
-    config_dir = Path(multi_config['main_dir']) / multi_config['config']
-    topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-    catchment_shape_file = topo_dir / "HRU.shp"
+    ind_config = {
+        'main_dir': multi_config['main_dir'],
+        'gauge_id': gauge_id,
+        'model_type': model_types[0],
+        '_config_key': Path(multi_config['config']).name,
+    }
+    topo_paths = get_paths(ind_config)
+    catchment_shape_file = topo_paths['topo_dir'] / "HRU.shp"
     
     conversion_m3s_to_mm_day = None
     if unit == 'mm':
@@ -1965,9 +1998,14 @@ def plot_multi_model_comprehensive_annual_water_balance(multi_config, plot_dirs,
         # =============================
         
         # Load catchment area (same for all models)
-        config_dir = Path(multi_config['main_dir']) / multi_config['config']
-        topo_dir = config_dir / f"catchment_{gauge_id}" / "topo_files"
-        catchment_shape_file = topo_dir / "HRU.shp"
+        ind_config = {
+            'main_dir': multi_config['main_dir'],
+            'gauge_id': gauge_id,
+            'model_type': model_type,
+            '_config_key': Path(multi_config['config']).name,
+        }
+        model_paths = get_paths(ind_config)
+        catchment_shape_file = model_paths['topo_dir'] / "HRU.shp"
         
         try:
             import geopandas as gpd

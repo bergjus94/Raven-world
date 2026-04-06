@@ -1,0 +1,9 @@
+# =============================================================================
+# Local environment paths (development machine)
+# =============================================================================
+
+main_dir: '/home/jberg/OneDrive/Raven_worldwide'
+meteo_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/Indus-Era5'
+meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
+cmip6_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/CMIP6'
+raven_executable: '/home/jberg/RavenHydroFramework/build/Raven'

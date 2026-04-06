@@ -1,0 +1,7 @@
+# Uncoupled, HAR forcing
+_config_key: 'har'
+display_name: 'HBV HAR'
+color: '#d62728'
+coupled: false
+glacier_source: 'none'
+meteo_source: 'HAR'

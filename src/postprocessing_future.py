@@ -19,6 +19,7 @@ from pathlib import Path
 import yaml
 import argparse
 import time
+from paths import get_paths
 
 # GloGEM model ID mapping
 GLOGEM_MODEL_ID = {
@@ -55,9 +56,8 @@ def load_ensemble_hydrographs(nml):
     """
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
-    main_dir = Path(nml['main_dir'])
-    config_dir = nml['config_dir']
-    output_dir = main_dir / config_dir / f"catchment_{gauge_id}" / model_type / 'output'
+    paths = get_paths(nml)
+    output_dir = paths['output_dir']
 
     models = nml.get('cmip6_models', list(GLOGEM_MODEL_ID.keys()))
     all_hydro = {}
@@ -94,10 +94,8 @@ def load_ensemble_glogem(nml):
                        rain_all_catchment, melt_all_catchment (all in mm/day)
     """
     gauge_id = str(nml['gauge_id'])
-    main_dir = Path(nml['main_dir'])
-    config_dir = nml['config_dir']
-    catchment_dir = main_dir / config_dir / f"catchment_{gauge_id}"
-    topo_dir = catchment_dir / 'topo_files'
+    paths = get_paths(nml)
+    topo_dir = paths['topo_dir']
 
     models = nml.get('cmip6_models', list(GLOGEM_MODEL_ID.keys()))
     all_glogem = {}
@@ -106,7 +104,6 @@ def load_ensemble_glogem(nml):
 
     if not glogem_file.exists():
         print(f"  WARNING: GloGEM file not found: {glogem_file}")
-        # Try per-model files in model output dirs
         for model_id in models:
             glogem_id = GLOGEM_MODEL_ID.get(model_id, model_id.lower())
             model_glogem = topo_dir / f'GloGEM_catchment_averaged_{glogem_id}.csv'
@@ -124,9 +121,7 @@ def load_ensemble_glogem(nml):
     # Check if there are model-specific files first
     for model_id in models:
         glogem_id = GLOGEM_MODEL_ID.get(model_id, model_id.lower())
-        # Check model-specific output dir for GloGEM data
-        model_topo = main_dir / config_dir / f"catchment_{gauge_id}" / 'topo_files'
-        model_glogem = model_topo / f'GloGEM_catchment_averaged_{glogem_id}.csv'
+        model_glogem = topo_dir / f'GloGEM_catchment_averaged_{glogem_id}.csv'
 
         if model_glogem.exists():
             glogem_path = model_glogem
@@ -152,11 +147,12 @@ def load_historical_observed(nml):
     """
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
-    main_dir = Path(nml['main_dir'])
-    # Historical config_dir = future config_dir minus '_future'
-    hist_config_dir = nml['config_dir'].replace('_future', '')
-    hist_output = (main_dir / hist_config_dir / f"catchment_{gauge_id}" /
-                   model_type / 'output' / f"{gauge_id}_{model_type}_Hydrographs.csv")
+    hist_nml = dict(nml)
+    hist_nml['config_dir'] = nml['config_dir'].replace('_future', '')
+    if '_config_key' in hist_nml:
+        hist_nml['_config_key'] = hist_nml['_config_key'].replace('_future', '')
+    hist_paths = get_paths(hist_nml)
+    hist_output = hist_paths['output_dir'] / f"{gauge_id}_{model_type}_Hydrographs.csv"
 
     if not hist_output.exists():
         print(f"  No historical hydrograph found: {hist_output}")
@@ -181,11 +177,8 @@ def load_historical_observed(nml):
 
 def create_future_plot_dir(nml):
     """Create output directory for future ensemble plots."""
-    gauge_id = str(nml['gauge_id'])
-    model_type = nml['model_type']
-    main_dir = Path(nml['main_dir'])
-    config_dir = nml['config_dir']
-    plot_dir = main_dir / config_dir / f"catchment_{gauge_id}" / model_type / 'output' / 'future_plots'
+    paths = get_paths(nml)
+    plot_dir = paths['output_dir'] / 'future_plots'
     plot_dir.mkdir(parents=True, exist_ok=True)
     return plot_dir
 

@@ -1,0 +1,10 @@
+# Uncoupled, ERA5, subdaily melt, aspect discretization
+_config_key: 'subdaily_aspect'
+display_name: 'HBV Subdaily Aspect'
+color: '#98df8a'
+coupled: false
+glacier_source: 'none'
+criteria:
+  - elevation
+  - landuse
+  - aspect

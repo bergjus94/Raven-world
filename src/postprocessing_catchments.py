@@ -14,6 +14,7 @@ from postprocessing_configurations import (
     load_configurations, _build_individual_config,
     run_complete_multi_postprocessing
 )
+from paths import get_paths
 
 import pandas as pd
 import numpy as np
@@ -44,25 +45,23 @@ import csv
 ################################## data loading #################################
 #--------------------------------------------------------------------------------
 
-def load_catchment_registry(yaml_path):
-    """Load the catchments block from configurations.yaml."""
-    with open(yaml_path, 'r') as f:
-        registry = yaml.safe_load(f)
-    return registry.get('catchments', [])
+def load_catchment_registry():
+    """Load the catchments registry from config layers."""
+    from config_merge import load_catchments_registry
+    return load_catchments_registry()
 
 
-def load_all_catchment_data(yaml_path, catchment_filter=None, config_filter=None):
+def load_all_catchment_data(catchment_filter=None, config_filter=None):
     """
     Load metrics and regime data for all catchments × configurations.
 
     Returns catchment_results dict keyed by gauge_id, plus config_registry list.
     Uses load-compute-discard: each hydrograph CSV is freed after metric extraction.
     """
-    with open(yaml_path, 'r') as f:
-        registry = yaml.safe_load(f)
+    from config_merge import load_catchments_registry, load_configurations_registry
 
-    catchments = registry.get('catchments', [])
-    config_registry = registry['configurations']
+    catchments = load_catchments_registry()
+    config_registry = load_configurations_registry()
 
     # Auto-assign catchment colors if not specified in YAML (12 distinct colors)
     _catchment_palette = [
@@ -89,8 +88,8 @@ def load_all_catchment_data(yaml_path, catchment_filter=None, config_filter=None
         print(f"Loading catchment {gauge_id} ({catch['display_name']})")
         print(f"{'='*60}")
 
-        # Load multi_config for this catchment (resolves namelists, config_dirs)
-        multi_config = load_configurations(yaml_path, gauge_id)
+        # Load multi_config for this catchment (uses composable config layers)
+        multi_config = load_configurations(gauge_id)
         if multi_config is None:
             print(f"  WARNING: Could not load configurations for {gauge_id}, skipping")
             continue
@@ -98,27 +97,16 @@ def load_all_catchment_data(yaml_path, catchment_filter=None, config_filter=None
         validation_start = catch['validation_start']
         validation_end = catch['validation_end']
 
-        # Build a key->config_dir mapping for this catchment
-        key_to_dir = {}
-        for cfg in config_registry:
-            key = cfg['key']
-            # Find matching config_dir in multi_config
-            for cdir in multi_config['configs']:
-                if multi_config['config_names'].get(cdir) == cfg['display_name']:
-                    key_to_dir[key] = cdir
-                    break
-
         metrics = {}
         regime_data = {}
 
         for cfg in config_registry_filtered:
             key = cfg['key']
-            config_dir = key_to_dir.get(key)
-            if config_dir is None:
+            if key not in multi_config['configs']:
                 print(f"  - {key}: not available for {gauge_id}")
                 continue
 
-            individual_config = _build_individual_config(multi_config, config_dir)
+            individual_config = _build_individual_config(multi_config, key)
 
             try:
                 data = load_hydrograph_data(individual_config)
@@ -155,7 +143,6 @@ def load_all_catchment_data(yaml_path, catchment_filter=None, config_filter=None
             'metrics': metrics,
             'regime_data': regime_data,
             'catchment_info': catch,
-            'key_to_dir': key_to_dir,
         }
 
         n_loaded = len(metrics)
@@ -422,21 +409,19 @@ def plot_glacier_contribution_comparison(catchment_results, config_registry, plo
         glacier_fractions[key] = {}
         for gid in catchment_ids:
             mc = catchment_results[gid].get('multi_config')
-            key_to_dir = catchment_results[gid].get('key_to_dir', {})
-            config_dir = key_to_dir.get(key)
-            if mc is None or config_dir is None:
+            if mc is None or key not in mc.get('configs', []):
                 continue
 
-            individual_config = _build_individual_config(mc, config_dir)
+            individual_config = _build_individual_config(mc, key)
             try:
                 info = catchment_results[gid]['catchment_info']
                 gauge_id = mc['gauge_id']
                 model_type = mc['model_type']
-                config_path = Path(mc['main_dir']) / config_dir
+                paths = get_paths(individual_config)
 
                 # Load GLACIERMELT_ALLMassLoadings.csv (produced by all Raven runs)
-                glacier_file = (config_path / f"catchment_{gauge_id}" / model_type /
-                                "output" / f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv")
+                glacier_file = (paths['output_dir'] /
+                                f"{gauge_id}_{model_type}_GLACIERMELT_ALLMassLoadings.csv")
                 if not glacier_file.exists():
                     continue
 
