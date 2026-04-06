@@ -1,0 +1,19 @@
+# =============================================================================
+# Catchment 0101 - Chandra @ Tandi
+# =============================================================================
+
+catchment: '0101'
+display_name: 'Chandra @ Tandi'
+
+start_date: '2016-06-22'
+end_date: '2022-12-31'
+cali_end_date: '2020-12-31'
+warm_up_date: '2015-06-22'
+
+models:
+  - HBV
+
+configurations:
+  - baseline
+  - glogem
+

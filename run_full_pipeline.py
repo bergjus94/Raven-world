@@ -667,7 +667,14 @@ def _run_multi_config(catchment_nml, args):
     catchment_id = str(catchment_nml['catchment'])
     models = catchment_nml.get('models', ['HBV'])
     configurations = catchment_nml['configurations']
+
+    # Extract overrides from the catchment namelist — catchment-specific fields
+    # (dates, calibration, future) take precedence over layer defaults
     overrides = {}
+    for key in ('start_date', 'end_date', 'cali_end_date', 'warm_up_date',
+                'display_name', 'gauge_id'):
+        if key in catchment_nml:
+            overrides[key] = catchment_nml[key]
     if 'calibration' in catchment_nml:
         overrides['calibration'] = catchment_nml['calibration']
     if 'future' in catchment_nml:

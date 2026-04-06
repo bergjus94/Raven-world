@@ -1,0 +1,19 @@
+# =============================================================================
+# Catchment 0118 - Shigar @ Shigar
+# =============================================================================
+
+catchment: '0118'
+display_name: 'Shigar @ Shigar'
+
+start_date: '1985-01-01'
+end_date: '1997-12-31'
+cali_end_date: '1992-12-31'
+warm_up_date: '1983-01-01'
+
+models:
+  - HBV
+
+configurations:
+  - baseline
+  - glogem
+

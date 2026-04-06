@@ -145,7 +145,8 @@ def load_config(
     # Load layers in merge order
     defaults = _load_yaml(ld / 'defaults.yaml')
     env_layer = _load_yaml(ld / 'env' / f'{env}.yaml')
-    catchment_layer = _load_yaml(ld / 'catchments' / f'{catchment}.yaml')
+    catchment_path = ld / 'catchments' / f'{catchment}.yaml'
+    catchment_layer = _load_yaml(catchment_path) if catchment_path.exists() else {'gauge_id': catchment}
     config_layer = _load_yaml(ld / 'configurations' / f'{configuration}.yaml')
     model_layer = _load_yaml(ld / 'models' / f'{model}.yaml')
 

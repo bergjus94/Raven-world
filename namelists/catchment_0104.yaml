@@ -1,13 +1,12 @@
 # =============================================================================
-# Catchment 0122 - Swat @ Kalam
+# Catchment 0104
 # =============================================================================
 
-catchment: '0122'
-display_name: 'Swat @ Kalam'
+catchment: '0104'
 
 start_date: '1980-01-01'
-end_date: '1997-12-31'
-cali_end_date: '1989-12-31'
+end_date: '2008-12-31'
+cali_end_date: '1995-12-31'
 warm_up_date: '1978-01-01'
 
 models:
@@ -17,9 +16,3 @@ configurations:
   - baseline
   - glogem
 
-# Override defaults (optional)
-# calibration:
-#   iterations: 5000
-#   ngs: 15
-# future:
-#   enabled: true
