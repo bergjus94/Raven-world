@@ -291,7 +291,7 @@ def phase3_convert_params(nml, logger=None):
     verified_csv = output_dir / f"{gauge_id}_{model_type}_VERIFIED_best_params.csv"
 
     # Output path
-    calibrated_yaml = script_dir / 'src' / 'config' / f"calibrated_params_{config_key}_{gauge_id}.yaml"
+    calibrated_yaml = script_dir / 'src' / 'config' / f"calibrated_params_{config_key}_{model_type}_{gauge_id}.yaml"
 
     # Check if already exists
     if calibrated_yaml.exists():
