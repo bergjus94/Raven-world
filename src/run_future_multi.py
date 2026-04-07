@@ -34,6 +34,9 @@ import yaml
 script_dir = Path(__file__).parent.absolute()
 project_dir = script_dir.parent
 
+sys.path.insert(0, str(script_dir))
+from paths import get_paths
+
 # All 5 ISIMIP3b models (matching GloGEM)
 ALL_MODELS = [
     "GFDL-ESM4",
@@ -358,13 +361,10 @@ def _add_rvi_output_options(rvi_path, coupled, logger):
         ]
     else:
         transport_tracers = [
-            "\n#Transport for Snowmelt and Glacier Melt Tracking (Non-Coupled Mode)\n",
+            "\n#Transport for Snowmelt Tracking (Non-Coupled Mode)\n",
             "\n",
             ":Transport SNOWMELT TRACER\n",
             ":FixedConcentration SNOWMELT SNOW 1.0\n",
-            "\n",
-            ":Transport GLACIERMELT_ALL TRACER\n",
-            ":FixedConcentration GLACIERMELT_ALL GLACIER 1.0\n",
         ]
 
     # Find #Output Options line and insert after it
