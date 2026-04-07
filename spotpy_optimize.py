@@ -1305,7 +1305,7 @@ class RavenSCEUA(object):
                 "  :CustomOutput DAILY AVERAGE ATMOSPHERE BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE SOIL[0] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SOIL[1] BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n",
+                *(["  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n"] if self.model_type == 'HBV' else []),
                 "  :CustomOutput DAILY AVERAGE AET BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE AET BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_BASIN\n",
@@ -1347,15 +1347,12 @@ class RavenSCEUA(object):
                     ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
                 ]
             else:
-                # NON-COUPLED MODE: Tracers for standard Raven glacier/snow processes
+                # NON-COUPLED MODE: Snowmelt tracer only (no glacier irrigation)
                 transport_tracers = [
-                    "\n#Transport for Snowmelt and Glacier Melt Tracking (Non-Coupled Mode)\n",
+                    "\n#Transport for Snowmelt Tracking (Non-Coupled Mode)\n",
                     "\n",
                     ":Transport SNOWMELT TRACER\n",
                     ":FixedConcentration SNOWMELT SNOW 1.0\n",
-                    "\n",
-                    ":Transport GLACIERMELT_ALL TRACER\n",
-                    ":FixedConcentration GLACIERMELT_ALL GLACIER 1.0\n",
                 ]
             
             # Find the #Output Options line and insert everything after it

@@ -243,7 +243,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
         # Step 4: Add output options + transport tracers to .rvi
         model_dir = paths['model_dir']
         _add_rvi_output_options(model_dir / f"{gauge_id}_{model_type}.rvi",
-                                nml.get("coupled", False), logger)
+                                nml.get("coupled", False), model_type, logger)
 
         # Step 4b: Update .rvt to point to this model's CMIP6 forcing files
         rvt_path = model_dir / f"{gauge_id}_{model_type}.rvt"
@@ -290,7 +290,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
         return True
 
 
-def _add_rvi_output_options(rvi_path, coupled, logger):
+def _add_rvi_output_options(rvi_path, coupled, model_type, logger):
     """Add output options and transport tracers to .rvi file if missing.
 
     During calibration these are intentionally left out for speed, so they
@@ -320,7 +320,7 @@ def _add_rvi_output_options(rvi_path, coupled, logger):
         "  :CustomOutput DAILY AVERAGE ATMOSPHERE BY_HRU_GROUP\n",
         "  :CustomOutput DAILY AVERAGE SOIL[0] BY_HRU\n",
         "  :CustomOutput DAILY AVERAGE SOIL[1] BY_HRU\n",
-        "  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n",
+        *(["  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n"] if model_type == 'HBV' else []),
         "  :CustomOutput DAILY AVERAGE AET BY_HRU\n",
         "  :CustomOutput DAILY AVERAGE AET BY_HRU_GROUP\n",
         "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_BASIN\n",

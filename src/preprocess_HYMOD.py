@@ -1048,7 +1048,7 @@ class HYMODPreprocessor:
             ],
             "#Output Options": [
                         ],
-            "#Transport for Snowmelt and Glacier Melt Tracking": self._transport_lines()
+            "#Transport for Snowmelt and Glacier Melt Tracking": []
         }
 
     def create_rvc_file(self, template: bool = False):
