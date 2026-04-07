@@ -339,10 +339,10 @@ class _DownscalerBase:
 
         self.gauge_id  = self.config["gauge_id"]
         self.main_dir  = Path(self.config["main_dir"])
-        self.model_dir = self.main_dir / self.config["config_dir"]
-        self.shared_data_dir = (
-            self.model_dir / f"catchment_{self.gauge_id}" / "data_obs"
-        )
+        from paths import get_paths
+        paths = get_paths(self.config)
+        self.model_dir = paths['catchment_dir'].parent
+        self.shared_data_dir = paths['data_obs_dir']
         self.shared_data_dir.mkdir(parents=True, exist_ok=True)
 
         self.train_start = pd.Timestamp(

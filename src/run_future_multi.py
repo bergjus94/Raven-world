@@ -472,8 +472,7 @@ Examples:
             print(f"Error: Unknown model '{m}'. Valid: {ALL_MODELS}")
             sys.exit(1)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = args.log_file or f"future_multi_{timestamp}.log"
+    log_file = args.log_file  # Use parent's log file if provided, otherwise stdout only
     logger = setup_logging(args.verbose, log_file)
 
     logger.info("=" * 70)
