@@ -657,11 +657,36 @@ def _plot_ensemble(all_hydro, gauge_id, output_dir, logger):
 # Multi-config catchment runner
 # =============================================================================
 
+def _build_sub_argv(args, namelist_path, log_file, skip_preprocessing=False):
+    """Build subprocess argv from parsed args."""
+    sub_argv = [str(namelist_path), '--log-file', log_file]
+    if skip_preprocessing or args.skip_preprocessing:
+        sub_argv.append('--skip-preprocessing')
+    if args.skip_calibration:
+        sub_argv.append('--skip-calibration')
+    if args.skip_download:
+        sub_argv.append('--skip-download')
+    if args.skip_future:
+        sub_argv.append('--skip-future')
+    if args.force:
+        sub_argv.append('--force')
+    if args.iterations:
+        sub_argv.extend(['--iterations', str(args.iterations)])
+    if args.ngs:
+        sub_argv.extend(['--ngs', str(args.ngs)])
+    if args.bbox:
+        sub_argv.extend(['--bbox'] + [str(b) for b in args.bbox])
+    return [sys.executable, str(Path(__file__).resolve())] + sub_argv
+
+
 def _run_multi_config(catchment_nml, args):
     """Run the full pipeline for each model × configuration in a catchment namelist.
 
-    Runs jobs in parallel (default: 15 workers). Each job is a subprocess
-    with its own log file.
+    Two-phase approach to avoid race conditions on shared files:
+      Phase A: For each config, run input creation (Phase 1) sequentially
+               using the first model. This creates shared topo/meteo files.
+      Phase B: Run all model × config calibration + future jobs in parallel
+               (skipping preprocessing since Phase A already did it).
 
     Returns 0 if all succeeded, 1 if any failed.
     """
@@ -684,9 +709,7 @@ def _run_multi_config(catchment_nml, args):
     if 'future' in catchment_nml:
         overrides['future_projections'] = catchment_nml['future']
 
-    # Build list of (config, model) jobs
-    jobs = [(config, model) for config in configurations for model in models]
-    total = len(jobs)
+    total = len(models) * len(configurations)
 
     print("=" * 70)
     print(f"MULTI-CONFIG PIPELINE: catchment {catchment_id}")
@@ -696,50 +719,112 @@ def _run_multi_config(catchment_nml, args):
     print(f"  Parallel workers: {max_workers}")
     print("=" * 70)
 
-    # Prepare all jobs: generate temp namelists + commands
-    job_info = {}  # run_key -> (cmd, tmp_path, log_file)
-    for config, model in jobs:
-        run_key = f"{config}/{model}"
-        try:
-            nml, tmp_path = load_config(
-                catchment=catchment_id,
-                configuration=config,
-                model=model,
-                env=args.env,
-                overrides=overrides if overrides else None,
-            )
-            namelist_path = Path(tmp_path).resolve()
-        except Exception as e:
-            print(f"  [{run_key}] Failed to load config: {e}")
-            job_info[run_key] = None
-            continue
+    start_time = time.time()
 
-        log_file = f"pipeline_{catchment_id}_{config}_{model}.log"
+    # =====================================================================
+    # Phase A: Sequential input creation (one per config, using first model)
+    # =====================================================================
+    if not args.skip_preprocessing:
+        print(f"\n{'='*70}")
+        print(f"PHASE A: Sequential input creation ({len(configurations)} configs)")
+        print(f"{'='*70}")
 
-        sub_argv = [str(namelist_path), '--log-file', log_file]
-        if args.skip_preprocessing:
-            sub_argv.append('--skip-preprocessing')
-        if args.skip_calibration:
-            sub_argv.append('--skip-calibration')
-        if args.skip_download:
-            sub_argv.append('--skip-download')
-        if args.skip_future:
-            sub_argv.append('--skip-future')
-        if args.force:
-            sub_argv.append('--force')
-        if args.iterations:
-            sub_argv.extend(['--iterations', str(args.iterations)])
-        if args.ngs:
-            sub_argv.extend(['--ngs', str(args.ngs)])
-        if args.bbox:
-            sub_argv.extend(['--bbox'] + [str(b) for b in args.bbox])
+        for config in configurations:
+            # Use first model for input creation (shared files are model-independent)
+            first_model = models[0]
+            run_key = f"{config}/{first_model}"
 
-        cmd = [sys.executable, str(Path(__file__).resolve())] + sub_argv
-        job_info[run_key] = (cmd, tmp_path, log_file)
+            try:
+                nml, tmp_path = load_config(
+                    catchment=catchment_id, configuration=config,
+                    model=first_model, env=args.env,
+                    overrides=overrides if overrides else None,
+                )
+            except Exception as e:
+                print(f"  [{config}] Failed to load config: {e}")
+                continue
+
+            log_file = f"pipeline_{catchment_id}_{config}_inputs.log"
+            # Run only Phase 1 (skip calibration + future)
+            cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file)
+            # Override: only do preprocessing
+            cmd_phase1 = [a for a in cmd if a not in ('--skip-preprocessing',)]
+            cmd_phase1.extend(['--skip-calibration', '--skip-future'])
+
+            elapsed = (time.time() - start_time) / 60
+            print(f"  [{config:30s}] Creating input files...  ({elapsed:.0f}min)")
+
+            try:
+                proc = subprocess.run(
+                    cmd_phase1, capture_output=True, text=True, timeout=7200,
+                )
+                status = "OK" if proc.returncode == 0 else "FAILED"
+                if proc.returncode != 0:
+                    print(f"  [{config:30s}] Input creation FAILED — see {log_file}")
+            except subprocess.TimeoutExpired:
+                status = "TIMEOUT"
+                print(f"  [{config:30s}] Input creation TIMED OUT")
+            finally:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+            elapsed = (time.time() - start_time) / 60
+            print(f"  [{config:30s}] {status}  ({elapsed:.0f}min)")
+
+            # Also create input files for other model types (fast — only .rv* files differ)
+            for model in models[1:]:
+                try:
+                    nml2, tmp2 = load_config(
+                        catchment=catchment_id, configuration=config,
+                        model=model, env=args.env,
+                        overrides=overrides if overrides else None,
+                    )
+                    log2 = f"pipeline_{catchment_id}_{config}_{model}_inputs.log"
+                    cmd2 = _build_sub_argv(args, Path(tmp2).resolve(), log2)
+                    cmd2_phase1 = [a for a in cmd2 if a not in ('--skip-preprocessing',)]
+                    cmd2_phase1.extend(['--skip-calibration', '--skip-future'])
+                    subprocess.run(cmd2_phase1, capture_output=True, text=True, timeout=600)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        Path(tmp2).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+    # =====================================================================
+    # Phase B: Parallel calibration + future (skip preprocessing)
+    # =====================================================================
+    print(f"\n{'='*70}")
+    print(f"PHASE B: Parallel calibration + future ({total} jobs, {max_workers} workers)")
+    print(f"{'='*70}")
+
+    # Prepare all jobs
+    job_info = {}
+    for config in configurations:
+        for model in models:
+            run_key = f"{config}/{model}"
+            try:
+                nml, tmp_path = load_config(
+                    catchment=catchment_id, configuration=config,
+                    model=model, env=args.env,
+                    overrides=overrides if overrides else None,
+                )
+            except Exception as e:
+                print(f"  [{run_key}] Failed to load config: {e}")
+                job_info[run_key] = None
+                continue
+
+            log_file = f"pipeline_{catchment_id}_{config}_{model}.log"
+            cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
+                                  skip_preprocessing=True)
+            job_info[run_key] = (cmd, tmp_path, log_file)
 
     # Run in parallel
     results = {}
-    start_time = time.time()
+    phase_b_start = time.time()
 
     def _run_one(run_key):
         info = job_info[run_key]
