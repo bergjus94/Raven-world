@@ -247,15 +247,15 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
         rvt_path = model_dir / f"{gauge_id}_{model_type}.rvt"
         _swap_rvt_model(rvt_path, model_id, logger)
 
-        # Step 5: Run Raven forward
+        # Step 5: Run Raven forward (output to model-specific subfolder)
         logger.info(f"  Running Raven for {model_id}...")
-        output_dir = paths['output_dir']
-        output_dir.mkdir(parents=True, exist_ok=True)
+        model_output_dir = paths['output_dir'] / GLOGEM_MODEL_ID[model_id]
+        model_output_dir.mkdir(parents=True, exist_ok=True)
 
         model_file = model_dir / f"{gauge_id}_{model_type}"
         raven_exe = nml.get("raven_executable", "Raven")
 
-        cmd = [str(raven_exe), str(model_file), "-o", str(output_dir) + "/"]
+        cmd = [str(raven_exe), str(model_file), "-o", str(model_output_dir) + "/"]
         try:
             start = time.time()
             process = subprocess.run(
@@ -269,17 +269,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
             logger.error(e.stderr[-500:] if e.stderr else "")
             return False
 
-        # Step 6: Move output to model-specific subfolder
-        model_output_dir = output_dir / GLOGEM_MODEL_ID[model_id]
-        model_output_dir.mkdir(parents=True, exist_ok=True)
-
-        for f in output_dir.glob(f"{gauge_id}_{model_type}_*"):
-            if f.is_file():
-                dest = model_output_dir / f.name
-                shutil.move(str(f), str(dest))
-                logger.info(f"  Moved: {f.name} → {model_output_dir.name}/")
-
-        # Also keep a copy of the .rvt for reference
+        # Keep a copy of the .rvt for reference
         rvt_file = model_dir / f"{gauge_id}_{model_type}.rvt"
         if rvt_file.exists():
             shutil.copy2(str(rvt_file), str(model_output_dir / rvt_file.name))
