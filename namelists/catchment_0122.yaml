@@ -18,22 +18,6 @@ models:
 
 configurations:
   - baseline
-  - glogem
-  - har
-  - oudin
-  - tphipr
-  - icimod
-  - icemelt
-  - subdaily
-  - subdaily_aspect
-  - glogem_har
-  - glogem_oudin
-  - glogem_tphipr
-  - glogem_icimod
-  - glogem_subdaily
-  - glogem_subdaily_aspect
-  - glogem_gmb
-  - icemelt_subdaily
 
 calibration:
   iterations: 10
