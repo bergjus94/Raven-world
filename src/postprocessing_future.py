@@ -148,7 +148,8 @@ def load_historical_observed(nml):
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
     hist_nml = dict(nml)
-    hist_nml['config_dir'] = nml['config_dir'].replace('_future', '')
+    if 'config_dir' in hist_nml:
+        hist_nml['config_dir'] = hist_nml['config_dir'].replace('_future', '')
     if '_config_key' in hist_nml:
         hist_nml['_config_key'] = hist_nml['_config_key'].replace('_future', '')
     hist_paths = get_paths(hist_nml)

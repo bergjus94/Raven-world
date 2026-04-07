@@ -236,9 +236,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                 logger.error(f"  Input creation failed for {model_id}")
                 return False
 
-        # Step 3: Fix leap days in CMIP6 files (noleap → standard)
-        logger.info(f"  Fixing leap days for {model_id}...")
-        _fix_leap_days(data_obs_dir, model_id)
+        # Step 3: Leap day fix removed — CMIP6Downscaler handles this internally
 
         # Step 4: Add output options + transport tracers to .rvi
         model_dir = paths['model_dir']
