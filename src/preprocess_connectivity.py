@@ -81,16 +81,8 @@ class HRUConnectivityCalculator:
             self.min_area_threshold = config.get('min_area_threshold', 0.01)
             self.debug = config.get('debug', False)
         
-        # ✅ NEW: Define MODEL-SPECIFIC directory (for backward compatibility)
-        if hasattr(self, 'model_type'):
-            self.model_data_dir = self.model_dir / self.model_type / 'data_obs'
-        else:
-            self.model_data_dir = None
-        
         # Create directories
         self.shared_data_dir.mkdir(parents=True, exist_ok=True)
-        if self.model_data_dir:
-            self.model_data_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize data containers
         self.dem_path = None
@@ -140,8 +132,7 @@ class HRUConnectivityCalculator:
         # ✅ NEW: Log directory structure
         logger.info(f"HRU Connectivity Calculator for gauge {self.gauge_id}")
         logger.info(f"📁 Shared connectivity files: {self.shared_data_dir}")
-        if self.model_data_dir:
-            logger.info(f"📋 Files will be copied to: {self.model_data_dir}")
+        pass  # model_data_dir removed — connectivity files live in shared_data_dir only
         
         return logger
 
@@ -683,34 +674,7 @@ class HRUConnectivityCalculator:
         """
         import shutil
         
-        if not self.model_data_dir:
-            self.logger.debug("No model-specific directory defined - skipping copy")
-            return
-        
-        # Files to copy
-        connectivity_files = [
-            self.get_path('connections.rvh'),
-            self.get_path('HRU_connectivity.csv')
-        ]
-        
-        self.logger.info(f"📋 Copying connectivity files from shared to model-specific directory...")
-        self.logger.debug(f"  Source: {self.shared_data_dir}")
-        self.logger.debug(f"  Destination: {self.model_data_dir}")
-        
-        copied_count = 0
-        for file_path in connectivity_files:
-            if file_path.exists():
-                dest = self.model_data_dir / file_path.name
-                try:
-                    shutil.copy2(file_path, dest)
-                    self.logger.debug(f"  ✅ Copied: {file_path.name}")
-                    copied_count += 1
-                except Exception as e:
-                    self.logger.warning(f"  ❌ Failed to copy {file_path.name}: {e}")
-            else:
-                self.logger.warning(f"  ⚠️ File not found: {file_path}")
-        
-        self.logger.info(f"✅ Successfully copied {copied_count}/{len(connectivity_files)} files to {self.model_data_dir.name}/")
+        return  # connectivity files live in shared_data_dir only
 
     #---------------------------------------------------------------------------------
 
