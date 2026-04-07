@@ -859,47 +859,48 @@ def _run_multi_config(catchment_nml, args):
             print(f"  [{done}/{total}] {run_key:40s} {status:6s}  ({elapsed/60:.0f}min)  {log}")
 
     # =====================================================================
-    # Phase C: Sequential future projections (per config, shared CMIP6 files)
+    # Phase C: Future projections
+    #   C1: Sequential — first model per config (creates shared CMIP6 files)
+    #   C2: Parallel — remaining models (CMIP6 files already exist)
     # =====================================================================
     if not args.skip_future:
+        def _build_future_cmd(config, model, log_file):
+            """Build a future-only pipeline command."""
+            nml, tmp_path = load_config(
+                catchment=catchment_id, configuration=config,
+                model=model, env=args.env,
+                overrides=overrides if overrides else None,
+            )
+            cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
+                                  skip_preprocessing=True)
+            cmd = [a for a in cmd if a != '--skip-future']
+            if '--skip-calibration' not in cmd:
+                cmd.append('--skip-calibration')
+            return cmd, tmp_path
+
+        # C1: First model — sequential (creates CMIP6 downscaled files)
+        first_model = models[0]
         print(f"\n{'='*70}")
-        print(f"PHASE C: Sequential future projections ({len(configurations)} configs)")
+        print(f"PHASE C1: Future projections — {first_model} ({len(configurations)} configs, sequential)")
         print(f"{'='*70}")
 
         for config in configurations:
-            # Use first model for future runs (creates shared CMIP6 + irrigation files)
-            first_model = models[0]
-            run_key = f"{config}/{first_model}"
-
             try:
-                nml, tmp_path = load_config(
-                    catchment=catchment_id, configuration=config,
-                    model=first_model, env=args.env,
-                    overrides=overrides if overrides else None,
-                )
+                cmd, tmp_path = _build_future_cmd(
+                    config, first_model,
+                    f"pipeline_{catchment_id}_{config}_{first_model}_future.log")
             except Exception as e:
                 print(f"  [{config}] Failed to load config: {e}")
                 continue
 
-            log_file = f"pipeline_{catchment_id}_{config}_future.log"
-            # Run only future phases (skip preprocessing + calibration)
-            cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
-                                  skip_preprocessing=True)
-            # Remove --skip-future if present, add --skip-calibration
-            cmd = [a for a in cmd if a != '--skip-future']
-            if '--skip-calibration' not in cmd:
-                cmd.append('--skip-calibration')
-
             elapsed = (time.time() - start_time) / 60
-            print(f"  [{config:30s}] Running future projections...  ({elapsed:.0f}min)")
+            print(f"  [{config:30s}] {first_model} future...  ({elapsed:.0f}min)")
 
             try:
-                proc = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=14400,
-                )
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
                 status = "OK" if proc.returncode == 0 else "FAILED"
                 if proc.returncode != 0:
-                    print(f"  [{config:30s}] Future projections FAILED — see {log_file}")
+                    print(f"  [{config:30s}] FAILED — see pipeline_{catchment_id}_{config}_{first_model}_future.log")
             except subprocess.TimeoutExpired:
                 status = "TIMEOUT"
             finally:
@@ -910,6 +911,52 @@ def _run_multi_config(catchment_nml, args):
 
             elapsed = (time.time() - start_time) / 60
             print(f"  [{config:30s}] {status}  ({elapsed:.0f}min)")
+
+        # C2: Remaining models — parallel (CMIP6 files already exist)
+        remaining_models = models[1:]
+        if remaining_models:
+            future_jobs = [(config, model) for config in configurations for model in remaining_models]
+            print(f"\n{'='*70}")
+            print(f"PHASE C2: Future projections — remaining models ({len(future_jobs)} jobs, {max_workers} workers)")
+            print(f"{'='*70}")
+
+            future_job_info = {}
+            for config, model in future_jobs:
+                run_key = f"{config}/{model}"
+                try:
+                    log_file = f"pipeline_{catchment_id}_{config}_{model}_future.log"
+                    cmd, tmp_path = _build_future_cmd(config, model, log_file)
+                    future_job_info[run_key] = (cmd, tmp_path, log_file)
+                except Exception as e:
+                    print(f"  [{run_key}] Failed to load config: {e}")
+                    future_job_info[run_key] = None
+
+            def _run_future_one(run_key):
+                info = future_job_info[run_key]
+                if info is None:
+                    return run_key, False
+                cmd, tmp_path, log_file = info
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
+                    ok = proc.returncode == 0
+                except subprocess.TimeoutExpired:
+                    ok = False
+                finally:
+                    try:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                return run_key, ok
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_run_future_one, key): key for key in future_job_info}
+                n_future = len(future_job_info)
+                for i, future in enumerate(as_completed(futures), 1):
+                    run_key, ok = future.result()
+                    elapsed = time.time() - start_time
+                    status = "OK" if ok else "FAILED"
+                    log = future_job_info[run_key][2] if future_job_info[run_key] else ""
+                    print(f"  [{i}/{n_future}] {run_key:40s} {status:6s}  ({elapsed/60:.0f}min)  {log}")
 
     # Summary
     elapsed_total = (time.time() - start_time) / 60
