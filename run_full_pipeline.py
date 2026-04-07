@@ -795,13 +795,13 @@ def _run_multi_config(catchment_nml, args):
                         pass
 
     # =====================================================================
-    # Phase B: Parallel calibration + future (skip preprocessing)
+    # Phase B: Parallel calibration (skip preprocessing + future)
     # =====================================================================
     print(f"\n{'='*70}")
-    print(f"PHASE B: Parallel calibration + future ({total} jobs, {max_workers} workers)")
+    print(f"PHASE B: Parallel calibration ({total} jobs, {max_workers} workers)")
     print(f"{'='*70}")
 
-    # Prepare all jobs
+    # Prepare all jobs — skip preprocessing AND future (future handled in Phase C)
     job_info = {}
     for config in configurations:
         for model in models:
@@ -820,11 +820,13 @@ def _run_multi_config(catchment_nml, args):
             log_file = f"pipeline_{catchment_id}_{config}_{model}.log"
             cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
                                   skip_preprocessing=True)
+            # Always skip future in Phase B — handled sequentially in Phase C
+            if '--skip-future' not in cmd:
+                cmd.append('--skip-future')
             job_info[run_key] = (cmd, tmp_path, log_file)
 
     # Run in parallel
     results = {}
-    phase_b_start = time.time()
 
     def _run_one(run_key):
         info = job_info[run_key]
@@ -855,6 +857,59 @@ def _run_multi_config(catchment_nml, args):
             done = len(results)
             log = job_info[run_key][2] if job_info[run_key] else ""
             print(f"  [{done}/{total}] {run_key:40s} {status:6s}  ({elapsed/60:.0f}min)  {log}")
+
+    # =====================================================================
+    # Phase C: Sequential future projections (per config, shared CMIP6 files)
+    # =====================================================================
+    if not args.skip_future:
+        print(f"\n{'='*70}")
+        print(f"PHASE C: Sequential future projections ({len(configurations)} configs)")
+        print(f"{'='*70}")
+
+        for config in configurations:
+            # Use first model for future runs (creates shared CMIP6 + irrigation files)
+            first_model = models[0]
+            run_key = f"{config}/{first_model}"
+
+            try:
+                nml, tmp_path = load_config(
+                    catchment=catchment_id, configuration=config,
+                    model=first_model, env=args.env,
+                    overrides=overrides if overrides else None,
+                )
+            except Exception as e:
+                print(f"  [{config}] Failed to load config: {e}")
+                continue
+
+            log_file = f"pipeline_{catchment_id}_{config}_future.log"
+            # Run only future phases (skip preprocessing + calibration)
+            cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
+                                  skip_preprocessing=True)
+            # Remove --skip-future if present, add --skip-calibration
+            cmd = [a for a in cmd if a != '--skip-future']
+            if '--skip-calibration' not in cmd:
+                cmd.append('--skip-calibration')
+
+            elapsed = (time.time() - start_time) / 60
+            print(f"  [{config:30s}] Running future projections...  ({elapsed:.0f}min)")
+
+            try:
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=14400,
+                )
+                status = "OK" if proc.returncode == 0 else "FAILED"
+                if proc.returncode != 0:
+                    print(f"  [{config:30s}] Future projections FAILED — see {log_file}")
+            except subprocess.TimeoutExpired:
+                status = "TIMEOUT"
+            finally:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+            elapsed = (time.time() - start_time) / 60
+            print(f"  [{config:30s}] {status}  ({elapsed:.0f}min)")
 
     # Summary
     elapsed_total = (time.time() - start_time) / 60
