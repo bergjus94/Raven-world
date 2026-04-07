@@ -1,5 +1,5 @@
 # =============================================================================
-# Catchment 0122 - Swat @ Kalam
+# Catchment 0122 - Swat @ Kalam — FULL TEST RUN
 # =============================================================================
 
 catchment: '0122'
@@ -12,14 +12,32 @@ warm_up_date: '1978-01-01'
 
 models:
   - HBV
+  - HMETS
+  - HYMOD
+  - MOHYSE
 
 configurations:
   - baseline
   - glogem
+  - har
+  - oudin
+  - tphipr
+  - icimod
+  - icemelt
+  - subdaily
+  - subdaily_aspect
+  - glogem_har
+  - glogem_oudin
+  - glogem_tphipr
+  - glogem_icimod
+  - glogem_subdaily
+  - glogem_subdaily_aspect
+  - glogem_gmb
+  - icemelt_subdaily
 
-# Override defaults (optional)
-# calibration:
-#   iterations: 5000
-#   ngs: 15
-# future:
-#   enabled: true
+calibration:
+  iterations: 10
+  ngs: 2
+
+future:
+  enabled: true

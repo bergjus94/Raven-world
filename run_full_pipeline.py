@@ -660,16 +660,20 @@ def _plot_ensemble(all_hydro, gauge_id, output_dir, logger):
 def _run_multi_config(catchment_nml, args):
     """Run the full pipeline for each model × configuration in a catchment namelist.
 
+    Runs jobs in parallel (default: 15 workers). Each job is a subprocess
+    with its own log file.
+
     Returns 0 if all succeeded, 1 if any failed.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from config_merge import load_config
 
     catchment_id = str(catchment_nml['catchment'])
     models = catchment_nml.get('models', ['HBV'])
     configurations = catchment_nml['configurations']
+    max_workers = catchment_nml.get('parallel', args.parallel)
 
-    # Extract overrides from the catchment namelist — catchment-specific fields
-    # (dates, calibration, future) take precedence over layer defaults
+    # Extract overrides from the catchment namelist
     overrides = {}
     for key in ('start_date', 'end_date', 'cali_end_date', 'warm_up_date',
                 'display_name', 'gauge_id'):
@@ -680,81 +684,100 @@ def _run_multi_config(catchment_nml, args):
     if 'future' in catchment_nml:
         overrides['future_projections'] = catchment_nml['future']
 
-    total = len(models) * len(configurations)
+    # Build list of (config, model) jobs
+    jobs = [(config, model) for config in configurations for model in models]
+    total = len(jobs)
+
     print("=" * 70)
     print(f"MULTI-CONFIG PIPELINE: catchment {catchment_id}")
     print(f"  Models: {models}")
     print(f"  Configurations: {configurations}")
     print(f"  Total runs: {total}")
+    print(f"  Parallel workers: {max_workers}")
     print("=" * 70)
 
+    # Prepare all jobs: generate temp namelists + commands
+    job_info = {}  # run_key -> (cmd, tmp_path, log_file)
+    for config, model in jobs:
+        run_key = f"{config}/{model}"
+        try:
+            nml, tmp_path = load_config(
+                catchment=catchment_id,
+                configuration=config,
+                model=model,
+                env=args.env,
+                overrides=overrides if overrides else None,
+            )
+            namelist_path = Path(tmp_path).resolve()
+        except Exception as e:
+            print(f"  [{run_key}] Failed to load config: {e}")
+            job_info[run_key] = None
+            continue
+
+        log_file = f"pipeline_{catchment_id}_{config}_{model}.log"
+
+        sub_argv = [str(namelist_path), '--log-file', log_file]
+        if args.skip_preprocessing:
+            sub_argv.append('--skip-preprocessing')
+        if args.skip_calibration:
+            sub_argv.append('--skip-calibration')
+        if args.skip_download:
+            sub_argv.append('--skip-download')
+        if args.skip_future:
+            sub_argv.append('--skip-future')
+        if args.force:
+            sub_argv.append('--force')
+        if args.iterations:
+            sub_argv.extend(['--iterations', str(args.iterations)])
+        if args.ngs:
+            sub_argv.extend(['--ngs', str(args.ngs)])
+        if args.bbox:
+            sub_argv.extend(['--bbox'] + [str(b) for b in args.bbox])
+
+        cmd = [sys.executable, str(Path(__file__).resolve())] + sub_argv
+        job_info[run_key] = (cmd, tmp_path, log_file)
+
+    # Run in parallel
     results = {}
-    for model in models:
-        for config in configurations:
-            run_key = f"{config}/{model}"
-            print(f"\n{'='*70}")
-            print(f"  [{run_key}] Starting...")
-            print(f"{'='*70}")
+    start_time = time.time()
 
-            try:
-                nml, tmp_path = load_config(
-                    catchment=catchment_id,
-                    configuration=config,
-                    model=model,
-                    env=args.env,
-                    overrides=overrides if overrides else None,
-                )
-                namelist_path = Path(tmp_path).resolve()
-            except Exception as e:
-                print(f"  [{run_key}] Failed to load config: {e}")
-                results[run_key] = False
-                continue
-
-            # Build argv for the single-config pipeline
-            sub_argv = [str(namelist_path)]
-            if args.skip_preprocessing:
-                sub_argv.append('--skip-preprocessing')
-            if args.skip_calibration:
-                sub_argv.append('--skip-calibration')
-            if args.skip_download:
-                sub_argv.append('--skip-download')
-            if args.skip_future:
-                sub_argv.append('--skip-future')
-            if args.force:
-                sub_argv.append('--force')
-            if args.verbose:
-                sub_argv.append('--verbose')
-            if args.iterations:
-                sub_argv.extend(['--iterations', str(args.iterations)])
-            if args.ngs:
-                sub_argv.extend(['--ngs', str(args.ngs)])
-            if args.bbox:
-                sub_argv.extend(['--bbox'] + [str(b) for b in args.bbox])
-
-            # Run as subprocess so each run gets a clean state
-            cmd = [sys.executable, str(Path(__file__).resolve())] + sub_argv
-            try:
-                proc = subprocess.run(cmd, timeout=28800)  # 8 hours max
-                ok = proc.returncode == 0
-            except subprocess.TimeoutExpired:
-                print(f"  [{run_key}] Timed out")
-                ok = False
-
-            results[run_key] = ok
-            status = "OK" if ok else "FAILED"
-            print(f"  [{run_key}] {status}")
-
-            # Clean up temp file
+    def _run_one(run_key):
+        info = job_info[run_key]
+        if info is None:
+            return run_key, False
+        cmd, tmp_path, log_file = info
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=28800,
+            )
+            ok = proc.returncode == 0
+        except subprocess.TimeoutExpired:
+            ok = False
+        finally:
             try:
                 Path(tmp_path).unlink(missing_ok=True)
             except OSError:
                 pass
+        return run_key, ok
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_run_one, key): key for key in job_info}
+        for future in as_completed(futures):
+            run_key, ok = future.result()
+            results[run_key] = ok
+            elapsed = time.time() - start_time
+            status = "OK" if ok else "FAILED"
+            done = len(results)
+            log = job_info[run_key][2] if job_info[run_key] else ""
+            print(f"  [{done}/{total}] {run_key:40s} {status:6s}  ({elapsed/60:.0f}min)  {log}")
 
     # Summary
+    elapsed_total = (time.time() - start_time) / 60
     print(f"\n{'='*70}")
-    print(f"MULTI-CONFIG SUMMARY: catchment {catchment_id}")
+    print(f"MULTI-CONFIG SUMMARY: catchment {catchment_id}  ({elapsed_total:.1f} min)")
     print(f"{'='*70}")
-    for run_key, ok in results.items():
+    for run_key in sorted(results):
+        ok = results[run_key]
         print(f"  {'✓' if ok else '✗'} {run_key}")
     n_ok = sum(results.values())
     print(f"\n  {n_ok}/{total} succeeded")
@@ -809,6 +832,8 @@ Examples:
     parser.add_argument('--bbox', type=float, nargs=4,
                         metavar=('N', 'W', 'S', 'E'),
                         help='CMIP6 download bounding box')
+    parser.add_argument('--parallel', '-j', type=int, default=30,
+                        help='Max parallel workers for multi-config runs (default: 30)')
     parser.add_argument('--verbose', '-v', action='store_true')
     parser.add_argument('--log-file', type=str, default=None)
 
