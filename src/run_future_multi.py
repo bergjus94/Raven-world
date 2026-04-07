@@ -138,14 +138,12 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
         tmp_nml_path, nml = generate_model_namelist(base_nml_path, model_id, tmp_dir)
         logger.info(f"  Temporary namelist: {tmp_nml_path}")
 
-        main_dir = Path(nml["main_dir"])
-        config_dir = nml.get("config_dir", "")
         gauge_id = str(nml["gauge_id"])
         model_type = nml["model_type"]
-        catchment_dir = main_dir / config_dir / f"catchment_{gauge_id}"
+        paths = get_paths(nml)
 
         # Check if this model already completed (output exists)
-        existing_output = catchment_dir / model_type / "output" / GLOGEM_MODEL_ID[model_id]
+        existing_output = paths['output_dir'] / GLOGEM_MODEL_ID[model_id]
         if existing_output.exists() and not force:
             hydrographs = list(existing_output.glob(f"{gauge_id}_{model_type}_Hydrographs*"))
             if hydrographs:
@@ -201,7 +199,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
 
         # Step 2: Create input files (downscaling + GloGEM + Raven files)
         # Check if input files already exist for this model (CMIP6 forcing + irrigation)
-        data_obs_dir = catchment_dir / "data_obs"
+        data_obs_dir = paths['data_obs_dir']
         glogem_id = GLOGEM_MODEL_ID[model_id]
         expected_inputs = [
             data_obs_dir / f"cmip6_{model_id}_ssp126_{var}.nc"
@@ -237,10 +235,10 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
 
         # Step 3: Fix leap days in CMIP6 files (noleap → standard)
         logger.info(f"  Fixing leap days for {model_id}...")
-        _fix_leap_days(catchment_dir / "data_obs", model_id)
+        _fix_leap_days(data_obs_dir, model_id)
 
         # Step 4: Add output options + transport tracers to .rvi
-        model_dir = catchment_dir / model_type
+        model_dir = paths['model_dir']
         _add_rvi_output_options(model_dir / f"{gauge_id}_{model_type}.rvi",
                                 nml.get("coupled", False), logger)
 
@@ -250,7 +248,7 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
 
         # Step 5: Run Raven forward
         logger.info(f"  Running Raven for {model_id}...")
-        output_dir = model_dir / "output"
+        output_dir = paths['output_dir']
         output_dir.mkdir(parents=True, exist_ok=True)
 
         model_file = model_dir / f"{gauge_id}_{model_type}"
