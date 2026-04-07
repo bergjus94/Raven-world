@@ -18,6 +18,7 @@ models:
 
 configurations:
   - baseline
+  - glogem
 
 calibration:
   iterations: 10
