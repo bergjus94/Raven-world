@@ -1486,14 +1486,18 @@ def plot_snowmelt_contribution(nml, all_hydro, gauge_id, plot_dir):
                 sm_df = all_snowmelt[model_id]
                 q_df = all_hydro[model_id]
 
-                # Use first numeric column as snowmelt loading
+                # Find the m3/s data column (skip time[d], hour, etc.)
                 sm_col = None
                 for c in sm_df.columns:
-                    if 'AllHRU' in str(c) or sm_df[c].dtype in [np.float64, np.int64]:
+                    if 'm3/s' in str(c):
                         sm_col = c
                         break
-                if sm_col is None and len(sm_df.columns) > 0:
-                    sm_col = sm_df.columns[0]
+                if sm_col is None:
+                    # Fallback: last numeric column (skip time counters)
+                    for c in reversed(sm_df.columns.tolist()):
+                        if c not in ('time[d]', 'hour') and sm_df[c].dtype in [np.float64, np.int64]:
+                            sm_col = c
+                            break
                 if sm_col is None:
                     continue
 
