@@ -1555,6 +1555,125 @@ def plot_snowmelt_contribution(nml, all_hydro, gauge_id, plot_dir):
 
 
 #--------------------------------------------------------------------------------
+############# Plot: Snowmelt Regime (Absolute m³/s) #############################
+#--------------------------------------------------------------------------------
+
+def plot_snowmelt_regime_absolute(nml, all_hydro, gauge_id, plot_dir):
+    """
+    Two-panel figure showing absolute snowmelt and total Q regimes by period.
+    Left: Snowmelt (m³/s) monthly regime for early/mid/late.
+    Right: Total Q (m³/s) alongside snowmelt for comparison.
+    """
+    paths = get_paths(nml)
+    output_dir = paths['output_dir']
+    model_type = nml['model_type']
+    models = nml.get('cmip6_models', list(GLOGEM_MODEL_ID.keys()))
+
+    # Load snowmelt mass loadings
+    all_snowmelt = {}
+    for model_id in models:
+        glogem_id = GLOGEM_MODEL_ID.get(model_id, model_id.lower())
+        fpath = output_dir / glogem_id / f"{gauge_id}_{model_type}_SNOWMELTMassLoadings.csv"
+        if not fpath.exists():
+            continue
+        try:
+            df = pd.read_csv(fpath, skiprows=[1], parse_dates=['date'])
+            df = df.set_index('date')
+            # Find m3/s column
+            sm_col = None
+            for c in df.columns:
+                if 'm3/s' in str(c):
+                    sm_col = c
+                    break
+            if sm_col:
+                all_snowmelt[model_id] = df[sm_col]
+        except Exception:
+            continue
+
+    if not all_snowmelt:
+        print("  No snowmelt mass loadings found, skipping absolute regime plot.")
+        return
+
+    period_colors = {'early': '#2ca02c', 'mid': '#ff7f0e', 'late': '#d62728'}
+    months = np.arange(1, 13)
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Left panel: Snowmelt regime
+    ax = axes[0]
+    for period_key, (start, end, label) in PERIODS.items():
+        regimes = []
+        for model_id, sm in all_snowmelt.items():
+            sub = sm.loc[start:end]
+            if len(sub) > 0:
+                regime = sub.groupby(sub.index.month).mean()
+                regimes.append(regime)
+
+        if regimes:
+            combined = pd.DataFrame(regimes)
+            ens_mean = combined.mean()
+            ens_min = combined.min()
+            ens_max = combined.max()
+            color = period_colors[period_key]
+            ax.fill_between(months, ens_min.values, ens_max.values, alpha=0.15, color=color)
+            ax.plot(months, ens_mean.values, color=color, linewidth=2, label=label)
+
+    ax.set_xticks(months)
+    ax.set_xticklabels(MONTH_LABELS)
+    ax.set_xlabel('Month', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Snowmelt (m³/s)', fontsize=12, fontweight='bold')
+    ax.set_title('Snowmelt in Streamflow', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    # Right panel: Total Q + snowmelt overlay
+    ax = axes[1]
+    for period_key, (start, end, label) in PERIODS.items():
+        color = period_colors[period_key]
+
+        # Total Q
+        q_regimes = []
+        for model_id, df in all_hydro.items():
+            sub = df.loc[start:end, 'Q_sim']
+            if len(sub) > 0:
+                regime = sub.groupby(sub.index.month).mean()
+                q_regimes.append(regime)
+
+        # Snowmelt
+        sm_regimes = []
+        for model_id, sm in all_snowmelt.items():
+            sub = sm.loc[start:end]
+            if len(sub) > 0:
+                regime = sub.groupby(sub.index.month).mean()
+                sm_regimes.append(regime)
+
+        if q_regimes:
+            q_mean = pd.DataFrame(q_regimes).mean()
+            ax.plot(months, q_mean.values, color=color, linewidth=2, label=f'{label} — Total Q')
+
+        if sm_regimes:
+            sm_mean = pd.DataFrame(sm_regimes).mean()
+            ax.fill_between(months, 0, sm_mean.values, alpha=0.3, color=color,
+                            label=f'{label} — Snowmelt')
+
+    ax.set_xticks(months)
+    ax.set_xticklabels(MONTH_LABELS)
+    ax.set_xlabel('Month', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Discharge (m³/s)', fontsize=12, fontweight='bold')
+    ax.set_title('Total Q vs Snowmelt', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    fig.suptitle(f'Catchment {gauge_id} — Snowmelt Regime by Period',
+                 fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    save_path = plot_dir / f'snowmelt_regime_absolute_{gauge_id}.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
 ############################# Main runner ########################################
 #--------------------------------------------------------------------------------
 
@@ -1652,6 +1771,9 @@ def run_future_postprocessing(yaml_path, skip_errors=True):
 
     run_plot("Snowmelt Contribution to Streamflow",
              plot_snowmelt_contribution, nml, all_hydro, gauge_id, plot_dir)
+
+    run_plot("Snowmelt Regime (Absolute)",
+             plot_snowmelt_regime_absolute, nml, all_hydro, gauge_id, plot_dir)
 
     # Summary
     elapsed = time.time() - start_time
