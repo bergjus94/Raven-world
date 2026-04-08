@@ -1,5 +1,5 @@
 # =============================================================================
-# Catchment 0122 - Swat @ Kalam — FULL TEST RUN
+# Catchment 0122 - Swat @ Kalam
 # =============================================================================
 
 catchment: '0122'
@@ -17,14 +17,13 @@ models:
   - MOHYSE
 
 configurations:
-  - baseline
-  - glogem
   - subdaily
   - glogem_subdaily
 
 calibration:
-  iterations: 10
-  ngs: 2
+  metrics: [KGE, LogKGE]
+  iterations: 3000
+  ngs: 15
 
 future:
   enabled: true

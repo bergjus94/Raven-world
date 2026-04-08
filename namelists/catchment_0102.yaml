@@ -17,15 +17,13 @@ models:
   - MOHYSE
 
 configurations:
-  - baseline
-  - glogem
   - subdaily
   - glogem_subdaily
 
 calibration:
   metrics: [KGE, LogKGE]
-  iterations: 10
-  ngs: 2
+  iterations: 3000
+  ngs: 15
 
 future:
   enabled: true
