@@ -1033,8 +1033,7 @@ class HYMODPreprocessor:
             "#Hydrologic Process Order": [
                 ":HydrologicProcesses",
                 "   :SnowBalance              SNOBAL_SIMPLE_MELT SNOW            SNOW_LIQ",
-                "   :Flush                    RAVEN_DEFAULT      SNOW_LIQ        LAKE_STORAGE",
-                "   :Flush                    RAVEN_DEFAULT      LAKE_STORAGE    PONDED_WATER",
+                "   :Flush                    RAVEN_DEFAULT      SNOW_LIQ        PONDED_WATER",
                 "   :Precipitation            PRECIP_RAVEN       ATMOS_PRECIP    MULTIPLE",
                 "   :Infiltration             INF_PDM            PONDED_WATER    MULTIPLE",
                 "   :Flush                    RAVEN_DEFAULT      SURFACE_WATER   GWSOIL",
