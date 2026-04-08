@@ -15,6 +15,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+import matplotlib.colors as mcolors
+import re
 from pathlib import Path
 import yaml
 import argparse
@@ -991,6 +993,564 @@ def plot_annual_extremes(all_hydro, gauge_id, plot_dir):
 
 
 #--------------------------------------------------------------------------------
+############# SWE Helper: Load ByHRUGroup CSV ##################################
+#--------------------------------------------------------------------------------
+
+def _load_hrugroup_csv(nml, file_pattern):
+    """
+    Load a ByHRUGroup CSV for each CMIP6 model.
+
+    Parameters
+    ----------
+    nml : dict
+        Namelist config.
+    file_pattern : str
+        Filename pattern with {gauge} and {model} placeholders,
+        e.g. '{gauge}_{model}_SNOW_Daily_Average_ByHRUGroup.csv'
+
+    Returns
+    -------
+    dict : {model_id: DataFrame with DatetimeIndex, elevation band columns}
+    """
+    gauge_id = str(nml['gauge_id'])
+    model_type = nml['model_type']
+    paths = get_paths(nml)
+    output_dir = paths['output_dir']
+    models = nml.get('cmip6_models', list(GLOGEM_MODEL_ID.keys()))
+
+    all_data = {}
+    for model_id in models:
+        glogem_id = GLOGEM_MODEL_ID.get(model_id, model_id.lower())
+        fname = file_pattern.format(gauge=f"{gauge_id}_{model_type}", model=model_type)
+        fpath = output_dir / glogem_id / fname
+        if not fpath.exists():
+            # Try without model_type prefix
+            fname2 = file_pattern.format(gauge=gauge_id, model=model_type)
+            fpath2 = output_dir / glogem_id / fname2
+            if fpath2.exists():
+                fpath = fpath2
+            else:
+                continue
+        try:
+            df = pd.read_csv(fpath, skiprows=[1])
+            # The second column is the date column
+            date_col = df.columns[1]
+            df[date_col] = pd.to_datetime(df[date_col])
+            df = df.set_index(date_col)
+            # Drop the first unnamed index column if present
+            if df.columns[0] == '' or 'Unnamed' in str(df.columns[0]):
+                df = df.iloc[:, 1:]
+            all_data[model_id] = df
+        except Exception as e:
+            print(f"  WARNING: Could not load {fpath.name} for {model_id}: {e}")
+
+    return all_data
+
+
+def _parse_elevation_bands(columns):
+    """
+    Extract elevation band columns matching pattern like '2500-2600m'.
+    Returns list of (col_name, lower_elev) tuples sorted by elevation.
+    """
+    bands = []
+    for col in columns:
+        m = re.match(r'(\d+)-(\d+)m', str(col).strip())
+        if m:
+            bands.append((col, int(m.group(1))))
+    bands.sort(key=lambda x: x[1])
+    return bands
+
+
+def _select_representative_bands(bands, n=4):
+    """Select n roughly evenly-spaced elevation bands from available bands."""
+    if len(bands) <= n:
+        return bands
+    indices = np.linspace(0, len(bands) - 1, n, dtype=int)
+    return [bands[i] for i in indices]
+
+
+#--------------------------------------------------------------------------------
+############# SWE Plot 1: SWE Regime Shift by Elevation ########################
+#--------------------------------------------------------------------------------
+
+def plot_swe_regime_by_elevation(nml, all_hydro, gauge_id, plot_dir):
+    """
+    Monthly SWE regime for early/mid/late periods at representative elevation bands.
+    Each subplot = one elevation band; lines = period ensemble mean + spread.
+    """
+    all_swe = _load_hrugroup_csv(nml, '{gauge}_SNOW_Daily_Average_ByHRUGroup.csv')
+    if not all_swe:
+        print("  No SWE ByHRUGroup data found, skipping.")
+        return
+
+    # Determine available elevation bands from the first model
+    sample_df = next(iter(all_swe.values()))
+    bands = _parse_elevation_bands(sample_df.columns)
+    if not bands:
+        print("  No elevation band columns found in SWE file, skipping.")
+        return
+
+    selected = _select_representative_bands(bands, n=min(5, len(bands)))
+    period_colors = {'early': '#2ca02c', 'mid': '#ff7f0e', 'late': '#d62728'}
+    months = np.arange(1, 13)
+
+    n_bands = len(selected)
+    fig, axes = plt.subplots(1, n_bands, figsize=(5 * n_bands, 5), sharey=False)
+    if n_bands == 1:
+        axes = [axes]
+
+    for ax, (band_col, band_elev) in zip(axes, selected):
+        for period_key, (start, end, label) in PERIODS.items():
+            regimes = []
+            for model_id, df in all_swe.items():
+                if band_col not in df.columns:
+                    continue
+                sub = df.loc[start:end]
+                if len(sub) == 0:
+                    continue
+                vals = pd.to_numeric(sub[band_col], errors='coerce')
+                monthly = vals.groupby(vals.index.month).mean()
+                if len(monthly) == 12:
+                    regimes.append(monthly)
+
+            if not regimes:
+                continue
+
+            combined = pd.DataFrame(regimes)
+            ens_mean = combined.mean()
+            ens_min = combined.min()
+            ens_max = combined.max()
+
+            color = period_colors[period_key]
+            ax.fill_between(months, ens_min.values, ens_max.values,
+                            alpha=0.15, color=color)
+            ax.plot(months, ens_mean.values, color=color, linewidth=2, label=label)
+
+        ax.set_title(f'{band_col}', fontsize=12, fontweight='bold')
+        ax.set_xticks(months)
+        ax.set_xticklabels(MONTH_LABELS)
+        ax.set_xlabel('Month')
+        ax.grid(True, alpha=0.3)
+        if ax == axes[0]:
+            ax.set_ylabel('SWE (mm)', fontsize=11)
+
+    axes[0].legend(fontsize=9)
+    fig.suptitle(f'Catchment {gauge_id} — SWE Regime Shift by Elevation Band',
+                 fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    save_path = plot_dir / f'swe_regime_by_elevation_{gauge_id}.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############# SWE Plot 2: Peak SWE Timing & Magnitude #########################
+#--------------------------------------------------------------------------------
+
+def plot_peak_swe_timing_magnitude(nml, all_hydro, gauge_id, plot_dir):
+    """
+    Two panels:
+      Left: Peak SWE month over time (rolling 10-yr mean) per elevation band
+      Right: Peak SWE magnitude over time (rolling 10-yr mean) with ensemble spread
+    """
+    all_swe = _load_hrugroup_csv(nml, '{gauge}_SNOW_Daily_Average_ByHRUGroup.csv')
+    if not all_swe:
+        print("  No SWE ByHRUGroup data found, skipping.")
+        return
+
+    sample_df = next(iter(all_swe.values()))
+    bands = _parse_elevation_bands(sample_df.columns)
+    if not bands:
+        print("  No elevation band columns found, skipping.")
+        return
+
+    selected = _select_representative_bands(bands, n=4)
+    band_colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(selected)))
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    for (band_col, band_elev), bcolor in zip(selected, band_colors):
+        # Collect annual peak month and magnitude per model
+        all_peak_months = []
+        all_peak_mags = []
+
+        for model_id, df in all_swe.items():
+            if band_col not in df.columns:
+                continue
+            vals = pd.to_numeric(df[band_col], errors='coerce')
+            # Assign hydrological year: Oct-Sep
+            annual_groups = vals.groupby(vals.index.year)
+            peak_month_series = {}
+            peak_mag_series = {}
+            for year, grp in annual_groups:
+                if len(grp) < 300:  # need near-complete year
+                    continue
+                idx_max = grp.idxmax()
+                if pd.isna(idx_max):
+                    continue
+                peak_month_series[year] = idx_max.month
+                peak_mag_series[year] = grp.max()
+
+            if peak_month_series:
+                all_peak_months.append(pd.Series(peak_month_series))
+                all_peak_mags.append(pd.Series(peak_mag_series))
+
+        if not all_peak_months:
+            continue
+
+        # Ensemble mean with rolling smoothing
+        months_df = pd.concat(all_peak_months, axis=1)
+        mags_df = pd.concat(all_peak_mags, axis=1)
+
+        ens_month = months_df.mean(axis=1).rolling(10, center=True, min_periods=5).mean()
+        ens_mag_mean = mags_df.mean(axis=1).rolling(10, center=True, min_periods=5).mean()
+        ens_mag_min = mags_df.min(axis=1).rolling(10, center=True, min_periods=5).mean()
+        ens_mag_max = mags_df.max(axis=1).rolling(10, center=True, min_periods=5).mean()
+
+        # Left panel: peak timing
+        axes[0].plot(ens_month.index, ens_month.values, color=bcolor,
+                     linewidth=2, label=band_col)
+
+        # Right panel: peak magnitude
+        axes[1].fill_between(ens_mag_mean.index, ens_mag_min.values, ens_mag_max.values,
+                             alpha=0.15, color=bcolor)
+        axes[1].plot(ens_mag_mean.index, ens_mag_mean.values, color=bcolor,
+                     linewidth=2, label=band_col)
+
+    axes[0].set_ylabel('Peak SWE Month', fontsize=11)
+    axes[0].set_yticks(range(1, 13))
+    axes[0].set_yticklabels(MONTH_LABELS)
+    axes[0].set_title('Peak SWE Timing (10-yr rolling mean)', fontsize=12, fontweight='bold')
+    axes[0].legend(fontsize=9)
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].set_ylabel('Peak SWE (mm)', fontsize=11)
+    axes[1].set_title('Peak SWE Magnitude (10-yr rolling mean)', fontsize=12, fontweight='bold')
+    axes[1].legend(fontsize=9)
+    axes[1].grid(True, alpha=0.3)
+
+    fig.suptitle(f'Catchment {gauge_id} — Peak SWE Timing & Magnitude',
+                 fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    save_path = plot_dir / f'peak_swe_timing_magnitude_{gauge_id}.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############# SWE Plot 3: Snow Cover Duration Heatmap ##########################
+#--------------------------------------------------------------------------------
+
+def plot_snow_cover_duration(nml, all_hydro, gauge_id, plot_dir, swe_threshold=1.0):
+    """
+    Heatmap: x=year, y=elevation band, color=number of days with SWE > threshold.
+    Ensemble mean across models. Shows snow season shrinking from low elevations up.
+    """
+    all_swe = _load_hrugroup_csv(nml, '{gauge}_SNOW_Daily_Average_ByHRUGroup.csv')
+    if not all_swe:
+        print("  No SWE ByHRUGroup data found, skipping.")
+        return
+
+    sample_df = next(iter(all_swe.values()))
+    bands = _parse_elevation_bands(sample_df.columns)
+    if not bands:
+        print("  No elevation band columns found, skipping.")
+        return
+
+    # Compute snow cover days per year per band per model, then ensemble mean
+    # Collect all years
+    all_years = set()
+    for df in all_swe.values():
+        all_years.update(df.index.year.unique())
+    years = sorted(all_years)
+
+    band_names = [b[0] for b in bands]
+    # Initialize: dict of {band: {year: [values per model]}}
+    duration_data = {b: {yr: [] for yr in years} for b in band_names}
+
+    for model_id, df in all_swe.items():
+        for band_col, _ in bands:
+            if band_col not in df.columns:
+                continue
+            vals = pd.to_numeric(df[band_col], errors='coerce')
+            snow_days = (vals > swe_threshold).groupby(vals.index.year).sum()
+            for yr, count in snow_days.items():
+                if yr in duration_data[band_col]:
+                    duration_data[band_col][yr].append(count)
+
+    # Ensemble mean matrix
+    matrix = np.full((len(bands), len(years)), np.nan)
+    for i, (band_col, _) in enumerate(bands):
+        for j, yr in enumerate(years):
+            vals = duration_data[band_col][yr]
+            if vals:
+                matrix[i, j] = np.mean(vals)
+
+    fig, ax = plt.subplots(figsize=(16, max(6, len(bands) * 0.4)))
+
+    im = ax.pcolormesh(years, range(len(bands)), matrix,
+                       cmap='YlGnBu', shading='nearest')
+    cbar = fig.colorbar(im, ax=ax, label='Snow Cover Days (SWE > 1 mm)')
+
+    ax.set_yticks(range(len(bands)))
+    ax.set_yticklabels([b[0] for b in bands], fontsize=8)
+    ax.set_xlabel('Year', fontsize=12)
+    ax.set_ylabel('Elevation Band', fontsize=12)
+    ax.set_title(f'Catchment {gauge_id} — Snow Cover Duration (ensemble mean)',
+                 fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+    save_path = plot_dir / f'snow_cover_duration_{gauge_id}.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############# SWE Plot 4: Snow-to-Rain Transition ##############################
+#--------------------------------------------------------------------------------
+
+def plot_snow_rain_transition(nml, all_hydro, gauge_id, plot_dir):
+    """
+    Stacked area chart: fraction of total precipitation falling as snow vs rain,
+    computed from SNOWFALL and RAINFALL ByHRUGroup files.
+    Ensemble mean, by decade, with separate lines for selected elevation bands.
+    """
+    all_snowfall = _load_hrugroup_csv(nml, '{gauge}_SNOWFALL_Daily_Average_ByHRUGroup.csv')
+    all_rainfall = _load_hrugroup_csv(nml, '{gauge}_RAINFALL_Daily_Average_ByHRUGroup.csv')
+
+    if not all_snowfall or not all_rainfall:
+        print("  No SNOWFALL/RAINFALL ByHRUGroup data found, skipping.")
+        return
+
+    # Use AllHRUs column and also selected elevation bands
+    sample_df = next(iter(all_snowfall.values()))
+    bands = _parse_elevation_bands(sample_df.columns)
+    selected = _select_representative_bands(bands, n=4)
+
+    # Columns to plot: AllHRUs + selected bands
+    cols_to_plot = [('AllHRUs', 'All HRUs')]
+    for band_col, _ in selected:
+        cols_to_plot.append((band_col, band_col))
+
+    decades = list(range(2010, 2100, 10))
+    decade_labels = [f'{d}s' for d in decades]
+
+    n_cols = len(cols_to_plot)
+    fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5), sharey=True)
+    if n_cols == 1:
+        axes = [axes]
+
+    for ax, (col, col_label) in zip(axes, cols_to_plot):
+        snow_fracs = []
+        rain_fracs = []
+
+        for decade_start in decades:
+            decade_end = decade_start + 9
+            s, e = str(decade_start), str(decade_end)
+
+            decade_snow = []
+            decade_rain = []
+
+            for model_id in all_snowfall:
+                if model_id not in all_rainfall:
+                    continue
+                sf = all_snowfall[model_id]
+                rf = all_rainfall[model_id]
+                if col not in sf.columns or col not in rf.columns:
+                    continue
+
+                sf_sub = pd.to_numeric(sf.loc[s:e, col], errors='coerce')
+                rf_sub = pd.to_numeric(rf.loc[s:e, col], errors='coerce')
+                total = sf_sub.mean() + rf_sub.mean()
+                if total > 0:
+                    decade_snow.append(sf_sub.mean() / total * 100)
+                    decade_rain.append(rf_sub.mean() / total * 100)
+
+            snow_fracs.append(np.mean(decade_snow) if decade_snow else 0)
+            rain_fracs.append(np.mean(decade_rain) if decade_rain else 0)
+
+        snow_fracs = np.array(snow_fracs)
+        rain_fracs = np.array(rain_fracs)
+
+        ax.fill_between(range(len(decades)), 0, snow_fracs,
+                        color='#74add1', alpha=0.7, label='Snow')
+        ax.fill_between(range(len(decades)), snow_fracs, snow_fracs + rain_fracs,
+                        color='#fdae61', alpha=0.7, label='Rain')
+        ax.set_xticks(range(len(decades)))
+        ax.set_xticklabels(decade_labels, rotation=45, fontsize=9)
+        ax.set_title(col_label, fontsize=11, fontweight='bold')
+        ax.set_ylim(0, 105)
+        ax.grid(True, alpha=0.3, axis='y')
+
+    axes[0].set_ylabel('Fraction of Total Precipitation (%)', fontsize=11)
+    axes[0].legend(fontsize=9)
+
+    fig.suptitle(f'Catchment {gauge_id} — Snow-to-Rain Transition (decadal, ensemble mean)',
+                 fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    save_path = plot_dir / f'snow_rain_transition_{gauge_id}.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############# SWE Plot 5: Snowmelt Contribution to Streamflow ##################
+#--------------------------------------------------------------------------------
+
+def plot_snowmelt_contribution(nml, all_hydro, gauge_id, plot_dir):
+    """
+    Monthly regime of snowmelt fraction of total discharge for early/mid/late periods.
+    Uses SNOWMELTMassLoadings tracer data alongside hydrograph Q_sim.
+    Falls back to SNOWFALL-based proxy if mass loadings unavailable.
+    """
+    paths = get_paths(nml)
+    output_dir = paths['output_dir']
+    model_type = nml['model_type']
+    models = nml.get('cmip6_models', list(GLOGEM_MODEL_ID.keys()))
+
+    # Try to load snowmelt mass loadings per model
+    all_snowmelt = {}
+    for model_id in models:
+        glogem_id = GLOGEM_MODEL_ID.get(model_id, model_id.lower())
+        # Try common naming patterns
+        for pattern in [
+            f"{gauge_id}_{model_type}_SNOWMELTMassLoadings.csv",
+            f"{gauge_id}_SNOWMELTMassLoadings.csv",
+        ]:
+            fpath = output_dir / glogem_id / pattern
+            if fpath.exists():
+                try:
+                    df = pd.read_csv(fpath, skiprows=[1])
+                    date_col = df.columns[1]
+                    df[date_col] = pd.to_datetime(df[date_col])
+                    df = df.set_index(date_col)
+                    if df.columns[0] == '' or 'Unnamed' in str(df.columns[0]):
+                        df = df.iloc[:, 1:]
+                    all_snowmelt[model_id] = df
+                except Exception as e:
+                    print(f"  WARNING: Could not load snowmelt loadings for {model_id}: {e}")
+                break
+
+    if not all_snowmelt and not all_hydro:
+        print("  No snowmelt mass loadings data found, skipping.")
+        return
+
+    # If no mass loadings, try using SNOWFALL as a proxy for snowmelt contribution
+    use_proxy = False
+    if not all_snowmelt:
+        print("  No SNOWMELTMassLoadings found, using SNOWFALL/PRECIP as proxy.")
+        all_snowfall = _load_hrugroup_csv(nml, '{gauge}_SNOWFALL_Daily_Average_ByHRUGroup.csv')
+        all_precip = _load_hrugroup_csv(nml, '{gauge}_PRECIP_Daily_Average_ByHRUGroup.csv')
+        if not all_snowfall or not all_precip:
+            print("  No SNOWFALL/PRECIP data available either, skipping.")
+            return
+        use_proxy = True
+
+    period_colors = {'early': '#2ca02c', 'mid': '#ff7f0e', 'late': '#d62728'}
+    months = np.arange(1, 13)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for period_key, (start, end, label) in PERIODS.items():
+        monthly_fracs = []
+
+        if use_proxy:
+            # Proxy: snowfall / total precip as indicator of snowmelt share
+            for model_id in all_snowfall:
+                if model_id not in all_precip:
+                    continue
+                sf = all_snowfall[model_id]
+                pr = all_precip[model_id]
+                # Use AllHRUs column
+                sf_col = 'AllHRUs' if 'AllHRUs' in sf.columns else sf.columns[0]
+                pr_col = 'AllHRUs' if 'AllHRUs' in pr.columns else pr.columns[0]
+
+                sf_sub = pd.to_numeric(sf.loc[start:end, sf_col], errors='coerce')
+                pr_sub = pd.to_numeric(pr.loc[start:end, pr_col], errors='coerce')
+
+                # Monthly snow fraction
+                sf_monthly = sf_sub.groupby(sf_sub.index.month).mean()
+                pr_monthly = pr_sub.groupby(pr_sub.index.month).mean()
+                frac = (sf_monthly / pr_monthly.replace(0, np.nan) * 100).dropna()
+                if len(frac) == 12:
+                    monthly_fracs.append(frac)
+        else:
+            # Use mass loadings: snowmelt / Q_sim
+            for model_id in all_snowmelt:
+                if model_id not in all_hydro:
+                    continue
+                sm_df = all_snowmelt[model_id]
+                q_df = all_hydro[model_id]
+
+                # Use first numeric column as snowmelt loading
+                sm_col = None
+                for c in sm_df.columns:
+                    if 'AllHRU' in str(c) or sm_df[c].dtype in [np.float64, np.int64]:
+                        sm_col = c
+                        break
+                if sm_col is None and len(sm_df.columns) > 0:
+                    sm_col = sm_df.columns[0]
+                if sm_col is None:
+                    continue
+
+                sm_sub = pd.to_numeric(sm_df.loc[start:end, sm_col], errors='coerce')
+                q_sub = q_df.loc[start:end, 'Q_sim']
+
+                # Align indices
+                common = sm_sub.index.intersection(q_sub.index)
+                if len(common) == 0:
+                    continue
+                sm_aligned = sm_sub.loc[common]
+                q_aligned = q_sub.loc[common]
+
+                sm_monthly = sm_aligned.groupby(sm_aligned.index.month).mean()
+                q_monthly = q_aligned.groupby(q_aligned.index.month).mean()
+
+                frac = (sm_monthly / q_monthly.replace(0, np.nan) * 100).dropna()
+                if len(frac) == 12:
+                    monthly_fracs.append(frac)
+
+        if not monthly_fracs:
+            continue
+
+        combined = pd.DataFrame(monthly_fracs)
+        ens_mean = combined.mean()
+        ens_min = combined.min()
+        ens_max = combined.max()
+
+        color = period_colors[period_key]
+        ax.fill_between(months, ens_min.values, ens_max.values,
+                        alpha=0.15, color=color)
+        ax.plot(months, ens_mean.values, color=color, linewidth=2, label=label)
+
+    if use_proxy:
+        ylabel = 'Snowfall / Total Precip (%)'
+        subtitle = '(proxy: snowfall fraction of precipitation)'
+    else:
+        ylabel = 'Snowmelt / Total Q (%)'
+        subtitle = '(from snowmelt mass loadings)'
+
+    ax.set_xticks(months)
+    ax.set_xticklabels(MONTH_LABELS)
+    ax.set_xlabel('Month', fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(f'Catchment {gauge_id} — Snowmelt Contribution to Streamflow\n{subtitle}',
+                 fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    save_path = plot_dir / f'snowmelt_contribution_{gauge_id}.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
 ############################# Main runner ########################################
 #--------------------------------------------------------------------------------
 
@@ -1072,6 +1632,22 @@ def run_future_postprocessing(yaml_path, skip_errors=True):
 
     run_plot("Dry Season Glacier Dependency",
              plot_dry_season_dependency, all_glogem, gauge_id, plot_dir)
+
+    # SWE / snow plots
+    run_plot("SWE Regime Shift by Elevation",
+             plot_swe_regime_by_elevation, nml, all_hydro, gauge_id, plot_dir)
+
+    run_plot("Peak SWE Timing & Magnitude",
+             plot_peak_swe_timing_magnitude, nml, all_hydro, gauge_id, plot_dir)
+
+    run_plot("Snow Cover Duration",
+             plot_snow_cover_duration, nml, all_hydro, gauge_id, plot_dir)
+
+    run_plot("Snow-to-Rain Transition",
+             plot_snow_rain_transition, nml, all_hydro, gauge_id, plot_dir)
+
+    run_plot("Snowmelt Contribution to Streamflow",
+             plot_snowmelt_contribution, nml, all_hydro, gauge_id, plot_dir)
 
     # Summary
     elapsed = time.time() - start_time
