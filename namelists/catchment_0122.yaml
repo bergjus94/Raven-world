@@ -19,6 +19,8 @@ models:
 configurations:
   - baseline
   - glogem
+  - subdaily
+  - glogem_subdaily
 
 calibration:
   iterations: 10
