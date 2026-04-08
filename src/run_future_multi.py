@@ -200,41 +200,30 @@ def run_single_model(base_nml_path, model_id, skip_download=False,
                     logger.error(f"  CMIP6 download timed out for {model_id}")
                     return False
 
-        # Step 2: Create input files (downscaling + GloGEM + Raven files)
-        # Check if input files already exist for this model (CMIP6 forcing + irrigation)
-        data_obs_dir = paths['data_obs_dir']
-        glogem_id = GLOGEM_MODEL_ID[model_id]
-        expected_inputs = [
-            data_obs_dir / f"cmip6_{model_id}_ssp126_{var}.nc"
-            for var in ["precip", "temp_mean", "temp_max", "temp_min"]
-        ]
-        if nml.get("coupled", False):
-            expected_inputs.append(data_obs_dir / f"irrigation_{glogem_id}.nc")
-        inputs_exist = all(f.exists() for f in expected_inputs)
+        # Step 2: Create input files (downscaling + GloGEM + .rv* model files)
+        # Always run — shared files (ERA5, CMIP6, topo) have internal skip logic,
+        # but .rv* model files must be regenerated for the future namelist
+        # (different dates, CMIP6 forcing references, output options).
+        logger.info(f"  Creating input files for {model_id}...")
+        create_script = script_dir / "create_input_files.py"
+        cmd = [sys.executable, str(create_script), str(tmp_nml_path)]
+        if force:
+            cmd.append("--force")
 
-        if inputs_exist and not force:
-            logger.info(f"  Input files already exist for {model_id}, skipping creation")
-        else:
-            logger.info(f"  Creating input files for {model_id}...")
-            create_script = script_dir / "create_input_files.py"
-            cmd = [sys.executable, str(create_script), str(tmp_nml_path)]
-            if force:
-                cmd.append("--force")
-
-            try:
-                process = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
-                )
-                for line in process.stdout:
-                    logger.info(f"    {line.rstrip()}")
-                process.wait()
-                if process.returncode != 0:
-                    raise subprocess.CalledProcessError(process.returncode, cmd)
-                logger.info(f"  Input creation complete for {model_id}")
-            except subprocess.CalledProcessError:
-                logger.error(f"  Input creation failed for {model_id}")
-                return False
+        try:
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in process.stdout:
+                logger.info(f"    {line.rstrip()}")
+            process.wait()
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+            logger.info(f"  Input creation complete for {model_id}")
+        except subprocess.CalledProcessError:
+            logger.error(f"  Input creation failed for {model_id}")
+            return False
 
         # Step 3: Leap day fix removed — CMIP6Downscaler handles this internally
 
@@ -331,12 +320,17 @@ def _add_rvi_output_options(rvi_path, coupled, model_type, logger):
         "  :WriteMassLoadings\n",
     ]
 
-    if coupled:
-        transport_tracers = [
-            "\n#Transport for Snowmelt and Glacier Melt Tracking (Coupled Mode)\n",
-            "\n",
-            ":Transport SNOWMELT TRACER\n",
-            ":FixedConcentration SNOWMELT SNOW 1.0\n",
+    # Snowmelt tracer (all models)
+    transport_tracers = [
+        "\n#Transport for Snowmelt and Glacier Melt Tracking\n",
+        "\n",
+        ":Transport SNOWMELT TRACER\n",
+        ":FixedConcentration SNOWMELT SNOW 1.0\n",
+    ]
+    # Glacier tracers only for coupled HBV (3-layer models)
+    # 2-layer models (HMETS, HYMOD, MOHYSE) crash with "bad layer index"
+    if coupled and model_type == 'HBV':
+        transport_tracers += [
             "\n",
             ":Transport GLACIERMELT_ALL TRACER\n",
             ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
@@ -346,13 +340,6 @@ def _add_rvi_output_options(rvi_path, coupled, model_type, logger):
             "\n",
             ":Transport GLACIERMELT_LARGE TRACER\n",
             ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
-        ]
-    else:
-        transport_tracers = [
-            "\n#Transport for Snowmelt Tracking (Non-Coupled Mode)\n",
-            "\n",
-            ":Transport SNOWMELT TRACER\n",
-            ":FixedConcentration SNOWMELT SNOW 1.0\n",
         ]
 
     # Find #Output Options line and insert after it

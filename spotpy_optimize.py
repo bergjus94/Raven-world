@@ -1328,14 +1328,17 @@ class RavenSCEUA(object):
                 "  :WriteMassLoadings\n",
             ]
             
-            # ✅ Define transport tracers based on coupled flag
-            if self.coupled:
-                # COUPLED MODE: Tracers for GloGEM-driven glacier melt
-                transport_tracers = [
-                    "\n#Transport for Snowmelt and Glacier Melt Tracking (Coupled Mode)\n",
-                    "\n",
-                    ":Transport SNOWMELT TRACER\n",
-                    ":FixedConcentration SNOWMELT SNOW 1.0\n",
+            # Snowmelt tracer (all models)
+            transport_tracers = [
+                "\n#Transport for Snowmelt and Glacier Melt Tracking\n",
+                "\n",
+                ":Transport SNOWMELT TRACER\n",
+                ":FixedConcentration SNOWMELT SNOW 1.0\n",
+            ]
+            # Glacier tracers only for coupled HBV (3-layer model)
+            # 2-layer models (HMETS, HYMOD, MOHYSE) crash with "bad layer index"
+            if self.coupled and self.model_type == 'HBV':
+                transport_tracers += [
                     "\n",
                     ":Transport GLACIERMELT_ALL TRACER\n",
                     ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
@@ -1346,14 +1349,7 @@ class RavenSCEUA(object):
                     ":Transport GLACIERMELT_LARGE TRACER\n",
                     ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
                 ]
-            else:
-                # NON-COUPLED MODE: Snowmelt tracer only (no glacier irrigation)
-                transport_tracers = [
-                    "\n#Transport for Snowmelt Tracking (Non-Coupled Mode)\n",
-                    "\n",
-                    ":Transport SNOWMELT TRACER\n",
-                    ":FixedConcentration SNOWMELT SNOW 1.0\n",
-                ]
+            # (non-coupled and non-HBV coupled both get snowmelt-only tracers above)
             
             # Find the #Output Options line and insert everything after it
             new_lines = []
