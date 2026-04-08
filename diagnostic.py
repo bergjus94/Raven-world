@@ -204,6 +204,7 @@ class ModelDiagnostics:
                 metrics[period] = {
                     'KGE_NP': float('nan'),
                     'KGE': float('nan'),
+                    'LogKGE': float('nan'),
                     'NSE': float('nan'),
                     'PBIAS': float('nan'),
                     'RMSE': float('nan'),
@@ -213,6 +214,7 @@ class ModelDiagnostics:
                     'beta': float('nan'),
                     'KGE_NP_Cost': float('nan'),
                     'KGE_Cost': float('nan'),
+                    'LogKGE_Cost': float('nan'),
                     'NSE_Cost': float('nan'),
                     'PBIAS_Cost': float('nan')
                 }
@@ -238,11 +240,26 @@ class ModelDiagnostics:
                     ve = hr.ve(simulated_array=sim_valid, observed_array=obs_valid)
                 except:
                     ve = float('nan')
-                
+
+                # LogKGE: KGE on log-transformed flows (emphasizes low flows)
+                try:
+                    # Filter out zeros/negatives before log transform
+                    pos_mask = (sim_valid > 0) & (obs_valid > 0)
+                    if pos_mask.sum() > 30:
+                        log_sim = np.log(sim_valid[pos_mask])
+                        log_obs = np.log(obs_valid[pos_mask])
+                        log_kge_val = he.evaluator(obj_fn=he.kge, simulations=log_sim, evaluation=log_obs)
+                        log_kge = log_kge_val[0][0]
+                    else:
+                        log_kge = float('nan')
+                except:
+                    log_kge = float('nan')
+
                 # Store results
                 metrics[period] = {
                     'KGE_NP': kge_np[0],
                     'KGE': kge[0],
+                    'LogKGE': log_kge,
                     'NSE': nse,
                     'PBIAS': pbias,
                     'RMSE': rmse,
@@ -252,6 +269,7 @@ class ModelDiagnostics:
                     'beta': beta[0],
                     'KGE_NP_Cost': math.fabs(kge_np[0] - 1),
                     'KGE_Cost': math.fabs(kge[0] - 1),
+                    'LogKGE_Cost': math.fabs(log_kge - 1) if not math.isnan(log_kge) else float('nan'),
                     'NSE_Cost': math.fabs(nse - 1),
                     'PBIAS_Cost': math.fabs(pbias)
                 }
@@ -260,6 +278,7 @@ class ModelDiagnostics:
                 metrics[period] = {
                     'KGE_NP': float('nan'),
                     'KGE': float('nan'),
+                    'LogKGE': float('nan'),
                     'NSE': float('nan'),
                     'PBIAS': float('nan'),
                     'RMSE': float('nan'),
@@ -269,6 +288,7 @@ class ModelDiagnostics:
                     'beta': float('nan'),
                     'KGE_NP_Cost': float('nan'),
                     'KGE_Cost': float('nan'),
+                    'LogKGE_Cost': float('nan'),
                     'NSE_Cost': float('nan'),
                     'PBIAS_Cost': float('nan')
                 }
