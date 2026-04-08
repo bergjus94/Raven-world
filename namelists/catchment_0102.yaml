@@ -12,8 +12,19 @@ warm_up_date: '1978-01-01'
 
 models:
   - HBV
+  - HMETS
+  - HYMOD
+  - MOHYSE
 
 configurations:
   - baseline
   - glogem
+  - subdaily
+  - glogem_subdaily
 
+calibration:
+  iterations: 10
+  ngs: 2
+
+future:
+  enabled: true
