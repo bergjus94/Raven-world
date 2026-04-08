@@ -5,3 +5,6 @@ color: '#9467bd'
 coupled: false
 glacier_source: 'none'
 landuse_source: 'ICIMOD'
+
+# Only HBV has internal glacier model for uncoupled mode
+compatible_models: [HBV]

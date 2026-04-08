@@ -5,3 +5,6 @@ color: '#d62728'
 coupled: false
 glacier_source: 'none'
 meteo_source: 'HAR'
+
+# Only HBV has internal glacier model for uncoupled mode
+compatible_models: [HBV]

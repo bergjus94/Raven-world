@@ -4,3 +4,6 @@ display_name: 'HBV Subdaily'
 color: '#aec7e8'
 coupled: false
 glacier_source: 'none'
+
+# Only HBV has internal glacier model for uncoupled mode
+compatible_models: [HBV]

@@ -5,3 +5,6 @@ color: '#c5b0d5'
 coupled: false
 glacier_source: 'none'
 pet_method: 'OUDIN'
+
+# Only HBV has internal glacier model for uncoupled mode
+compatible_models: [HBV]

@@ -8,3 +8,6 @@ criteria:
   - elevation
   - landuse
   - aspect
+
+# Only HBV has internal glacier model for uncoupled mode
+compatible_models: [HBV]

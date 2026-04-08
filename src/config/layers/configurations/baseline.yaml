@@ -4,3 +4,6 @@ display_name: 'HBV'
 color: '#1f77b4'
 coupled: false
 glacier_source: 'none'
+
+# Only HBV has internal glacier model for uncoupled mode
+compatible_models: [HBV]

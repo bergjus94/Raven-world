@@ -5,3 +5,6 @@ color: '#843c39'
 coupled: false
 glacier_source: 'none'
 precip_source: 'TPHiPr'
+
+# Only HBV has internal glacier model for uncoupled mode
+compatible_models: [HBV]

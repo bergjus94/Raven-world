@@ -709,13 +709,35 @@ def _run_multi_config(catchment_nml, args):
     if 'future' in catchment_nml:
         overrides['future_projections'] = catchment_nml['future']
 
-    total = len(models) * len(configurations)
+    # Filter model × config combinations based on compatible_models
+    from config_merge import _load_yaml
+    layers_dir = Path(__file__).parent / 'src' / 'config' / 'layers'
+    jobs = []
+    for config in configurations:
+        cfg_file = layers_dir / 'configurations' / f'{config}.yaml'
+        if cfg_file.exists():
+            cfg = _load_yaml(cfg_file)
+            compat = cfg.get('compatible_models')
+        else:
+            compat = None
+        for model in models:
+            if compat and model not in compat:
+                print(f"  Skipping {config}/{model} (not in compatible_models: {compat})")
+                continue
+            jobs.append((config, model))
+
+    total = len(jobs)
 
     print("=" * 70)
     print(f"MULTI-CONFIG PIPELINE: catchment {catchment_id}")
     print(f"  Models: {models}")
     print(f"  Configurations: {configurations}")
-    print(f"  Total runs: {total}")
+    print(f"  Compatible runs: {total} (of {len(models) * len(configurations)} possible)")
+
+    # Build per-config model lists for Phase A/C
+    config_models = {}
+    for config, model in jobs:
+        config_models.setdefault(config, []).append(model)
     print(f"  Parallel workers: {max_workers}")
     print("=" * 70)
 
@@ -730,8 +752,10 @@ def _run_multi_config(catchment_nml, args):
         print(f"{'='*70}")
 
         for config in configurations:
-            # Use first model for input creation (shared files are model-independent)
-            first_model = models[0]
+            if config not in config_models:
+                continue
+            # Use first compatible model for input creation
+            first_model = config_models[config][0]
             run_key = f"{config}/{first_model}"
 
             try:
@@ -773,8 +797,8 @@ def _run_multi_config(catchment_nml, args):
             elapsed = (time.time() - start_time) / 60
             print(f"  [{config:30s}] {status}  ({elapsed:.0f}min)")
 
-            # Also create input files for other model types (fast — only .rv* files differ)
-            for model in models[1:]:
+            # Also create input files for other compatible model types
+            for model in config_models[config][1:]:
                 try:
                     nml2, tmp2 = load_config(
                         catchment=catchment_id, configuration=config,
@@ -801,29 +825,28 @@ def _run_multi_config(catchment_nml, args):
     print(f"PHASE B: Parallel calibration ({total} jobs, {max_workers} workers)")
     print(f"{'='*70}")
 
-    # Prepare all jobs — skip preprocessing AND future (future handled in Phase C)
+    # Prepare all compatible jobs — skip preprocessing AND future
     job_info = {}
-    for config in configurations:
-        for model in models:
-            run_key = f"{config}/{model}"
-            try:
-                nml, tmp_path = load_config(
-                    catchment=catchment_id, configuration=config,
-                    model=model, env=args.env,
-                    overrides=overrides if overrides else None,
-                )
-            except Exception as e:
-                print(f"  [{run_key}] Failed to load config: {e}")
-                job_info[run_key] = None
-                continue
+    for config, model in jobs:
+        run_key = f"{config}/{model}"
+        try:
+            nml, tmp_path = load_config(
+                catchment=catchment_id, configuration=config,
+                model=model, env=args.env,
+                overrides=overrides if overrides else None,
+            )
+        except Exception as e:
+            print(f"  [{run_key}] Failed to load config: {e}")
+            job_info[run_key] = None
+            continue
 
-            log_file = f"pipeline_{catchment_id}_{config}_{model}.log"
-            cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
-                                  skip_preprocessing=True)
-            # Always skip future in Phase B — handled sequentially in Phase C
-            if '--skip-future' not in cmd:
-                cmd.append('--skip-future')
-            job_info[run_key] = (cmd, tmp_path, log_file)
+        log_file = f"pipeline_{catchment_id}_{config}_{model}.log"
+        cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
+                              skip_preprocessing=True)
+        # Always skip future in Phase B — handled sequentially in Phase C
+        if '--skip-future' not in cmd:
+            cmd.append('--skip-future')
+        job_info[run_key] = (cmd, tmp_path, log_file)
 
     # Run in parallel
     results = {}
@@ -878,13 +901,15 @@ def _run_multi_config(catchment_nml, args):
                 cmd.append('--skip-calibration')
             return cmd, tmp_path
 
-        # C1: First model — sequential (creates CMIP6 downscaled files)
-        first_model = models[0]
+        # C1: First compatible model per config — sequential (creates CMIP6 files)
         print(f"\n{'='*70}")
-        print(f"PHASE C1: Future projections — {first_model} ({len(configurations)} configs, sequential)")
+        print(f"PHASE C1: Future projections — first model per config (sequential)")
         print(f"{'='*70}")
 
         for config in configurations:
+            if config not in config_models:
+                continue
+            first_model = config_models[config][0]
             try:
                 cmd, tmp_path = _build_future_cmd(
                     config, first_model,
@@ -912,10 +937,10 @@ def _run_multi_config(catchment_nml, args):
             elapsed = (time.time() - start_time) / 60
             print(f"  [{config:30s}] {status}  ({elapsed:.0f}min)")
 
-        # C2: Remaining models — parallel (CMIP6 files already exist)
-        remaining_models = models[1:]
-        if remaining_models:
-            future_jobs = [(config, model) for config in configurations for model in remaining_models]
+        # C2: Remaining compatible models — parallel (CMIP6 files already exist)
+        future_jobs = [(config, model) for config, model_list in config_models.items()
+                       for model in model_list[1:]]
+        if future_jobs:
             print(f"\n{'='*70}")
             print(f"PHASE C2: Future projections — remaining models ({len(future_jobs)} jobs, {max_workers} workers)")
             print(f"{'='*70}")
