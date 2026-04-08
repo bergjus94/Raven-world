@@ -220,36 +220,87 @@ MONTH_LABELS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
 #################### Plot 1: Ensemble Envelope ##################################
 #--------------------------------------------------------------------------------
 
-def plot_ensemble_envelope(all_hydro, gauge_id, plot_dir):
+def plot_ensemble_envelope(all_hydro, gauge_id, plot_dir, hist_data=None):
     """
-    Time series with ensemble mean line + min/max shading.
-    Individual model lines shown faintly underneath.
+    Two-panel figure:
+      Top: Annual mean discharge with ensemble spread + individual models
+      Bottom: Monthly regime for three periods (early/mid/late) with spread
     """
     if not all_hydro:
         return
 
-    stats = _ensemble_stats(all_hydro)
-    # Resample to monthly for cleaner visualization
-    stats_monthly = stats.resample('ME').mean()
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [1, 1]})
 
-    fig, ax = plt.subplots(figsize=(16, 6))
+    # --- Top panel: Annual mean time series ---
+    ax = axes[0]
+    combined = pd.concat({k: v['Q_sim'] for k, v in all_hydro.items()}, axis=1)
+    annual = combined.resample('YE').mean()
 
-    # Shading
-    ax.fill_between(stats_monthly.index, stats_monthly['min'], stats_monthly['max'],
+    # Ensemble spread
+    ax.fill_between(annual.index, annual.min(axis=1), annual.max(axis=1),
                      alpha=0.2, color='steelblue', label='Model range')
-    # Ensemble mean
-    ax.plot(stats_monthly.index, stats_monthly['mean'], color='steelblue',
-            linewidth=2, label='Ensemble mean')
+    ax.plot(annual.index, annual.mean(axis=1), color='steelblue',
+            linewidth=2.5, label='Ensemble mean')
 
-    # Individual models (faint)
-    for model_id, df in all_hydro.items():
-        monthly = df['Q_sim'].resample('ME').mean()
-        ax.plot(monthly.index, monthly.values, alpha=0.3, linewidth=0.5,
-                color=MODEL_COLORS.get(model_id, 'gray'))
+    # Individual models
+    for model_id in annual.columns:
+        ax.plot(annual.index, annual[model_id], alpha=0.5, linewidth=1,
+                color=MODEL_COLORS.get(model_id, 'gray'), label=model_id)
 
-    ax.set_ylabel('Discharge (m³/s)', fontsize=12)
-    ax.set_title(f'Catchment {gauge_id} — Future Ensemble Envelope (monthly mean)',
+    # Historical mean reference line
+    if hist_data is not None and 'obs_Q' in hist_data.columns:
+        hist_mean = hist_data['obs_Q'].mean()
+        ax.axhline(hist_mean, color='black', ls='--', lw=1.5, alpha=0.7,
+                    label=f'Historical observed mean ({hist_mean:.1f} m³/s)')
+
+    # Period shading
+    for period, (s, e, label) in PERIODS.items():
+        alpha = 0.05
+        ax.axvspan(pd.Timestamp(s), pd.Timestamp(e), alpha=alpha, color='gray')
+        ax.text(pd.Timestamp(str((int(s)+int(e))//2)), ax.get_ylim()[1]*0.95,
+                label, ha='center', fontsize=9, alpha=0.6)
+
+    ax.set_ylabel('Discharge (m³/s)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Catchment {gauge_id} — Future Ensemble Projections (annual mean)',
                  fontsize=14, fontweight='bold')
+    ax.legend(fontsize=9, ncol=2, loc='lower left')
+    ax.grid(True, alpha=0.3)
+
+    # --- Bottom panel: Monthly regime by period ---
+    ax = axes[1]
+    period_colors = {'early': '#2ca02c', 'mid': '#ff7f0e', 'late': '#d62728'}
+    months = np.arange(1, 13)
+
+    for period, (start, end, label) in PERIODS.items():
+        period_regimes = []
+        for model_id, df in all_hydro.items():
+            sub = df.loc[start:end]
+            if len(sub) > 0:
+                regime = sub['Q_sim'].groupby(sub.index.month).mean()
+                period_regimes.append(regime)
+
+        if not period_regimes:
+            continue
+        regime_df = pd.concat(period_regimes, axis=1)
+        mean_regime = regime_df.mean(axis=1)
+        min_regime = regime_df.min(axis=1)
+        max_regime = regime_df.max(axis=1)
+
+        color = period_colors[period]
+        ax.fill_between(months, min_regime, max_regime, alpha=0.15, color=color)
+        ax.plot(months, mean_regime, color=color, linewidth=2, label=label)
+
+    # Historical regime
+    if hist_data is not None and 'obs_Q' in hist_data.columns:
+        hist_regime = hist_data['obs_Q'].groupby(hist_data.index.month).mean()
+        ax.plot(months, hist_regime, color='black', linewidth=2, ls='--',
+                label='Historical observed')
+
+    ax.set_xticks(months)
+    ax.set_xticklabels(MONTH_LABELS)
+    ax.set_xlabel('Month', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Discharge (m³/s)', fontsize=12, fontweight='bold')
+    ax.set_title('Monthly Regime by Period', fontsize=13, fontweight='bold')
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
@@ -643,23 +694,30 @@ def plot_stacked_regime_decomposition(all_hydro, all_glogem, gauge_id, plot_dir,
 
 def plot_component_regime_shift(all_glogem, gauge_id, plot_dir):
     """
-    Overlay ice melt and snowmelt monthly curves for early vs late century.
-    Shows timing shifts.
+    3-panel figure showing how ice melt, snowmelt, and rain regimes shift
+    from early to late century. Each panel shows ensemble mean + spread
+    for early, mid, and late periods.
     """
     if not all_glogem:
         return
 
     components = [
-        ('icemelt_all_catchment', 'Ice Melt'),
-        ('snowmelt_all_catchment', 'Snowmelt'),
+        ('icemelt_all_catchment', 'Ice Melt', '#4393c3'),
+        ('snowmelt_all_catchment', 'Snowmelt', '#74add1'),
+        ('rain_all_catchment', 'Rain', '#fdae61'),
     ]
+    period_styles = {
+        'early': {'color': '#2ca02c', 'ls': '-'},
+        'mid':   {'color': '#ff7f0e', 'ls': '-'},
+        'late':  {'color': '#d62728', 'ls': '-'},
+    }
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=False)
+    months = np.arange(1, 13)
 
-    for ax, (col, comp_name) in zip(axes, components):
-        for period_key in ['early', 'late']:
+    for ax, (col, comp_name, _) in zip(axes, components):
+        for period_key, style in period_styles.items():
             start, end, label = PERIODS[period_key]
-            color = '#2ca02c' if period_key == 'early' else '#d62728'
 
             regimes = []
             for model_id, gdf in all_glogem.items():
@@ -675,22 +733,102 @@ def plot_component_regime_shift(all_glogem, gauge_id, plot_dir):
                 ens_min = combined.min()
                 ens_max = combined.max()
 
-                ax.fill_between(ens_mean.index, ens_min, ens_max, alpha=0.15, color=color)
-                ax.plot(ens_mean.index, ens_mean.values, color=color,
-                        linewidth=2.5, label=label)
+                ax.fill_between(months, ens_min, ens_max, alpha=0.12, color=style['color'])
+                ax.plot(months, ens_mean.values, color=style['color'],
+                        linewidth=2, ls=style['ls'], label=label)
 
-        ax.set_title(comp_name, fontsize=12, fontweight='bold')
-        ax.set_xticks(range(1, 13))
+        ax.set_title(comp_name, fontsize=13, fontweight='bold')
+        ax.set_xticks(months)
         ax.set_xticklabels(MONTH_LABELS)
-        ax.set_xlabel('Month')
-        ax.set_ylabel('mm/day (catchment area)')
-        ax.legend(fontsize=10)
+        ax.set_xlabel('Month', fontsize=11)
+        ax.set_ylabel('mm/day (catchment area)', fontsize=11)
+        ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
 
-    fig.suptitle(f'Catchment {gauge_id} — Component Regime Shift',
+    fig.suptitle(f'Catchment {gauge_id} — Component Regime Shift (Early → Mid → Late Century)',
                  fontsize=14, fontweight='bold')
     plt.tight_layout()
     save_path = plot_dir / f'component_regime_shift_{gauge_id}.png'
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############# Plot: Contribution Fraction Trend #################################
+#--------------------------------------------------------------------------------
+
+def plot_contribution_fraction_trend(all_glogem, gauge_id, plot_dir):
+    """
+    Stacked area chart showing how the annual contribution of ice melt,
+    snowmelt, and rain changes over time (as fractions of total GloGEM discharge).
+    Uses 10-year rolling mean for smooth trends.
+    """
+    if not all_glogem:
+        return
+
+    components = [
+        ('icemelt_all_catchment', 'Ice Melt', '#4393c3'),
+        ('snowmelt_all_catchment', 'Snowmelt', '#74add1'),
+        ('rain_all_catchment', 'Rain', '#fdae61'),
+    ]
+
+    # Compute annual means per component per model, then ensemble mean
+    annual_fractions = {name: [] for _, name, _ in components}
+    years = None
+
+    for model_id, gdf in all_glogem.items():
+        gdf_indexed = gdf.set_index('date') if 'date' in gdf.columns else gdf
+
+        # Check which columns exist
+        avail = [col for col, _, _ in components if col in gdf_indexed.columns]
+        if not avail:
+            continue
+
+        # Annual sum of each component
+        annual_sums = {}
+        for col, name, _ in components:
+            if col in gdf_indexed.columns:
+                annual_sums[name] = gdf_indexed[col].resample('YE').mean()
+            else:
+                annual_sums[name] = pd.Series(0, index=gdf_indexed.resample('YE').mean().index)
+
+        # Total
+        total = sum(annual_sums.values())
+        total = total.replace(0, np.nan)
+
+        for _, name, _ in components:
+            frac = (annual_sums[name] / total * 100).rolling(10, min_periods=5).mean()
+            annual_fractions[name].append(frac)
+
+        if years is None:
+            years = total.index
+
+    if years is None:
+        return
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    # Ensemble mean of fractions
+    bottom = np.zeros(len(years))
+    for col, name, color in components:
+        if annual_fractions[name]:
+            ens_mean = pd.concat(annual_fractions[name], axis=1).mean(axis=1)
+            ens_mean = ens_mean.reindex(years).fillna(0).values
+            ax.fill_between(years, bottom, bottom + ens_mean, color=color,
+                           alpha=0.7, label=name, edgecolor='white', linewidth=0.5)
+            bottom = bottom + ens_mean
+
+    ax.set_ylabel('Contribution to Total Discharge (%)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Year', fontsize=12, fontweight='bold')
+    ax.set_title(f'Catchment {gauge_id} — Evolving Contribution Fractions (10-yr rolling mean)',
+                 fontsize=14, fontweight='bold')
+    ax.set_ylim(0, 105)
+    ax.legend(fontsize=11, loc='upper right')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    save_path = plot_dir / f'contribution_fraction_trend_{gauge_id}.png'
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {save_path}")
@@ -905,7 +1043,7 @@ def run_future_postprocessing(yaml_path, skip_errors=True):
 
     # Discharge plots
     run_plot("Ensemble Envelope",
-             plot_ensemble_envelope, all_hydro, gauge_id, plot_dir)
+             plot_ensemble_envelope, all_hydro, gauge_id, plot_dir, hist_data)
 
     run_plot("30-Year Moving Average",
              plot_moving_average, all_hydro, gauge_id, plot_dir)
@@ -919,18 +1057,15 @@ def run_future_postprocessing(yaml_path, skip_errors=True):
     run_plot("Flow Duration Curves",
              plot_flow_duration_curves, all_hydro, gauge_id, plot_dir, hist_data)
 
-    run_plot("Seasonal Water Availability",
-             plot_seasonal_water_availability, all_hydro, gauge_id, plot_dir)
-
-    run_plot("Annual Extremes",
-             plot_annual_extremes, all_hydro, gauge_id, plot_dir)
-
     # Component / glacier plots
     run_plot("Stacked Regime Decomposition",
              plot_stacked_regime_decomposition, all_hydro, all_glogem, gauge_id, plot_dir, hist_data)
 
     run_plot("Component Regime Shift",
              plot_component_regime_shift, all_glogem, gauge_id, plot_dir)
+
+    run_plot("Contribution Fraction Trend",
+             plot_contribution_fraction_trend, all_glogem, gauge_id, plot_dir)
 
     run_plot("Ice Melt Contribution Trend",
              plot_ice_melt_trend, all_hydro, all_glogem, gauge_id, plot_dir)
