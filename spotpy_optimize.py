@@ -1335,21 +1335,28 @@ class RavenSCEUA(object):
                 ":Transport SNOWMELT TRACER\n",
                 ":FixedConcentration SNOWMELT SNOW 1.0\n",
             ]
-            # Glacier tracers only for coupled HBV (3-layer model)
-            # 2-layer models (HMETS, HYMOD, MOHYSE) crash with "bad layer index"
-            if self.coupled and self.model_type == 'HBV':
-                transport_tracers += [
-                    "\n",
-                    ":Transport GLACIERMELT_ALL TRACER\n",
-                    ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
-                    "\n",
-                    ":Transport GLACIERMELT_SMALL TRACER\n",
-                    ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER\n",
-                    "\n",
-                    ":Transport GLACIERMELT_LARGE TRACER\n",
-                    ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
-                ]
-            # (non-coupled and non-HBV coupled both get snowmelt-only tracers above)
+            # Glacier tracers — HBV only (2-layer models crash with "bad layer index")
+            if self.model_type == 'HBV':
+                if self.coupled:
+                    # Coupled: track GloGEM-driven melt via PONDED_WATER + HRU groups
+                    transport_tracers += [
+                        "\n",
+                        ":Transport GLACIERMELT_ALL TRACER\n",
+                        ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER\n",
+                        "\n",
+                        ":Transport GLACIERMELT_SMALL TRACER\n",
+                        ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER\n",
+                        "\n",
+                        ":Transport GLACIERMELT_LARGE TRACER\n",
+                        ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER\n",
+                    ]
+                else:
+                    # Uncoupled: track Raven's internal glacier melt via GLACIER state
+                    transport_tracers += [
+                        "\n",
+                        ":Transport GLACIERMELT_ALL TRACER\n",
+                        ":FixedConcentration GLACIERMELT_ALL GLACIER 1.0\n",
+                    ]
             
             # Find the #Output Options line and insert everything after it
             new_lines = []
