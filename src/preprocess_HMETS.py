@@ -457,7 +457,7 @@ class HMETSPreprocessor:
         hru_groups = []
         
         # Different exclusion rules for different groups
-        allhrus_excluded_landuse = ['GLACIER', 'ROCK', 'MASKED_GLACIER', 'LAKE']
+        allhrus_excluded_landuse = ['GLACIER', 'ROCK', 'MASKED_GLACIER']
         elevation_excluded_landuse = ['GLACIER', 'MASKED_GLACIER']  # Only exclude glaciers for elevation bands
         
         # Get all HRU IDs excluding the specified land use classes for AllHRUs
