@@ -290,8 +290,10 @@ def phase3_convert_params(nml, logger=None):
     output_dir = paths['output_dir']
     verified_csv = output_dir / f"{gauge_id}_{model_type}_VERIFIED_best_params.csv"
 
-    # Output path
-    calibrated_yaml = script_dir / 'src' / 'config' / f"calibrated_params_{config_key}_{model_type}_{gauge_id}.yaml"
+    # Output path (metric suffix for non-default)
+    metric = nml.get('_calibration_metric', 'KGE')
+    metric_suffix = '' if metric == 'KGE' else f'_{metric}'
+    calibrated_yaml = script_dir / 'src' / 'config' / f"calibrated_params_{config_key}_{model_type}_{gauge_id}{metric_suffix}.yaml"
 
     # Check if already exists
     if calibrated_yaml.exists():
@@ -709,10 +711,23 @@ def _run_multi_config(catchment_nml, args):
     if 'future' in catchment_nml:
         overrides['future_projections'] = catchment_nml['future']
 
+    # Parse metrics list (backward compatible: string or missing → [KGE])
+    cali_section = catchment_nml.get('calibration', {})
+    metrics_raw = cali_section.get('metrics', 'KGE')
+    if isinstance(metrics_raw, str):
+        metrics = [metrics_raw]
+    elif isinstance(metrics_raw, dict):
+        # Old format: {primary: 'KGE', secondary: [...]}
+        metrics = [metrics_raw.get('primary', 'KGE')]
+    elif isinstance(metrics_raw, list):
+        metrics = metrics_raw
+    else:
+        metrics = ['KGE']
+
     # Filter model × config combinations based on compatible_models
     from config_merge import _load_yaml
     layers_dir = Path(__file__).parent / 'src' / 'config' / 'layers'
-    jobs = []
+    config_model_jobs = []
     for config in configurations:
         cfg_file = layers_dir / 'configurations' / f'{config}.yaml'
         if cfg_file.exists():
@@ -724,19 +739,24 @@ def _run_multi_config(catchment_nml, args):
             if compat and model not in compat:
                 print(f"  Skipping {config}/{model} (not in compatible_models: {compat})")
                 continue
-            jobs.append((config, model))
+            config_model_jobs.append((config, model))
 
+    # Expand with metrics: (config, model, metric) triples
+    jobs = [(config, model, metric)
+            for config, model in config_model_jobs
+            for metric in metrics]
     total = len(jobs)
 
     print("=" * 70)
     print(f"MULTI-CONFIG PIPELINE: catchment {catchment_id}")
     print(f"  Models: {models}")
     print(f"  Configurations: {configurations}")
-    print(f"  Compatible runs: {total} (of {len(models) * len(configurations)} possible)")
+    print(f"  Metrics: {metrics}")
+    print(f"  Compatible runs: {total}")
 
-    # Build per-config model lists for Phase A/C
+    # Build per-config model lists for Phase A (metric-independent)
     config_models = {}
-    for config, model in jobs:
+    for config, model in config_model_jobs:
         config_models.setdefault(config, []).append(model)
     print(f"  Parallel workers: {max_workers}")
     print("=" * 70)
@@ -827,20 +847,29 @@ def _run_multi_config(catchment_nml, args):
 
     # Prepare all compatible jobs — skip preprocessing AND future
     job_info = {}
-    for config, model in jobs:
-        run_key = f"{config}/{model}"
+    for config, model, metric in jobs:
+        run_key = f"{config}/{model}" if metric == 'KGE' else f"{config}/{model}_{metric}"
+        # Build metric-specific overrides
+        metric_overrides = dict(overrides) if overrides else {}
+        metric_overrides['_calibration_metric'] = metric
+        if 'calibration' not in metric_overrides:
+            metric_overrides['calibration'] = {}
+        if 'metrics' not in metric_overrides['calibration'] or not isinstance(metric_overrides['calibration'].get('metrics'), dict):
+            metric_overrides['calibration']['metrics'] = {}
+        metric_overrides['calibration']['metrics']['primary'] = metric
         try:
             nml, tmp_path = load_config(
                 catchment=catchment_id, configuration=config,
                 model=model, env=args.env,
-                overrides=overrides if overrides else None,
+                overrides=metric_overrides,
             )
         except Exception as e:
             print(f"  [{run_key}] Failed to load config: {e}")
             job_info[run_key] = None
             continue
 
-        log_file = f"pipeline_{catchment_id}_{config}_{model}.log"
+        metric_tag = '' if metric == 'KGE' else f'_{metric}'
+        log_file = f"pipeline_{catchment_id}_{config}_{model}{metric_tag}.log"
         cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
                               skip_preprocessing=True)
         # Always skip future in Phase B — handled sequentially in Phase C
@@ -887,12 +916,19 @@ def _run_multi_config(catchment_nml, args):
     #   C2: Parallel — remaining models (CMIP6 files already exist)
     # =====================================================================
     if not args.skip_future:
-        def _build_future_cmd(config, model, log_file):
-            """Build a future-only pipeline command."""
+        def _build_future_cmd(config, model, metric, log_file):
+            """Build a future-only pipeline command with metric overrides."""
+            m_overrides = dict(overrides) if overrides else {}
+            m_overrides['_calibration_metric'] = metric
+            if 'calibration' not in m_overrides:
+                m_overrides['calibration'] = {}
+            if not isinstance(m_overrides['calibration'].get('metrics'), dict):
+                m_overrides['calibration']['metrics'] = {}
+            m_overrides['calibration']['metrics']['primary'] = metric
             nml, tmp_path = load_config(
                 catchment=catchment_id, configuration=config,
                 model=model, env=args.env,
-                overrides=overrides if overrides else None,
+                overrides=m_overrides,
             )
             cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
                                   skip_preprocessing=True)
@@ -901,56 +937,62 @@ def _run_multi_config(catchment_nml, args):
                 cmd.append('--skip-calibration')
             return cmd, tmp_path
 
-        # C1: First compatible model per config — sequential (creates CMIP6 files)
+        # C1: First compatible model per config × metric — sequential (creates shared CMIP6 files on first metric)
         print(f"\n{'='*70}")
-        print(f"PHASE C1: Future projections — first model per config (sequential)")
+        print(f"PHASE C1: Future projections — first model per config × metric (sequential)")
         print(f"{'='*70}")
 
         for config in configurations:
             if config not in config_models:
                 continue
             first_model = config_models[config][0]
-            try:
-                cmd, tmp_path = _build_future_cmd(
-                    config, first_model,
-                    f"pipeline_{catchment_id}_{config}_{first_model}_future.log")
-            except Exception as e:
-                print(f"  [{config}] Failed to load config: {e}")
-                continue
-
-            elapsed = (time.time() - start_time) / 60
-            print(f"  [{config:30s}] {first_model} future...  ({elapsed:.0f}min)")
-
-            try:
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
-                status = "OK" if proc.returncode == 0 else "FAILED"
-                if proc.returncode != 0:
-                    print(f"  [{config:30s}] FAILED — see pipeline_{catchment_id}_{config}_{first_model}_future.log")
-            except subprocess.TimeoutExpired:
-                status = "TIMEOUT"
-            finally:
+            for metric in metrics:
+                metric_tag = '' if metric == 'KGE' else f'_{metric}'
+                run_label = f"{config}/{first_model}{metric_tag}"
                 try:
-                    Path(tmp_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
+                    cmd, tmp_path = _build_future_cmd(
+                        config, first_model, metric,
+                        f"pipeline_{catchment_id}_{config}_{first_model}{metric_tag}_future.log")
+                except Exception as e:
+                    print(f"  [{run_label}] Failed to load config: {e}")
+                    continue
 
-            elapsed = (time.time() - start_time) / 60
-            print(f"  [{config:30s}] {status}  ({elapsed:.0f}min)")
+                elapsed = (time.time() - start_time) / 60
+                print(f"  [{run_label:35s}] future...  ({elapsed:.0f}min)")
 
-        # C2: Remaining compatible models — parallel (CMIP6 files already exist)
-        future_jobs = [(config, model) for config, model_list in config_models.items()
-                       for model in model_list[1:]]
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
+                    status = "OK" if proc.returncode == 0 else "FAILED"
+                    if proc.returncode != 0:
+                        print(f"  [{run_label:35s}] FAILED")
+                except subprocess.TimeoutExpired:
+                    status = "TIMEOUT"
+                finally:
+                    try:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+                elapsed = (time.time() - start_time) / 60
+                print(f"  [{run_label:35s}] {status}  ({elapsed:.0f}min)")
+
+        # C2: Remaining compatible models × metrics — parallel
+        future_jobs = [(config, model, metric)
+                       for config, model_list in config_models.items()
+                       for model in model_list[1:]
+                       for metric in metrics]
         if future_jobs:
             print(f"\n{'='*70}")
-            print(f"PHASE C2: Future projections — remaining models ({len(future_jobs)} jobs, {max_workers} workers)")
+            print(f"PHASE C2: Future projections — remaining models × metrics ({len(future_jobs)} jobs, {max_workers} workers)")
             print(f"{'='*70}")
 
             future_job_info = {}
-            for config, model in future_jobs:
-                run_key = f"{config}/{model}"
+            for config, model, metric in future_jobs:
+                metric_tag = '' if metric == 'KGE' else f'_{metric}'
+                run_key = f"{config}/{model}{metric_tag}"
                 try:
-                    log_file = f"pipeline_{catchment_id}_{config}_{model}_future.log"
-                    cmd, tmp_path = _build_future_cmd(config, model, log_file)
+                    log_file = f"pipeline_{catchment_id}_{config}_{model}{metric_tag}_future.log"
+                    cmd, tmp_path = _build_future_cmd(config, model, metric, log_file)
                     future_job_info[run_key] = (cmd, tmp_path, log_file)
                 except Exception as e:
                     print(f"  [{run_key}] Failed to load config: {e}")

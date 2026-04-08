@@ -80,6 +80,11 @@ def get_paths(nml: dict) -> dict:
     model_type = nml.get('model_type', 'HBV')
     config_key = nml.get('_config_key')
 
+    # Metric suffix for non-default calibration metrics
+    # Default (KGE) → no suffix; non-default → e.g. HBV_LogKGE/
+    metric = nml.get('_calibration_metric', 'KGE')
+    model_dir_name = model_type if metric == 'KGE' else f"{model_type}_{metric}"
+
     if config_key:
         # New composable layout: model_runs/catchment_{id}/configs/{key}/{model}/
         catchment_dir = main_dir / 'model_runs' / f'catchment_{gauge_id}'
@@ -92,10 +97,10 @@ def get_paths(nml: dict) -> dict:
             'data_obs_dir': catchment_dir / 'data_obs',
             'cmip6_dir': catchment_dir / 'cmip6',
             'config_dir': catchment_dir / 'configs' / config_key,
-            'model_dir': catchment_dir / 'configs' / config_key / model_type,
-            'output_dir': catchment_dir / 'configs' / config_key / model_type / 'output',
-            'template_dir': catchment_dir / 'configs' / config_key / model_type / 'templates',
-            'results_dir': catchment_dir / 'configs' / config_key / model_type / 'results',
+            'model_dir': catchment_dir / 'configs' / config_key / model_dir_name,
+            'output_dir': catchment_dir / 'configs' / config_key / model_dir_name / 'output',
+            'template_dir': catchment_dir / 'configs' / config_key / model_dir_name / 'templates',
+            'results_dir': catchment_dir / 'configs' / config_key / model_dir_name / 'results',
             'plots_dir': catchment_dir / 'plots',
             'model_comparisons_dir': catchment_dir / 'model_comparisons',
         }
