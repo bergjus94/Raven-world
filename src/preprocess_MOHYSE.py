@@ -1061,8 +1061,7 @@ class MOHYSEPreprocessor:
             "#Hydrologic Process Order": [
                 ":HydrologicProcesses",
                 "   :SnowBalance              SNOBAL_SIMPLE_MELT   SNOW            SNOW_LIQ",
-                "   :Flush                    RAVEN_DEFAULT        SNOW_LIQ        LAKE_STORAGE",
-                "   :Flush                    RAVEN_DEFAULT        LAKE_STORAGE    PONDED_WATER",
+                "   :Flush                    RAVEN_DEFAULT        SNOW_LIQ        PONDED_WATER",
                 "   :Precipitation            PRECIP_RAVEN         ATMOS_PRECIP    MULTIPLE",
                 "   :Infiltration             INF_HBV              PONDED_WATER    MULTIPLE",
                 "   :SoilEvaporation          SOILEVAP_LINEAR      TOPSOIL         ATMOSPHERE",
