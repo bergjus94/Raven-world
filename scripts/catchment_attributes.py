@@ -216,11 +216,55 @@ def main():
 
         rows.append(row)
 
+    # Nesting detection: find main basin for each catchment
+    if len(rows) > 1:
+        print(f"\n--- Detecting nesting relationships ---")
+        # Load all geometries in UTM for area comparison
+        all_geoms = {}
+        for row in rows:
+            gdf = load_catchment_shapefile(main_dir, row['gauge_id'])
+            if gdf is not None:
+                utm_crs = gdf.estimate_utm_crs()
+                all_geoms[row['gauge_id']] = gdf.to_crs(utm_crs).geometry.iloc[0]
+
+        # Sort by area (largest first)
+        sorted_ids = sorted(all_geoms.keys(),
+                            key=lambda gid: all_geoms[gid].area, reverse=True)
+
+        for row in rows:
+            gid = row['gauge_id']
+            geom = all_geoms.get(gid)
+            if geom is None:
+                row['main_basin'] = gid
+                continue
+
+            parent = None
+            for other_id in sorted_ids:
+                if other_id == gid:
+                    continue
+                other_geom = all_geoms[other_id]
+                if other_geom.area <= geom.area:
+                    continue
+                try:
+                    # Reproject to same CRS for comparison
+                    overlap = geom.intersection(other_geom).area / geom.area
+                    if overlap > 0.95:
+                        parent = other_id
+                        break
+                except Exception:
+                    pass
+
+            row['main_basin'] = parent if parent else gid
+            if parent:
+                print(f"  {gid} nested in {parent}")
+            else:
+                print(f"  {gid} standalone")
+
     # Create table
     df = pd.DataFrame(rows)
 
     # Reorder columns
-    col_order = ['gauge_id', 'display_name', 'lat', 'lon',
+    col_order = ['gauge_id', 'display_name', 'main_basin', 'lat', 'lon',
                  'catchment_area_km2', 'mean_elevation_m', 'min_elevation_m',
                  'max_elevation_m', 'median_elevation_m', 'mean_slope_deg',
                  'glacier_area_km2', 'glacier_fraction', 'n_glaciers',
