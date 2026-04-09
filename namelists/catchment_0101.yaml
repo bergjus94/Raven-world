@@ -12,8 +12,18 @@ warm_up_date: '2015-06-22'
 
 models:
   - HBV
+  - HMETS
+  - HYMOD
+  - MOHYSE
 
 configurations:
-  - baseline
-  - glogem
+  - subdaily
+  - glogem_subdaily
 
+calibration:
+  metrics: [KGE, LogKGE]
+  iterations: 3000
+  ngs: 15
+
+future:
+  enabled: true
