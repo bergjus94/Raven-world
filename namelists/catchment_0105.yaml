@@ -21,7 +21,7 @@ configurations:
 
 calibration:
   metrics: [KGE, LogKGE]
-  iterations: 3000
+  iterations: 5000
   ngs: 15
 
 future:
