@@ -138,6 +138,10 @@ def main():
     parser = argparse.ArgumentParser(description='Compute catchment attributes from raw data')
     parser.add_argument('--catchments', nargs='+', default=None,
                         help='Gauge IDs to process (default: all from config layers)')
+    parser.add_argument('--shapefile', type=str, default=None,
+                        help='Combined catchment shapefile (processes all catchments in file)')
+    parser.add_argument('--id-column', type=str, default='station_id',
+                        help='Column name for gauge ID in combined shapefile (default: station_id)')
     parser.add_argument('--main-dir', type=str, default=None,
                         help='Main data directory (auto-detected from config layers if not set)')
     parser.add_argument('--env', type=str, default=None,
@@ -156,12 +160,30 @@ def main():
         main_dir = Path(nml['main_dir'])
         Path(tmp).unlink(missing_ok=True)
 
-    # Get catchment list
-    if args.catchments:
-        gauge_ids = args.catchments
+    # Load catchments: from combined shapefile or individual files
+    if args.shapefile:
+        combined_gdf = gpd.read_file(args.shapefile)
+        id_col = args.id_column
+        if id_col not in combined_gdf.columns:
+            print(f"Error: column '{id_col}' not found in {args.shapefile}")
+            print(f"Available columns: {list(combined_gdf.columns)}")
+            sys.exit(1)
+        gauge_ids = [str(gid) for gid in combined_gdf[id_col].tolist()]
+        if args.catchments:
+            gauge_ids = [gid for gid in gauge_ids if gid in args.catchments]
+        catchment_gdfs = {
+            str(row[id_col]): combined_gdf.iloc[[idx]]
+            for idx, row in combined_gdf.iterrows()
+            if str(row[id_col]) in gauge_ids
+        }
+        print(f"Loaded {len(catchment_gdfs)} catchments from {args.shapefile}")
     else:
-        from config_merge import list_catchments
-        gauge_ids = list_catchments()
+        if args.catchments:
+            gauge_ids = args.catchments
+        else:
+            from config_merge import list_catchments
+            gauge_ids = list_catchments()
+        catchment_gdfs = {}
 
     print("=" * 70)
     print("CATCHMENT ATTRIBUTE TABLE")
@@ -173,8 +195,11 @@ def main():
     for gauge_id in gauge_ids:
         print(f"\n--- Catchment {gauge_id} ---")
 
-        # Load shapefile
-        catchment_gdf = load_catchment_shapefile(main_dir, gauge_id)
+        # Load shapefile (from combined dict or individual file)
+        if gauge_id in catchment_gdfs:
+            catchment_gdf = catchment_gdfs[gauge_id]
+        else:
+            catchment_gdf = load_catchment_shapefile(main_dir, gauge_id)
         if catchment_gdf is None:
             print(f"  Shapefile not found, skipping")
             continue
