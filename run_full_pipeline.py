@@ -711,6 +711,27 @@ def _run_multi_config(catchment_nml, args):
     if 'future' in catchment_nml:
         overrides['future_projections'] = catchment_nml['future']
 
+    # Multi-subbasin: pass subbasins through overrides if enabled
+    multi_subbasin = catchment_nml.get('multi_subbasin', False) or getattr(args, 'multi_subbasin', False)
+    if multi_subbasin and 'subbasins' in catchment_nml:
+        # Convert simplified format (just gauge_id) to full format expected by processors
+        subbasins_full = []
+        for i, sb in enumerate(catchment_nml['subbasins'], 1):
+            if isinstance(sb, str):
+                sb = {'gauge_id': sb}
+            subbasins_full.append({
+                'id': sb.get('id', i),
+                'gauge_id': str(sb['gauge_id']),
+                'name': sb.get('name', ''),
+                'gauged': sb.get('gauged', 1),
+                'reach_length': sb.get('reach_length', '_AUTO'),
+                'profile': sb.get('profile', 'NONE'),
+            })
+        overrides['subbasins'] = subbasins_full
+        print(f"  Multi-subbasin mode: {len(subbasins_full)} subbasins")
+    elif multi_subbasin:
+        print("  WARNING: --multi-subbasin set but no subbasins: list in namelist")
+
     # Parse metrics list (backward compatible: string or missing → [KGE])
     cali_section = catchment_nml.get('calibration', {})
     metrics_raw = cali_section.get('metrics', 'KGE')
@@ -1088,6 +1109,8 @@ Examples:
                         help='CMIP6 download bounding box')
     parser.add_argument('--parallel', '-j', type=int, default=30,
                         help='Max parallel workers for multi-config runs (default: 30)')
+    parser.add_argument('--multi-subbasin', action='store_true',
+                        help='Enable multi-subbasin mode (requires subbasins: in namelist)')
     parser.add_argument('--verbose', '-v', action='store_true')
     parser.add_argument('--log-file', type=str, default=None)
 

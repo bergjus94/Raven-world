@@ -10,6 +10,7 @@ from typing import Dict, List, Union, Optional, Any, Tuple
 import yaml
 
 from preprocess_catchment_hru import CatchmentProcessor
+from paths import get_paths
 
 #--------------------------------------------------------------------------------
 ############################### MultiSubbasinProcessor ##########################
@@ -40,12 +41,9 @@ class MultiSubbasinProcessor:
         self.gauge_id = str(self.config['gauge_id'])
         self.subbasin_configs = self.config['subbasins']
 
-        # Shared output directory  – same location CatchmentProcessor would use
-        # for the main gauge, so HBVProcessor still finds HRU_table.csv there.
-        catchment_dir = (
-            self.main_dir / self.config['config_dir'] / f'catchment_{self.gauge_id}'
-        )
-        self.topo_dir = catchment_dir / 'topo_files'
+        # Centralized path construction
+        paths = get_paths(self.config)
+        self.topo_dir = paths['topo_dir']
         self.topo_dir.mkdir(parents=True, exist_ok=True)
 
         # Populated by compute_routing_topology()
