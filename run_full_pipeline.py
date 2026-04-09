@@ -27,6 +27,7 @@ import time
 import logging
 import tempfile
 import copy
+import shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -787,6 +788,7 @@ def _run_multi_config(catchment_nml, args):
     # =====================================================================
     # Phase A: Sequential input creation (one per config, using first model)
     # =====================================================================
+    main_dir = None  # Will be set from first successful config load
     if not args.skip_preprocessing:
         print(f"\n{'='*70}")
         print(f"PHASE A: Sequential input creation ({len(configurations)} configs)")
@@ -805,6 +807,8 @@ def _run_multi_config(catchment_nml, args):
                     model=first_model, env=args.env,
                     overrides=overrides if overrides else None,
                 )
+                if main_dir is None:
+                    main_dir = Path(nml['main_dir'])
             except Exception as e:
                 print(f"  [{config}] Failed to load config: {e}")
                 continue
@@ -858,6 +862,65 @@ def _run_multi_config(catchment_nml, args):
                         Path(tmp2).unlink(missing_ok=True)
                     except OSError:
                         pass
+
+    # =====================================================================
+    # Phase A2: Copy input/template files to non-default metric directories
+    # =====================================================================
+    # Phase A only creates files in the base model dir (e.g. HBV/).
+    # Non-default metrics (e.g. LogKGE) use a separate dir (HBV_LogKGE/)
+    # that needs the same input and template files.
+    if len(metrics) > 1:
+        # Ensure main_dir is set (may be None if --skip-preprocessing was used)
+        if main_dir is None:
+            for config in configurations:
+                if config not in config_models:
+                    continue
+                try:
+                    _nml, _tmp = load_config(
+                        catchment=catchment_id, configuration=config,
+                        model=config_models[config][0], env=args.env,
+                        overrides=overrides if overrides else None,
+                    )
+                    main_dir = Path(_nml['main_dir'])
+                    Path(_tmp).unlink(missing_ok=True)
+                    break
+                except Exception:
+                    continue
+        print(f"\n{'='*70}")
+        print(f"PHASE A2: Populating metric-specific directories")
+        print(f"{'='*70}")
+        for config in configurations:
+            if config not in config_models:
+                continue
+            for model in config_models[config]:
+                base_model_dir = main_dir / 'model_runs' / f'catchment_{catchment_id}' / 'configs' / config / model
+                for metric in metrics:
+                    if metric == 'KGE':
+                        continue  # base directory, already has files
+                    metric_model_dir = main_dir / 'model_runs' / f'catchment_{catchment_id}' / 'configs' / config / f'{model}_{metric}'
+                    if metric_model_dir.exists() and any(metric_model_dir.glob('templates/*.tpl')):
+                        print(f"  [{config}/{model}_{metric}] Already has template files, skipping")
+                        continue
+                    if not base_model_dir.exists():
+                        print(f"  [{config}/{model}_{metric}] Base dir {base_model_dir} missing, skipping")
+                        continue
+                    # Copy templates and .rv* files
+                    for subdir in ['templates']:
+                        src_sub = base_model_dir / subdir
+                        dst_sub = metric_model_dir / subdir
+                        if src_sub.exists():
+                            dst_sub.mkdir(parents=True, exist_ok=True)
+                            for f in src_sub.iterdir():
+                                shutil.copy2(f, dst_sub / f.name)
+                    # Copy .rv* files from base model dir (not subdirectories)
+                    metric_model_dir.mkdir(parents=True, exist_ok=True)
+                    for f in base_model_dir.iterdir():
+                        if f.is_file() and f.suffix.startswith('.rv'):
+                            shutil.copy2(f, metric_model_dir / f.name)
+                    # Ensure output dir exists
+                    (metric_model_dir / 'output').mkdir(parents=True, exist_ok=True)
+                    (metric_model_dir / 'results').mkdir(parents=True, exist_ok=True)
+                    print(f"  [{config}/{model}_{metric}] Copied input files from {model}/")
 
     # =====================================================================
     # Phase B: Parallel calibration (skip preprocessing + future)
