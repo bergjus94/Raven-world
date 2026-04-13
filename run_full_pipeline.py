@@ -253,6 +253,7 @@ def phase2_calibrate(namelist_path, nml, iterations=None, ngs=None, logger=None)
             'raven_executable': nml.get('raven_executable'),
             'glogem_dir': nml.get('glogem_dir', None),
             '_config_key': nml.get('_config_key', 'baseline'),
+            '_calibration_metric': nml.get('_calibration_metric', 'KGE'),
         }
         results = postprocessing.run_complete_postprocessing(
             config=config,
