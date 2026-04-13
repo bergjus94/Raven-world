@@ -1,21 +1,25 @@
 # Paper 5: Baseflow Representation in Glacierized Mountain Catchments
+# Subsurface Model Structure vs. Calibration Metrics for Low-Flow Simulation and Future Water Availability
+
+## Overarching Goal
+
+Disentangle the relative importance of **subsurface model structure** (number of groundwater layers, recession behaviour) vs. **calibration metric choice** (KGE, LogKGE, KGE_WB, KGE_lowFDC) for simulating winter baseflow in glacierized catchments, and quantify how each propagates into future dry-season water availability projections under climate change.
 
 ## Research Questions
-
-*To be refined after diagnostic analysis of current model outputs*
-
-### Preliminary questions
 
 **RQ1 — Diagnostic:**
 How well do current conceptual model configurations (HBV in Raven) represent winter baseflow across the 12 UIB catchments? Is the systematic underestimation of winter low flows related to catchment characteristics (glacier fraction, elevation, geology)?
 
-**RQ2 — Structural improvement:**
-Does adding a deeper groundwater storage component (third reservoir with multi-year residence time) improve baseflow simulation without degrading summer peak performance? How sensitive are the results to the structure of the deep reservoir (linear vs non-linear, single vs dual)?
+**RQ2 — Calibration metric effect:**
+Can baseflow-focused calibration metrics (KGE_WB, KGE_lowFDC) improve winter low-flow simulation without degrading overall hydrograph performance? How do different metrics compare in their ability to constrain baseflow parameters?
 
-**RQ3 — Implications for projections:**
-Does correcting the baseflow representation change future streamflow projections — particularly winter low flows and dry-season water availability? Does it interact with the glacier coupling approach (Paper 2)?
+**RQ3 — Structural improvement:**
+Does adding a deeper groundwater storage component (third reservoir with multi-year residence time) improve baseflow simulation beyond what calibration metrics alone can achieve? Is the improvement additive — does the combination of better structure + better metric outperform either alone?
 
-**RQ4 — Groundwater as the "next buffer":**
+**RQ4 — Propagation into future projections:**
+Which source of uncertainty matters more for future winter low-flow projections: the calibration metric or the subsurface model structure? Does baseflow representation uncertainty interact with climate model uncertainty and glacier coupling uncertainty?
+
+**RQ5 — Groundwater as the "next buffer":**
 As glaciers retreat, does groundwater storage partially replace glacier buffering? Can we quantify when groundwater buffering capacity is exhausted (following Somers et al. 2019)?
 
 ---
@@ -76,11 +80,19 @@ Two recent high-profile papers have fundamentally changed the understanding:
 - **Frontiers in Earth Science (2023)** — https://www.frontiersin.org/journals/earth-science/articles/10.3389/feart.2023.1254309/full
   *"Permafrost and groundwater interaction: current state and future perspective"* — Thawing permafrost increases active layer thickness, creates new aquifers, amplifies groundwater flow and baseflow. Relevant for Karakoram where permafrost is extensive.
 
+**Model structure vs. calibration strategy for baseflow:**
+- **Kissel, Bach & Schmalz (2024)** *J. Hydroinformatics*, 26(7), 1692–1714 — *"Impact of the model structure and calibration strategy on baseflow modeling in the German low mountain range"* — **Closest to our framing.** Tested 3 model structures × 2 calibration strategies for baseflow. Found both structure AND strategy matter: stepwise calibration (baseflow first, then total flow) significantly improved baseflow. Parallel linear reservoir was the best structure. **Key differences from our study**: not glacierized, no future projections, no metric comparison (their "strategy" = stepwise vs single-step, not KGE vs KGE_WB), no climate change propagation.
+  https://iwaponline.com/jh/article/26/7/1692/102786/Impact-of-the-model-structure-and-calibration
+
+- **Mourot et al. (2025)** *Earth's Future*, 13(8), e2025EF006316 — *"Producing Hydrological Projections Under Climate Change: A Groundwater-Inclusive Practical Guide"* — Argues groundwater must be included in projections for reliable water security assessments. Review/guide, not empirical. Provides 9 recommendations for groundwater-inclusive projections. Directly supports our argument that baseflow representation matters for future projections.
+  https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2025EF006316
+
 ### What doesn't exist
 
 1. **Systematic assessment of baseflow bias in conceptual models across glacierized HMA catchments** — the baseflow problem is well-known anecdotally but nobody has documented it systematically across multiple catchments with different characteristics
 2. **Structural model improvements for deep groundwater tested in HMA** — all the recent physics-based groundwater work (Carroll 2024, Fan 2025) is in the Americas or European Alps, not HMA
 3. **Connection between baseflow representation and future projection reliability** — Carroll (2024) showed it matters for Colorado; does it matter for UIB where glacier melt dominates summer flow?
+4. **Combined comparison of model structure × calibration metric for baseflow** — Kissel et al. (2024) tested structure × calibration strategy but not in glacierized catchments, not with different objective functions, and not propagated into future projections. Nobody has asked: for glacierized catchments, is baseflow underestimation a calibration problem or a structural problem — and which matters more for future water availability?
 4. **The glacier → groundwater buffering transition in HMA** — Somers (2019) showed it for one Andean watershed; nobody has tested whether HMA catchments have sufficient aquifer storage to buffer glacier loss even temporarily
 
 ---
