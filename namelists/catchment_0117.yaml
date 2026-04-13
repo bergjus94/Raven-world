@@ -11,16 +11,13 @@ warm_up_date: '1980-01-01'
 
 models:
   - HBV
-  - HMETS
-  - HYMOD
-  - MOHYSE
 
 configurations:
   - subdaily
   - glogem_subdaily
 
 calibration:
-  metrics: [KGE, LogKGE]
+  metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]
   iterations: 5000
   ngs: 15
 
