@@ -255,7 +255,7 @@ class ModelDiagnostics:
                 except:
                     log_kge = float('nan')
 
-                # Store results
+                # Store base results first (these are the proven metrics)
                 metrics[period] = {
                     'KGE_NP': kge_np[0],
                     'KGE': kge[0],
@@ -273,6 +273,57 @@ class ModelDiagnostics:
                     'NSE_Cost': math.fabs(nse - 1),
                     'PBIAS_Cost': math.fabs(pbias)
                 }
+
+                # --- New baseflow-focused metrics (added separately so failures
+                #     cannot affect the base metrics above) ---
+
+                # KGE_winter: KGE on winter months only (Nov-Mar)
+                kge_winter = float('nan')
+                try:
+                    sim_series = self.streamflow_data[period]['simulations']
+                    obs_series = self.streamflow_data[period]['observations']
+                    winter_mask = sim_series.index.month.isin([11, 12, 1, 2, 3])
+                    sim_w = sim_series[winter_mask].dropna().values
+                    obs_w = obs_series[winter_mask].dropna().values
+                    valid_w = ~np.isnan(sim_w) & ~np.isnan(obs_w)
+                    sim_w, obs_w = sim_w[valid_w], obs_w[valid_w]
+                    if len(sim_w) > 30:
+                        kge_winter = he.evaluator(obj_fn=he.kge, simulations=sim_w, evaluation=obs_w)[0][0]
+                except Exception:
+                    pass
+
+                # KGE_lowFDC: KGE on low-flow FDC segment (>70th exceedance)
+                kge_low = float('nan')
+                try:
+                    q30 = np.percentile(obs_valid, 30)
+                    low_mask = obs_valid <= q30
+                    sim_l, obs_l = sim_valid[low_mask], obs_valid[low_mask]
+                    if len(sim_l) > 30:
+                        kge_low = he.evaluator(obj_fn=he.kge, simulations=sim_l, evaluation=obs_l)[0][0]
+                except Exception:
+                    pass
+
+                # KGE_WB: weighted baseflow = 0.5*KGE + 0.5*KGE_winter
+                kge_wb = float('nan')
+                if not math.isnan(kge_winter):
+                    kge_wb = 0.5 * kge[0] + 0.5 * kge_winter
+
+                # KGE_WLF: weighted low flow = 0.5*KGE + 0.5*KGE_lowFDC
+                kge_wlf = float('nan')
+                if not math.isnan(kge_low):
+                    kge_wlf = 0.5 * kge[0] + 0.5 * kge_low
+
+                # Add new metrics to the dict
+                metrics[period].update({
+                    'KGE_winter': kge_winter,
+                    'KGE_lowFDC': kge_low,
+                    'KGE_WB': kge_wb,
+                    'KGE_WLF': kge_wlf,
+                    'KGE_winter_Cost': math.fabs(kge_winter - 1) if not math.isnan(kge_winter) else float('nan'),
+                    'KGE_lowFDC_Cost': math.fabs(kge_low - 1) if not math.isnan(kge_low) else float('nan'),
+                    'KGE_WB_Cost': math.fabs(kge_wb - 1) if not math.isnan(kge_wb) else float('nan'),
+                    'KGE_WLF_Cost': math.fabs(kge_wlf - 1) if not math.isnan(kge_wlf) else float('nan'),
+                })
             except Exception as e:
                 print(f"Error calculating metrics for {period} period: {e}")
                 metrics[period] = {

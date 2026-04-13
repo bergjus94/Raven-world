@@ -431,7 +431,7 @@ class RavenSCEUA(object):
         obj_value, vali_obj = self._run_model(parameters)
         
         # Validate objective value (for KGE, should be <= 1.0)
-        if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'NSE']:
+        if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
             if obj_value > 1.0:
                 print(f"Warning: {self.obj_function} value {obj_value:.4f} exceeds theoretical maximum of 1.0.")
                 obj_value = min(obj_value, 1.0)
@@ -462,7 +462,7 @@ class RavenSCEUA(object):
             return 999999  # Large positive value for minimization
                 
         # For KGE and similar metrics, we need to convert maximization to minimization
-        if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'NSE']:
+        if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
             # Return -1 * KGE for minimization (smaller is better)
             # This way, KGE=1 (perfect) becomes -1 (minimum)
             return -1 * obj_value
@@ -481,7 +481,7 @@ class RavenSCEUA(object):
             best_params_dict.update(tied_params)
             
             # Ensure KGE value is valid
-            if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'NSE'] and self.best_obj > 1.0:
+            if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE'] and self.best_obj > 1.0:
                 print(f"Warning: Best {self.obj_function} value {self.best_obj:.4f} exceeds theoretical maximum of 1.0.")
                 self.best_obj = min(self.best_obj, 1.0)
             
@@ -537,7 +537,7 @@ class RavenSCEUA(object):
         """Create the optimization convergence plot"""
         try:
             # Calculate running best values to show convergence
-            if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'NSE']:
+            if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
                 # These metrics we want to maximize
                 running_best = results['objective'].cummax()
                 y_label = f'{self.obj_function} (higher is better)'
@@ -1073,7 +1073,7 @@ class RavenSCEUA(object):
                 ax.scatter(iterations, results[param_name], color='blue', s=20, alpha=0.7)
                 
                 # Calculate running best parameter based on objective function
-                if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'NSE']:
+                if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
                     # These metrics we want to maximize
                     running_best = results['objective'].cummax()
                     best_mask = results['objective'] == running_best
@@ -1143,7 +1143,7 @@ class RavenSCEUA(object):
             print(f"Loaded results file with {len(results)} evaluations")
             
             # Find best parameter set based on objective function
-            if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'NSE']:
+            if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
                 # These metrics we want to maximize
                 best_idx = results['objective'].idxmax()
                 best_obj = results.loc[best_idx, 'objective']

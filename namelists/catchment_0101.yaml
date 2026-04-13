@@ -21,8 +21,8 @@ configurations:
   - glogem_subdaily
 
 calibration:
-  metrics: [KGE, LogKGE]
-  iterations: 5000
+  metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]
+  iterations: 10
   ngs: 15
 
 future:
