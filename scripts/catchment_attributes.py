@@ -216,7 +216,12 @@ def main():
         # Config layer info
         info = get_catchment_info(gauge_id)
         if info:
-            row['display_name'] = info.get('display_name', '')
+            display_name = info.get('display_name', '')
+            if ' @ ' in display_name:
+                row['river'], row['gauging_station'] = display_name.split(' @ ', 1)
+            else:
+                row['river'] = display_name
+                row['gauging_station'] = ''
             row['validation_start'] = info.get('validation_start', '')
             row['validation_end'] = info.get('validation_end', '')
 
@@ -289,7 +294,7 @@ def main():
     df = pd.DataFrame(rows)
 
     # Reorder columns
-    col_order = ['gauge_id', 'display_name', 'main_basin', 'lat', 'lon',
+    col_order = ['gauge_id', 'river', 'gauging_station', 'main_basin', 'lat', 'lon',
                  'catchment_area_km2', 'mean_elevation_m', 'min_elevation_m',
                  'max_elevation_m', 'median_elevation_m', 'mean_slope_deg',
                  'glacier_area_km2', 'glacier_fraction', 'n_glaciers',
