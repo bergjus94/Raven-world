@@ -981,25 +981,19 @@ class HMETSPreprocessor:
             return f":DefineHRUGroups {base_groups}"
 
     def _transport_lines(self) -> list:
-        """Build transport tracer lines. Glacier tracers only for coupled mode."""
+        """Build transport tracer lines.
+
+        Glacier melt tracers are disabled for HMETS due to a Raven bug:
+        CONVOLUTION state variables + multiple transport tracers causes
+        'CModel::AddStateVariables: bad layer index specified' error.
+        Only snowmelt tracking is available for HMETS.
+        """
         lines = [
             "",
             ":Transport SNOWMELT TRACER",
             ":FixedConcentration SNOWMELT ATMOS_PRECIP 0.0 1.0",
             ":FixedConcentration SNOWMELT PHREATIC 0.0",
         ]
-        if self.coupled:
-            lines += [
-                "",
-                ":Transport GLACIERMELT_ALL TRACER",
-                ":FixedConcentration GLACIERMELT_ALL PONDED_WATER 1.0 ALL_GLACIER",
-                "",
-                ":Transport GLACIERMELT_SMALL TRACER",
-                ":FixedConcentration GLACIERMELT_SMALL PONDED_WATER 1.0 SMALL_GLACIER",
-                "",
-                ":Transport GLACIERMELT_LARGE TRACER",
-                ":FixedConcentration GLACIERMELT_LARGE PONDED_WATER 1.0 LARGE_GLACIER",
-            ]
         return lines
 
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
