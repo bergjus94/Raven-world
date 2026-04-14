@@ -103,6 +103,7 @@ def get_paths(nml: dict) -> dict:
             'results_dir': catchment_dir / 'configs' / config_key / model_dir_name / 'results',
             'plots_dir': catchment_dir / 'plots',
             'model_comparisons_dir': catchment_dir / 'model_comparisons',
+            'metric_comparisons_dir': catchment_dir / 'metric_comparisons',
         }
     else:
         # Legacy layout: {config_dir}/catchment_{id}/{model}/

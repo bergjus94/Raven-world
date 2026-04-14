@@ -3861,7 +3861,7 @@ def _calc_subplot_layout(n_configs):
     return n_rows, n_cols, figsize
 
 
-def _build_individual_config(multi_config, config_key):
+def _build_individual_config(multi_config, config_key, metric='KGE'):
     """Build an individual config dict from multi_config for a given config_key."""
     return {
         'main_dir': multi_config['main_dir'],
@@ -3873,6 +3873,7 @@ def _build_individual_config(multi_config, config_key):
         'model_type': multi_config.get('model_type', 'HBV'),
         'coupled': multi_config.get('config_coupled', {}).get(config_key, False),
         'glogem_dir': multi_config.get('glogem_dir'),
+        '_calibration_metric': metric,
     }
 
 
