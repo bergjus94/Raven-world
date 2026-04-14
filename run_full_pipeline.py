@@ -826,14 +826,13 @@ def _run_multi_config(catchment_nml, args):
 
             try:
                 proc = subprocess.run(
-                    cmd_phase1, capture_output=True, text=True, timeout=7200,
+                    cmd_phase1, capture_output=True, text=True,
                 )
                 status = "OK" if proc.returncode == 0 else "FAILED"
                 if proc.returncode != 0:
                     print(f"  [{config:30s}] Input creation FAILED — see {log_file}")
-            except subprocess.TimeoutExpired:
-                status = "TIMEOUT"
-                print(f"  [{config:30s}] Input creation TIMED OUT")
+            except Exception as e:
+                status = f"ERROR: {e}"
             finally:
                 try:
                     Path(tmp_path).unlink(missing_ok=True)
@@ -855,7 +854,7 @@ def _run_multi_config(catchment_nml, args):
                     cmd2 = _build_sub_argv(args, Path(tmp2).resolve(), log2)
                     cmd2_phase1 = [a for a in cmd2 if a not in ('--skip-preprocessing',)]
                     cmd2_phase1.extend(['--skip-calibration', '--skip-future'])
-                    subprocess.run(cmd2_phase1, capture_output=True, text=True, timeout=600)
+                    subprocess.run(cmd2_phase1, capture_output=True, text=True)
                 except Exception:
                     pass
                 finally:
