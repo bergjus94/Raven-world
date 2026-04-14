@@ -51,9 +51,17 @@ def load_catchment_registry():
     return load_catchments_registry()
 
 
-def load_all_catchment_data(catchment_filter=None, config_filter=None):
+def load_all_catchment_data(catchment_filter=None, config_filter=None, calibration_metric='KGE'):
     """
     Load metrics and regime data for all catchments × configurations.
+
+    Parameters
+    ----------
+    catchment_filter : list of str, optional
+    config_filter : list of str, optional
+    calibration_metric : str
+        Which calibration metric's output to load (e.g. 'KGE', 'LogKGE', 'KGE_WB').
+        Defaults to 'KGE' (base directory).
 
     Returns catchment_results dict keyed by gauge_id, plus config_registry list.
     Uses load-compute-discard: each hydrograph CSV is freed after metric extraction.
@@ -106,7 +114,7 @@ def load_all_catchment_data(catchment_filter=None, config_filter=None):
                 print(f"  - {key}: not available for {gauge_id}")
                 continue
 
-            individual_config = _build_individual_config(multi_config, key)
+            individual_config = _build_individual_config(multi_config, key, metric=calibration_metric)
 
             try:
                 data = load_hydrograph_data(individual_config)
@@ -239,6 +247,139 @@ def plot_performance_heatmap(catchment_results, config_registry, plot_dir):
         ax.set_yticks(range(len(y_labels)))
         ax.set_yticklabels(y_labels)
         fig.colorbar(im, ax=ax, shrink=0.8, label=metric_name)
+
+        plt.tight_layout()
+        save_path = plot_dir / filename
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved: {save_path}")
+
+
+#--------------------------------------------------------------------------------
+############### Plot: Calibration Metric Comparison Heatmap #####################
+#--------------------------------------------------------------------------------
+
+def plot_calibration_metric_heatmap(catchment_filter=None, config_key='glogem_subdaily',
+                                    model_type='HBV', plot_dir=None):
+    """
+    Heatmap: rows = catchments, columns = calibration metrics (KGE, LogKGE, KGE_WB, KGE_lowFDC).
+    Cells show validation KGE for each calibration-metric-specific run.
+
+    One heatmap per config_key. Shows how calibration metric choice affects performance.
+    """
+    from postprocessing_metrics import KNOWN_METRICS, METRIC_DISPLAY_NAMES, discover_available_metrics
+    from config_merge import load_catchments_registry
+
+    catchments = load_catchments_registry()
+    if catchment_filter:
+        catchments = [c for c in catchments if c['gauge_id'] in catchment_filter]
+
+    if not catchments:
+        print("No catchments found")
+        return
+
+    # For each catchment, load validation metrics for each calibration metric
+    catchment_ids = []
+    catchment_names = []
+    all_results = {}  # {gauge_id: {cal_metric: {perf_metric: value}}}
+
+    for catch in catchments:
+        gauge_id = catch['gauge_id']
+
+        # Resolve main_dir for this catchment
+        try:
+            from config_merge import load_config
+            nml, tmp = load_config(gauge_id, config_key, model_type)
+            main_dir = nml['main_dir']
+            validation_start = pd.to_datetime(catch['validation_start'])
+            validation_end = pd.to_datetime(catch['validation_end'])
+            Path(tmp).unlink(missing_ok=True)
+        except Exception as e:
+            print(f"  {gauge_id}: config load failed ({e}), skipping")
+            continue
+
+        available = discover_available_metrics(gauge_id, config_key, model_type, main_dir)
+        if len(available) < 2:
+            print(f"  {gauge_id}: only {len(available)} metrics available, skipping")
+            continue
+
+        results_for_catchment = {}
+        for cal_metric in available:
+            cfg = {
+                'main_dir': main_dir,
+                'gauge_id': gauge_id,
+                'model_type': model_type,
+                '_config_key': config_key,
+                '_calibration_metric': cal_metric,
+            }
+            try:
+                data = load_hydrograph_data(cfg)
+                if data is None:
+                    continue
+                m = calculate_performance_metrics(data, validation_start, validation_end,
+                                                   f"{gauge_id}/{cal_metric}")
+                if m:
+                    results_for_catchment[cal_metric] = m
+                del data
+            except Exception as e:
+                print(f"  {gauge_id}/{cal_metric}: error ({e})")
+                continue
+
+        if results_for_catchment:
+            all_results[gauge_id] = results_for_catchment
+            catchment_ids.append(gauge_id)
+            catchment_names.append(catch.get('display_name', gauge_id))
+
+    if len(catchment_ids) < 1:
+        print("No catchments with multiple metric results")
+        return
+
+    # Build heatmaps for KGE and NSE
+    cal_metrics = KNOWN_METRICS
+    # Filter to metrics that have at least one result
+    cal_metrics_available = [m for m in cal_metrics
+                             if any(m in all_results[gid] for gid in catchment_ids)]
+
+    for perf_metric, filename in [('KGE', f'calibration_metric_heatmap_KGE_{config_key}.png'),
+                                   ('NSE', f'calibration_metric_heatmap_NSE_{config_key}.png')]:
+        matrix = np.full((len(catchment_ids), len(cal_metrics_available)), np.nan)
+
+        for i, gid in enumerate(catchment_ids):
+            for j, cal_m in enumerate(cal_metrics_available):
+                if cal_m in all_results[gid]:
+                    matrix[i, j] = all_results[gid][cal_m].get(perf_metric, np.nan)
+
+        # Skip if all NaN
+        valid_vals = matrix[~np.isnan(matrix)]
+        if len(valid_vals) == 0:
+            continue
+
+        vmin = max(np.floor(valid_vals.min() * 10) / 10, -1.0)
+        vmax = min(np.ceil(valid_vals.max() * 10) / 10, 1.0)
+
+        x_labels = [METRIC_DISPLAY_NAMES.get(m, m) for m in cal_metrics_available]
+
+        fig, ax = plt.subplots(figsize=(max(8, len(cal_metrics_available) * 2),
+                                        max(4, len(catchment_ids) * 0.8)))
+
+        im = ax.imshow(matrix, cmap='RdYlGn', aspect='auto', vmin=vmin, vmax=vmax)
+
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                val = matrix[i, j]
+                if np.isnan(val):
+                    ax.text(j, i, '—', ha='center', va='center', fontsize=9, color='gray')
+                else:
+                    color = 'white' if val < (vmin + (vmax - vmin) * 0.3) else 'black'
+                    ax.text(j, i, f'{val:.2f}', ha='center', va='center', fontsize=9,
+                            fontweight='bold', color=color)
+
+        ax.set_xticks(range(len(x_labels)))
+        ax.set_xticklabels(x_labels, rotation=45, ha='right')
+        ax.set_yticks(range(len(catchment_names)))
+        ax.set_yticklabels(catchment_names)
+        ax.set_title(f'Validation {perf_metric} by Calibration Metric — {model_type} ({config_key})')
+        fig.colorbar(im, ax=ax, shrink=0.8, label=f'Validation {perf_metric}')
 
         plt.tight_layout()
         save_path = plot_dir / filename
@@ -1380,6 +1521,16 @@ def run_cross_catchment_postprocessing(yaml_path, catchment_filter=None,
              plot_performance_heatmap,
              ['cross_catchment_heatmap_KGE.png', 'cross_catchment_heatmap_NSE.png'],
              catchment_results, config_registry, plot_dir)
+
+    # Calibration metric comparison heatmaps (one per config)
+    config_keys = [c['key'] for c in config_registry]
+    for cfg_key in config_keys:
+        run_plot(f"Calibration Metric Heatmap ({cfg_key})",
+                 plot_calibration_metric_heatmap,
+                 [f'calibration_metric_heatmap_KGE_{cfg_key}.png',
+                  f'calibration_metric_heatmap_NSE_{cfg_key}.png'],
+                 catchment_filter=catchment_filter, config_key=cfg_key,
+                 plot_dir=plot_dir)
 
     # Generate plots for both KGE and NSE
     for metric in ['KGE', 'NSE']:
