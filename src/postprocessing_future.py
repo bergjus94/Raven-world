@@ -1794,6 +1794,205 @@ def run_future_postprocessing(yaml_path, skip_errors=True):
 
 
 #--------------------------------------------------------------------------------
+############### Multi-Metric Future Comparison (Paper 5) ########################
+#--------------------------------------------------------------------------------
+
+def plot_future_metric_envelope(base_nml, metrics, plot_dir, period='mid'):
+    """
+    Ensemble envelope plot with one band per calibration metric.
+    Shows whether metric choice affects future projection uncertainty.
+
+    Parameters
+    ----------
+    base_nml : dict
+        Base namelist (without _calibration_metric set)
+    metrics : list of str
+        Calibration metrics to compare (e.g. ['KGE', 'LogKGE', 'KGE_WB'])
+    plot_dir : Path
+        Output directory for plots
+    period : str
+        Period key ('early', 'mid', 'late')
+    """
+    from postprocessing_metrics import METRIC_COLORS, METRIC_DISPLAY_NAMES
+
+    gauge_id = str(base_nml['gauge_id'])
+    model_type = base_nml['model_type']
+    period_start, period_end, period_label = PERIODS[period]
+    start_dt = pd.to_datetime(period_start)
+    end_dt = pd.to_datetime(period_end + '-12-31')
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    for metric in metrics:
+        nml = dict(base_nml)
+        nml['_calibration_metric'] = metric
+        all_hydro = load_ensemble_hydrographs(nml)
+
+        if not all_hydro:
+            continue
+
+        # Build ensemble monthly regime for this period
+        monthly_all = []
+        for model_id, df in all_hydro.items():
+            mask = (df.index >= start_dt) & (df.index <= end_dt)
+            period_data = df[mask].copy()
+            if len(period_data) == 0:
+                continue
+            monthly = period_data.groupby(period_data.index.month)['Q_sim'].mean()
+            monthly_all.append(monthly)
+
+        if not monthly_all:
+            continue
+
+        ensemble_df = pd.DataFrame(monthly_all)
+        ensemble_mean = ensemble_df.mean()
+        ensemble_min = ensemble_df.min()
+        ensemble_max = ensemble_df.max()
+
+        color = METRIC_COLORS.get(metric, '#333333')
+        label = METRIC_DISPLAY_NAMES.get(metric, metric)
+        months = ensemble_mean.index
+
+        ax.plot(months, ensemble_mean.values, '-', color=color, linewidth=2, label=label)
+        ax.fill_between(months, ensemble_min.values, ensemble_max.values,
+                        color=color, alpha=0.15)
+
+    # Add historical observed if available
+    try:
+        hist_data = load_historical_observed(base_nml)
+        if hist_data is not None and 'obs_Q' in hist_data.columns:
+            obs_monthly = hist_data.groupby(hist_data['date'].dt.month)['obs_Q'].mean()
+            ax.plot(obs_monthly.index, obs_monthly.values, 'k--', linewidth=2,
+                    label='Historical Observed', zorder=10)
+    except Exception:
+        pass
+
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Discharge [m$^3$/s]')
+    ax.set_title(f'Future Regime by Calibration Metric — {gauge_id} {model_type} ({period_label})')
+    ax.set_xticks(range(1, 13))
+    ax.set_xticklabels(['J','F','M','A','M','J','J','A','S','O','N','D'])
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    save_path = plot_dir / f'future_metric_envelope_{period}_{gauge_id}_{model_type}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {save_path}")
+
+
+def plot_future_metric_annual_trend(base_nml, metrics, plot_dir):
+    """
+    Annual mean discharge trend per calibration metric (30-year moving average).
+    Shows whether metric choice affects long-term projections.
+    """
+    from postprocessing_metrics import METRIC_COLORS, METRIC_DISPLAY_NAMES
+
+    gauge_id = str(base_nml['gauge_id'])
+    model_type = base_nml['model_type']
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    for metric in metrics:
+        nml = dict(base_nml)
+        nml['_calibration_metric'] = metric
+        all_hydro = load_ensemble_hydrographs(nml)
+
+        if not all_hydro:
+            continue
+
+        # Annual mean for each climate model
+        annual_all = []
+        for model_id, df in all_hydro.items():
+            annual = df.resample('YE')['Q_sim'].mean()
+            annual_all.append(annual)
+
+        if not annual_all:
+            continue
+
+        # Ensemble mean and range
+        ensemble_df = pd.concat(annual_all, axis=1)
+        ensemble_mean = ensemble_df.mean(axis=1)
+        ensemble_min = ensemble_df.min(axis=1)
+        ensemble_max = ensemble_df.max(axis=1)
+
+        color = METRIC_COLORS.get(metric, '#333333')
+        label = METRIC_DISPLAY_NAMES.get(metric, metric)
+
+        ax.plot(ensemble_mean.index, ensemble_mean.values, '-', color=color,
+                linewidth=1.5, label=label)
+        ax.fill_between(ensemble_mean.index, ensemble_min.values, ensemble_max.values,
+                        color=color, alpha=0.1)
+
+    ax.set_xlabel('Year')
+    ax.set_ylabel('Annual Mean Discharge [m$^3$/s]')
+    ax.set_title(f'Future Annual Discharge by Calibration Metric — {gauge_id} {model_type}')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    save_path = plot_dir / f'future_metric_annual_trend_{gauge_id}_{model_type}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {save_path}")
+
+
+def run_future_metric_comparison(base_nml, metrics=None, skip_errors=True):
+    """
+    Run future projection comparison across calibration metrics.
+
+    Parameters
+    ----------
+    base_nml : dict
+        Base namelist (from future namelist YAML)
+    metrics : list, optional
+        If None, auto-discovers from filesystem
+    """
+    from postprocessing_metrics import discover_available_metrics
+
+    gauge_id = str(base_nml['gauge_id'])
+    model_type = base_nml['model_type']
+    config_key = base_nml.get('_config_key', 'baseline')
+    main_dir = base_nml['main_dir']
+
+    print(f"\n{'='*60}")
+    print(f"FUTURE METRIC COMPARISON: {gauge_id} — {model_type} — {config_key}")
+    print(f"{'='*60}")
+
+    if metrics is None:
+        metrics = discover_available_metrics(gauge_id, config_key, model_type, main_dir)
+    print(f"  Metrics: {metrics}")
+
+    if len(metrics) < 2:
+        print(f"  Need at least 2 metrics. Skipping.")
+        return
+
+    plot_dir = create_future_plot_dir(base_nml)
+    metric_dir = plot_dir / 'metric_comparison'
+    metric_dir.mkdir(parents=True, exist_ok=True)
+
+    plots = [
+        ('Future Metric Envelope (mid)', plot_future_metric_envelope,
+         [base_nml, metrics, metric_dir, 'mid']),
+        ('Future Metric Envelope (late)', plot_future_metric_envelope,
+         [base_nml, metrics, metric_dir, 'late']),
+        ('Future Metric Annual Trend', plot_future_metric_annual_trend,
+         [base_nml, metrics, metric_dir]),
+    ]
+
+    for name, func, args in plots:
+        try:
+            print(f"\n  [{name}]")
+            func(*args)
+        except Exception as e:
+            if skip_errors:
+                print(f"  ERROR in {name}: {e}")
+            else:
+                raise
+
+
+#--------------------------------------------------------------------------------
 ################################## CLI ##########################################
 #--------------------------------------------------------------------------------
 
