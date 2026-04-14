@@ -118,9 +118,43 @@ def finalize_run(run_info, dry_run=False):
         # Point to the existing results file
         optimization.results_file = results_file
 
-        # Run final model with best parameters and generate diagnostics
+        # 1. Run final model with best parameters (creates VERIFIED csv + output files)
+        print(f"  Running best parameters...")
         optimization.run_best_parameters()
+
+        # 2. Calibration plots (convergence, parameter evolution, etc.)
+        print(f"  Creating calibration plots...")
         optimization.plot_results()
+
+        # 3. Postprocessing plots (hydrographs, scatter, residuals, FDC, etc.)
+        print(f"  Running postprocessing...")
+        try:
+            import postprocessing
+            config = {
+                'main_dir': nml['main_dir'],
+                'gauge_id': gauge_id,
+                'model_type': model_type,
+                'start_date': nml.get('start_date', '2000-01-01'),
+                'end_date': nml.get('end_date', '2020-12-31'),
+                'cali_start_date': nml.get('cali_start_date', nml.get('start_date')),
+                'cali_end_date': nml.get('cali_end_date', '2009-12-31'),
+                'coupled': nml.get('coupled', False),
+                'raven_executable': nml.get('raven_executable'),
+                'glogem_dir': nml.get('glogem_dir', None),
+                '_config_key': nml.get('_config_key', 'baseline'),
+                '_calibration_metric': nml.get('_calibration_metric', 'KGE'),
+            }
+            results = postprocessing.run_complete_postprocessing(
+                config=config,
+                validation_start=nml.get('cali_end_date'),
+                validation_end=nml.get('end_date'),
+            )
+            if results:
+                print(f"  Postprocessing complete")
+            else:
+                print(f"  Postprocessing returned None (non-fatal)")
+        except Exception as e:
+            print(f"  Postprocessing error (non-fatal): {e}")
 
         print(f"  Finalized successfully")
         return True
