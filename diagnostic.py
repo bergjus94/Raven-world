@@ -289,8 +289,8 @@ class ModelDiagnostics:
                     sim_w, obs_w = sim_w[valid_w], obs_w[valid_w]
                     if len(sim_w) > 30:
                         kge_winter = he.evaluator(obj_fn=he.kge, simulations=sim_w, evaluation=obs_w)[0][0]
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"KGE_winter error for {period}: {e}")
 
                 # KGE_lowFDC: KGE on low-flow FDC segment (>70th exceedance)
                 kge_low = float('nan')
