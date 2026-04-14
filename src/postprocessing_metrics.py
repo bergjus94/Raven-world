@@ -582,6 +582,30 @@ def run_complete_metric_postprocessing(gauge_id, config_key, model_type='HBV',
     return results
 
 
+def run_all_for_catchment(namelist_path, env=None, skip_errors=True):
+    """Run metric comparison for all config × model combinations in a catchment namelist.
+
+    Usage:
+        run_all_for_catchment('namelists/catchment_0118.yaml')
+    """
+    with open(namelist_path) as f:
+        nml = yaml.safe_load(f)
+
+    gauge_id = str(nml['catchment'])
+    configurations = nml.get('configurations', ['baseline'])
+    models = nml.get('models', ['HBV'])
+
+    for config_key in configurations:
+        for model_type in models:
+            run_complete_metric_postprocessing(
+                gauge_id=gauge_id,
+                config_key=config_key,
+                model_type=model_type,
+                env=env,
+                skip_errors=skip_errors,
+            )
+
+
 #--------------------------------------------------------------------------------
 ################################## CLI ##########################################
 #--------------------------------------------------------------------------------
@@ -592,20 +616,33 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).parent))
 
-    parser = argparse.ArgumentParser(description="Compare calibration metrics for a model+config")
-    parser.add_argument('--gauge-id', '-g', required=True, help='Catchment gauge ID')
-    parser.add_argument('--config', '-c', required=True, help='Configuration key (e.g. subdaily)')
+    parser = argparse.ArgumentParser(description="Compare calibration metrics for a catchment")
+    parser.add_argument('namelist', nargs='?', default=None,
+                        help='Path to catchment namelist YAML (runs all configs × models)')
+    parser.add_argument('--gauge-id', '-g', default=None, help='Catchment gauge ID')
+    parser.add_argument('--config', '-c', default=None, help='Configuration key (e.g. subdaily)')
     parser.add_argument('--model', '-m', default='HBV', help='Model type (default: HBV)')
     parser.add_argument('--main-dir', default=None, help='Main data directory')
-    parser.add_argument('--metrics', nargs='+', default=None, help='Metrics to compare (auto-discovers if omitted)')
+    parser.add_argument('--metrics', nargs='+', default=None,
+                        help='Metrics to compare (auto-discovers if omitted)')
     parser.add_argument('--env', default=None, help='Environment (local/server)')
     args = parser.parse_args()
 
-    run_complete_metric_postprocessing(
-        gauge_id=args.gauge_id,
-        config_key=args.config,
-        model_type=args.model,
-        main_dir=args.main_dir,
-        metrics=args.metrics,
-        env=args.env,
-    )
+    if args.namelist:
+        # Run all configs × models from namelist
+        run_all_for_catchment(args.namelist, env=args.env)
+    elif args.gauge_id:
+        if args.config:
+            # Single config
+            run_complete_metric_postprocessing(
+                gauge_id=args.gauge_id,
+                config_key=args.config,
+                model_type=args.model,
+                main_dir=args.main_dir,
+                metrics=args.metrics,
+                env=args.env,
+            )
+        else:
+            parser.error("Either provide a namelist or --gauge-id with --config")
+    else:
+        parser.error("Provide a namelist path or --gauge-id")
