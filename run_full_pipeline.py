@@ -916,9 +916,19 @@ def _run_multi_config(catchment_nml, args):
                             for f in src_sub.iterdir():
                                 shutil.copy2(f, dst_sub / f.name)
                     # Copy .rv* files from base model dir (not subdirectories)
+                    # For .rvi files: prefer the clean template (.rvi.tpl) to avoid
+                    # copying extended output options that were added after calibration
+                    # (CustomOutput, WriteMassLoadings, etc.) which would slow down
+                    # every calibration iteration.
                     metric_model_dir.mkdir(parents=True, exist_ok=True)
                     for f in base_model_dir.iterdir():
                         if f.is_file() and f.suffix.startswith('.rv'):
+                            if f.suffix == '.rvi':
+                                # Use clean template if available
+                                tpl = base_model_dir / 'templates' / f'{f.name}.tpl'
+                                if tpl.exists():
+                                    shutil.copy2(tpl, metric_model_dir / f.name)
+                                    continue
                             shutil.copy2(f, metric_model_dir / f.name)
                     # Ensure output dir exists
                     (metric_model_dir / 'output').mkdir(parents=True, exist_ok=True)
