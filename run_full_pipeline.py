@@ -78,7 +78,7 @@ def setup_logging(verbose=False, log_file=None):
     return logging.getLogger(__name__)
 
 
-def run_subprocess(cmd, label, logger, timeout=7200):
+def run_subprocess(cmd, label, logger, timeout=None):
     """Run a subprocess with real-time logging. Returns True on success."""
     logger.info(f"Running: {' '.join(str(c) for c in cmd)}")
     try:
@@ -233,7 +233,7 @@ def phase2_calibrate(namelist_path, nml, iterations=None, ngs=None, logger=None)
     if ngs is not None:
         cmd.extend(['--ngs', str(ngs)])
 
-    ok = run_subprocess(cmd, 'CALIBRATION', logger, timeout=14400)
+    ok = run_subprocess(cmd, 'CALIBRATION', logger)
     if not ok:
         return False
 
@@ -524,7 +524,7 @@ def phase5_future_runs(future_namelist, models=None, skip_download=False,
     if verbose:
         cmd.append('--verbose')
 
-    return run_subprocess(cmd, 'FUTURE_MULTI', logger, timeout=14400)
+    return run_subprocess(cmd, 'FUTURE_MULTI', logger)
 
 
 # =============================================================================
@@ -972,7 +972,7 @@ def _run_multi_config(catchment_nml, args):
         cmd, tmp_path, log_file = info
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=28800,
+                cmd, capture_output=True, text=True,
             )
             ok = proc.returncode == 0
         except subprocess.TimeoutExpired:
@@ -1046,12 +1046,12 @@ def _run_multi_config(catchment_nml, args):
                 print(f"  [{run_label:35s}] future...  ({elapsed:.0f}min)")
 
                 try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
+                    proc = subprocess.run(cmd, capture_output=True, text=True)
                     status = "OK" if proc.returncode == 0 else "FAILED"
                     if proc.returncode != 0:
                         print(f"  [{run_label:35s}] FAILED")
-                except subprocess.TimeoutExpired:
-                    status = "TIMEOUT"
+                except Exception as e:
+                    status = f"ERROR: {e}"
                 finally:
                     try:
                         Path(tmp_path).unlink(missing_ok=True)
@@ -1089,9 +1089,9 @@ def _run_multi_config(catchment_nml, args):
                     return run_key, False
                 cmd, tmp_path, log_file = info
                 try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
+                    proc = subprocess.run(cmd, capture_output=True, text=True)
                     ok = proc.returncode == 0
-                except subprocess.TimeoutExpired:
+                except Exception:
                     ok = False
                 finally:
                     try:
