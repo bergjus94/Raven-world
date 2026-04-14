@@ -283,8 +283,8 @@ class ModelDiagnostics:
                     sim_series = self.streamflow_data[period]['simulations']
                     obs_series = self.streamflow_data[period]['observations']
                     winter_mask = sim_series.index.month.isin([11, 12, 1, 2, 3])
-                    sim_w = sim_series[winter_mask].dropna().values
-                    obs_w = obs_series[winter_mask].dropna().values
+                    sim_w = sim_series[winter_mask].values
+                    obs_w = obs_series[winter_mask].values
                     valid_w = ~np.isnan(sim_w) & ~np.isnan(obs_w)
                     sim_w, obs_w = sim_w[valid_w], obs_w[valid_w]
                     if len(sim_w) > 30:
