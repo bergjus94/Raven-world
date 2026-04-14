@@ -297,14 +297,17 @@ def phase3_convert_params(nml, logger=None):
     metric_suffix = '' if metric == 'KGE' else f'_{metric}'
     calibrated_yaml = script_dir / 'src' / 'config' / f"calibrated_params_{config_key}_{model_type}_{gauge_id}{metric_suffix}.yaml"
 
-    # Check if already exists
-    if calibrated_yaml.exists():
-        logger.info(f"  Calibrated params YAML already exists: {calibrated_yaml}")
-        return calibrated_yaml
-
+    # Require VERIFIED_best_params.csv — don't accept stale YAML from previous runs
     if not verified_csv.exists():
         logger.error(f"  VERIFIED_best_params.csv not found: {verified_csv}")
+        if calibrated_yaml.exists():
+            logger.warning(f"  Stale calibrated YAML exists but current calibration has no VERIFIED file — refusing to use it")
         return None
+
+    # If YAML already exists and is newer than VERIFIED, skip regeneration
+    if calibrated_yaml.exists() and calibrated_yaml.stat().st_mtime >= verified_csv.stat().st_mtime:
+        logger.info(f"  Calibrated params YAML up-to-date: {calibrated_yaml}")
+        return calibrated_yaml
 
     # Load default params and best params
     default_params_path = script_dir / 'src' / 'config' / 'default_params.yaml'
