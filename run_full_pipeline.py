@@ -1033,6 +1033,13 @@ def _run_multi_config(catchment_nml, args):
             for metric in metrics:
                 metric_tag = '' if metric == 'KGE' else f'_{metric}'
                 run_label = f"{config}/{first_model}{metric_tag}"
+                run_key = f"{config}/{first_model}" if metric == 'KGE' else f"{config}/{first_model}_{metric}"
+
+                # Skip future run if calibration failed
+                if run_key in results and not results[run_key]:
+                    print(f"  [{run_label:35s}] SKIPPED (calibration failed)")
+                    continue
+
                 try:
                     cmd, tmp_path = _build_future_cmd(
                         config, first_model, metric,
@@ -1060,11 +1067,17 @@ def _run_multi_config(catchment_nml, args):
                 elapsed = (time.time() - start_time) / 60
                 print(f"  [{run_label:35s}] {status}  ({elapsed:.0f}min)")
 
-        # C2: Remaining compatible models × metrics — parallel
-        future_jobs = [(config, model, metric)
-                       for config, model_list in config_models.items()
-                       for model in model_list[1:]
-                       for metric in metrics]
+        # C2: Remaining compatible models × metrics — parallel (only if calibration succeeded)
+        future_jobs = []
+        for config, model_list in config_models.items():
+            for model in model_list[1:]:
+                for metric in metrics:
+                    run_key = f"{config}/{model}" if metric == 'KGE' else f"{config}/{model}_{metric}"
+                    if run_key in results and not results[run_key]:
+                        metric_tag = '' if metric == 'KGE' else f'_{metric}'
+                        print(f"  [{config}/{model}{metric_tag}] SKIPPED future (calibration failed)")
+                        continue
+                    future_jobs.append((config, model, metric))
         if future_jobs:
             print(f"\n{'='*70}")
             print(f"PHASE C2: Future projections — remaining models × metrics ({len(future_jobs)} jobs, {max_workers} workers)")
