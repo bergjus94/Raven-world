@@ -78,6 +78,7 @@ def setup_metric_comparison_directories(gauge_id, config_key, main_dir):
         'flow_duration': base_dir / 'flow_duration',
         'parameters': base_dir / 'parameters',
         'water_balance': base_dir / 'water_balance',
+        'storage': base_dir / 'storage',
     }
 
     for d in plot_dirs.values():
@@ -548,6 +549,71 @@ def plot_metric_parameter_boxplots(base_config, metrics, plot_dirs, top_n=100):
     print(f"  Saved: {save_path}")
 
 
+def plot_metric_soil_storage(base_config, metrics, plot_dirs,
+                             validation_start, validation_end):
+    """Compare Soil Water[1] and Soil Water[2] timeseries across calibration metrics."""
+    gauge_id = base_config['gauge_id']
+    model_type = base_config['model_type']
+    config_key = base_config.get('_config_key', '')
+
+    soil_cols = ['Soil Water[1] [mm]', 'Soil Water[2] [mm]']
+    soil_labels = ['SOIL[1] (fast reservoir)', 'SOIL[2] (slow reservoir)']
+
+    # Load storage data per metric
+    all_storage = {}
+    for metric in metrics:
+        cfg = _build_metric_config(base_config, metric)
+        storage = postprocessing.load_storage_data(cfg)
+        if storage is not None:
+            all_storage[metric] = storage
+
+    if len(all_storage) < 2:
+        print("  Need at least 2 metrics with storage data")
+        return
+
+    start_dt = pd.to_datetime(base_config.get('start_date'))
+    end_dt = pd.to_datetime(validation_end)
+
+    fig, axes = plt.subplots(len(soil_cols), 1, figsize=(14, 4 * len(soil_cols)), sharex=True)
+    if len(soil_cols) == 1:
+        axes = [axes]
+
+    for ax, col, label in zip(axes, soil_cols, soil_labels):
+        for metric in metrics:
+            if metric not in all_storage:
+                continue
+            df = all_storage[metric]
+            if col not in df.columns:
+                continue
+            mask = (df['date'] >= start_dt) & (df['date'] <= end_dt)
+            sub = df[mask]
+            color = METRIC_COLORS.get(metric, '#333333')
+            ax.plot(sub['date'], sub[col], color=color, linewidth=0.8,
+                    label=METRIC_DISPLAY_NAMES.get(metric, metric), alpha=0.8)
+
+        # Vertical line at calibration / validation split
+        cali_end = pd.to_datetime(base_config.get('cali_end_date'))
+        if cali_end:
+            ax.axvline(cali_end, color='grey', linestyle='--', linewidth=0.8, alpha=0.6)
+
+        ax.set_ylabel('Storage [mm]')
+        ax.set_title(label, fontsize=12, fontweight='bold')
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel('Date')
+    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    plt.setp(axes[-1].xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    fig.suptitle(f'Soil Storage — {gauge_id} {model_type} ({config_key})', fontsize=13)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    save_path = plot_dirs['storage'] / f'soil_storage_metric_comparison_{gauge_id}_{model_type}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {save_path}")
+
+
 def plot_metric_hydrograph_timeseries(base_config, metrics, all_data, plot_dirs,
                                        validation_start, validation_end):
     """Full hydrograph timeseries overlay for validation period."""
@@ -681,6 +747,8 @@ def run_complete_metric_postprocessing(gauge_id, config_key, model_type='HBV',
          [base_config, metrics, plot_dirs]),
         ('Parameter Boxplots', plot_metric_parameter_boxplots,
          [base_config, metrics, plot_dirs]),
+        ('Soil Storage', plot_metric_soil_storage,
+         [base_config, metrics, plot_dirs, validation_start, validation_end]),
     ]
 
     results = {}
