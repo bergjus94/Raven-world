@@ -52,8 +52,8 @@ HBV:
     X09: HBV_Baseflow_Coeff_Fast        # Fast reservoir baseflow [1/d]
     X10: HBV_Baseflow_Coeff_Slow        # Slow reservoir baseflow [1/d]
     X11: HBV_T_Conc_Max_Bas             # Time of concentration [d]
-    X12: HBV_Precip_Lapse               # Precipitation lapse rate [mm/d/km]
-    X13: HBV_Adiabatic_Lapse            # Temperature lapse rate [°C/km]
+    #X12: HBV_Precip_Lapse               # Precipitation lapse rate [mm/d/km]
+    #X13: HBV_Adiabatic_Lapse            # Temperature lapse rate [°C/km]
     X14: HBV_Sat_Wilt                   # Wilting point saturation [-]
     X15: HBV_Baseflow_N                  # Baseflow exponent [-]
     X16: HBV_Max_Cap_Rise_Rate          # Capillary rise rate [mm/d]
@@ -77,8 +77,8 @@ HBV:
     X09: 0.4606565                      # Fast baseflow
     X10: 0.06303738                     # Slow baseflow
     X11: 2.277781                       # Time of concentration
-    X12: 4.873686                       # Precip lapse
-    X13: 0.5718813                      # Adiabatic lapse
+    #X12: 4.873686                       # Precip lapse
+    #X13: 0.5718813                      # Adiabatic lapse
     X14: 0.04505643                     # Sat wilt
     X15: 0.877607                       # Baseflow N
     X16: 18.94145                       # Cap rise rate
@@ -100,10 +100,10 @@ HBV:
       X06: 0.3
       X07: 0.0
       X08: 0.0
-      X09: 0.01
-      X10: 0.05
+      X09: 0.05
+      X10: 0.001
       X11: 0.01
-      X12: 0.0
+      #X12: 0.0
       #X13: 0.0                    # ADIABATIC_LAPSE — fixed at 6.0 in HBV preprocessor, not calibrated
       X14: 0.0
       X15: 1.0                            # baseflow exponent: ≥1 for glacier-fed catchments (linear to mild nonlinearity)
@@ -122,10 +122,10 @@ HBV:
       X06: 1.0
       X07: 7.0
       X08: 100.0
-      X09: 1.0
+      X09: 0.5
       X10: 0.1
       X11: 6.0
-      X12: 5.0
+      #X12: 5.0
       #X13: 5.0                    # ADIABATIC_LAPSE — fixed at 6.0 in HBV preprocessor, not calibrated
       X14: 0.2
       X15: 3.0                             # capped: high exponents kill winter baseflow in glacier-fed catchments
