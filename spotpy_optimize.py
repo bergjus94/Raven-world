@@ -1325,10 +1325,10 @@ class RavenSCEUA(object):
                 "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_BASIN\n",
                 "  :CustomOutput DAILY AVERAGE Between:SNOW.And.ATMOSPHERE BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE Between:SNOW.And.ATMOSPHERE BY_HRU_GROUP\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[1].And.SURFACE_WATER BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[1].And.SURFACE_WATER BY_BASIN\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_BASIN\n",
+                "  :CustomOutput DAILY AVERAGE From:SOIL[1] BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE From:SOIL[1] BY_BASIN\n",
+                "  :CustomOutput DAILY AVERAGE From:SOIL[2] BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE From:SOIL[2] BY_BASIN\n",
                 "  :WriteMassLoadings\n",
             ]
             
