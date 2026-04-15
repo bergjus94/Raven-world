@@ -129,7 +129,7 @@ HBV:
       #X13: 5.0                    # ADIABATIC_LAPSE — fixed at 6.0 in HBV preprocessor, not calibrated
       X14: 0.2
       X15: 3.0                             # capped: high exponents kill winter baseflow in glacier-fed catchments
-      X16: 30.0
+      X16: 2.0                              # capillary rise: 0-2 mm/d (Seibert 2005, Lindström 1997)
       X17: 3.0
       X18: 2.0
       X19: 1.0
