@@ -264,13 +264,30 @@ def plot_metric_low_flow_comparison(base_config, metrics, all_data, plot_dirs,
 
     fig, ax = plt.subplots(figsize=(12, 5))
 
+    # Helper: insert NaN rows at gaps >1 day so matplotlib doesn't draw
+    # straight lines across the summer months
+    def _break_at_gaps(dates, values):
+        df_tmp = pd.DataFrame({'date': dates, 'val': values}).sort_values('date')
+        gaps = df_tmp['date'].diff() > pd.Timedelta(days=2)
+        if not gaps.any():
+            return df_tmp['date'].values, df_tmp['val'].values
+        # Insert NaN rows at each gap
+        pieces = []
+        for chunk in np.split(df_tmp, np.where(gaps)[0]):
+            pieces.append(chunk)
+            pieces.append(pd.DataFrame({'date': [chunk['date'].iloc[-1] + pd.Timedelta(days=1)],
+                                        'val': [np.nan]}))
+        result = pd.concat(pieces[:-1], ignore_index=True)
+        return result['date'].values, result['val'].values
+
     # Plot observed winter flows
     first_data = list(all_data.values())[0]
     mask = (first_data['date'] >= vali_start_dt) & (first_data['date'] <= vali_end_dt)
     vali_data = first_data[mask].copy()
     winter_mask = vali_data['date'].dt.month.isin([11, 12, 1, 2, 3])
     obs_winter = vali_data[winter_mask]
-    ax.plot(obs_winter['date'], obs_winter['obs_Q'], 'k-', linewidth=1.5,
+    obs_dates, obs_vals = _break_at_gaps(obs_winter['date'].values, obs_winter['obs_Q'].values)
+    ax.plot(obs_dates, obs_vals, 'k-', linewidth=1.5,
             label='Observed', alpha=0.8)
 
     # Plot each metric's winter simulation
@@ -282,9 +299,10 @@ def plot_metric_low_flow_comparison(base_config, metrics, all_data, plot_dirs,
         vali = data[mask].copy()
         winter = vali[vali['date'].dt.month.isin([11, 12, 1, 2, 3])]
 
+        sim_dates, sim_vals = _break_at_gaps(winter['date'].values, winter['sim_Q'].values)
         color = METRIC_COLORS.get(metric, '#333333')
         label = METRIC_DISPLAY_NAMES.get(metric, metric)
-        ax.plot(winter['date'], winter['sim_Q'], '-', color=color,
+        ax.plot(sim_dates, sim_vals, '-', color=color,
                 linewidth=1, label=label, alpha=0.8)
 
     ax.set_xlabel('Date')
@@ -431,6 +449,105 @@ def plot_metric_parameter_comparison(base_config, metrics, plot_dirs):
     print(f"  Saved: {save_path}")
 
 
+def plot_metric_parameter_boxplots(base_config, metrics, plot_dirs, top_n=100):
+    """Boxplots of top-N parameter sets for each calibration metric, side by side.
+
+    Mirrors plot_parameter_boxplots_comparison from postprocessing_configurations
+    but compares across calibration metrics instead of configurations.
+    """
+    gauge_id = base_config['gauge_id']
+    model_type = base_config['model_type']
+    config_key = base_config.get('_config_key', '')
+
+    # Load top-N parameter sets per metric
+    metric_results = {}
+    all_param_names = set()
+
+    for metric in metrics:
+        cfg = _build_metric_config(base_config, metric)
+        try:
+            param_data = postprocessing.load_parameter_values(cfg, top_n)
+            if param_data is None:
+                print(f"  Warning: No parameter data for {metric}")
+                continue
+            metric_results[metric] = param_data
+            all_param_names.update(param_data['parameters'].keys())
+            print(f"  {metric}: loaded {param_data['n_sets']} sets, "
+                  f"{len(param_data['parameters'])} params")
+        except Exception as e:
+            print(f"  Warning: Could not load params for {metric}: {e}")
+
+    if len(metric_results) < 2:
+        print("  Need at least 2 metrics with parameter data to compare")
+        return
+
+    param_names = sorted(all_param_names)
+    n_params = len(param_names)
+
+    n_cols = int(np.ceil(np.sqrt(n_params)))
+    n_rows = int(np.ceil(n_params / n_cols))
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
+
+    if n_params == 1:
+        axes = np.array([axes])
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+    elif n_cols == 1:
+        axes = axes.reshape(-1, 1)
+    axes_flat = axes.flatten()
+
+    available_metrics = list(metric_results.keys())
+
+    for i, param_name in enumerate(param_names):
+        ax = axes_flat[i]
+
+        plot_data = []
+        labels = []
+        colors = []
+
+        for metric in available_metrics:
+            params = metric_results[metric]['parameters']
+            values = params.get(param_name, [])
+            plot_data.append(values)
+            labels.append(METRIC_DISPLAY_NAMES.get(metric, metric))
+            colors.append(METRIC_COLORS.get(metric, '#333333'))
+
+        if not any(len(d) > 0 for d in plot_data):
+            ax.text(0.5, 0.5, 'No data available', transform=ax.transAxes,
+                    ha='center', va='center', fontsize=12)
+            ax.set_title(param_name.replace(f"{model_type}_", ""),
+                         fontsize=16, fontweight='bold')
+            ax.set_xticks([])
+            ax.set_yticks([])
+            continue
+
+        bp = ax.boxplot(plot_data, labels=labels, patch_artist=True)
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+            patch.set_edgecolor('black')
+
+        display_name = param_name.replace(f"{model_type}_", "")
+        ax.set_title(display_name, fontsize=16, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+        ax.set_ylabel('Parameter Value', fontsize=14, fontweight='bold')
+        ax.tick_params(axis='both', labelsize=13)
+        if len(labels) > 2:
+            plt.setp(ax.get_xticklabels(), rotation=45, ha='right', fontsize=13)
+        else:
+            plt.setp(ax.get_xticklabels(), fontsize=13)
+
+    for i in range(n_params, len(axes_flat)):
+        axes_flat[i].set_visible(False)
+
+    plt.tight_layout()
+    save_path = plot_dirs['parameters'] / f'parameter_boxplots_metric_comparison_{gauge_id}_{model_type}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {save_path}")
+
+
 def plot_metric_hydrograph_timeseries(base_config, metrics, all_data, plot_dirs,
                                        validation_start, validation_end):
     """Full hydrograph timeseries overlay for validation period."""
@@ -561,6 +678,8 @@ def run_complete_metric_postprocessing(gauge_id, config_key, model_type='HBV',
         ('Performance Table', plot_metric_performance_table,
          [base_config, metrics, all_data, plot_dirs, validation_start, validation_end]),
         ('Parameter Comparison', plot_metric_parameter_comparison,
+         [base_config, metrics, plot_dirs]),
+        ('Parameter Boxplots', plot_metric_parameter_boxplots,
          [base_config, metrics, plot_dirs]),
     ]
 
