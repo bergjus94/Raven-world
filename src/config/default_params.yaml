@@ -73,7 +73,7 @@ HBV:
     X05: 0.09985144                     # Porosity
     X06: 0.506052                       # Field capacity
     X07: 3.438486                       # Beta
-    X08: 38.32455                       # Max perc rate
+    X08: 3.0                             # Max perc rate
     X09: 0.4606565                      # Fast baseflow
     X10: 0.06303738                     # Slow baseflow
     X11: 2.277781                       # Time of concentration
@@ -81,7 +81,7 @@ HBV:
     #X13: 0.5718813                      # Adiabatic lapse
     X14: 0.04505643                     # Sat wilt
     X15: 0.877607                       # Baseflow N
-    X16: 18.94145                       # Cap rise rate
+    X16: 0.5                             # Cap rise rate
     X17: 2.036937                       # Topsoil thickness
     X18: 0.4452843                      # Forest correction
     X19: 0.6771759                       # Glacier storage
