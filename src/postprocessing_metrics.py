@@ -614,6 +614,221 @@ def plot_metric_soil_storage(base_config, metrics, plot_dirs,
     print(f"  Saved: {save_path}")
 
 
+def _extract_recession_segments(dates, Q, min_length=5, winter_only=True):
+    """Extract monotonically decreasing flow segments.
+
+    Parameters
+    ----------
+    dates : array-like of datetime
+    Q : array-like of float
+    min_length : int
+        Minimum number of consecutive decreasing days.
+    winter_only : bool
+        If True, only keep segments that fall entirely in Nov-Mar.
+
+    Returns list of dicts with keys 'dates', 'Q', 'Q_norm' (Q/Q0), 'k' (recession constant).
+    """
+    dates = pd.to_datetime(dates)
+    Q = np.asarray(Q, dtype=float)
+
+    # Remove NaN
+    valid = ~np.isnan(Q)
+    dates = dates[valid]
+    Q = Q[valid]
+
+    if len(Q) < min_length:
+        return []
+
+    # Winter filter
+    if winter_only:
+        winter = np.isin(dates.month, [11, 12, 1, 2, 3])
+        dates = dates[winter]
+        Q = Q[winter]
+
+    # Find decreasing runs
+    decreasing = np.diff(Q) < 0
+    segments = []
+    start = None
+
+    for i, dec in enumerate(decreasing):
+        if dec:
+            if start is None:
+                start = i
+        else:
+            if start is not None:
+                length = i - start + 1
+                if length >= min_length:
+                    seg_dates = dates[start:i + 1]
+                    seg_Q = Q[start:i + 1]
+                    # Check for continuous dates (no summer gaps)
+                    if (seg_dates[-1] - seg_dates[0]).days <= length + 2:
+                        segments.append({'dates': seg_dates, 'Q': seg_Q})
+                start = None
+
+    # Handle final segment
+    if start is not None:
+        length = len(decreasing) - start + 1
+        if length >= min_length:
+            seg_dates = dates[start:]
+            seg_Q = Q[start:]
+            if (seg_dates[-1] - seg_dates[0]).days <= length + 2:
+                segments.append({'dates': seg_dates, 'Q': seg_Q})
+
+    # Normalize and fit recession constant for each segment
+    for seg in segments:
+        Q0 = seg['Q'][0]
+        seg['Q_norm'] = seg['Q'] / Q0 if Q0 > 0 else seg['Q'] * 0
+        t = np.arange(len(seg['Q']), dtype=float)
+        # Fit k: Q/Q0 = exp(-k*t) → log(Q/Q0) = -k*t
+        with np.errstate(divide='ignore', invalid='ignore'):
+            log_Qn = np.log(seg['Q_norm'])
+        valid_fit = np.isfinite(log_Qn) & (seg['Q_norm'] > 0)
+        if np.sum(valid_fit) >= 3:
+            # Simple least-squares: k = -slope of log(Q/Q0) vs t
+            slope, _ = np.polyfit(t[valid_fit], log_Qn[valid_fit], 1)
+            seg['k'] = -slope  # positive k means decay
+        else:
+            seg['k'] = np.nan
+
+    return segments
+
+
+def plot_metric_recession_analysis(base_config, metrics, all_data, plot_dirs,
+                                   validation_start, validation_end):
+    """Recession analysis comparing baseflow behavior across calibration metrics.
+
+    Left panel: normalized recession curves (Q/Q0 vs days) overlaid.
+    Right panel: boxplots of fitted recession constants per metric.
+    """
+    gauge_id = base_config['gauge_id']
+    model_type = base_config['model_type']
+    config_key = base_config.get('_config_key', '')
+
+    vali_start_dt = pd.to_datetime(base_config.get('cali_end_date'))
+    vali_end_dt = pd.to_datetime(validation_end)
+
+    # Extract recession segments for observed and each metric
+    first_data = list(all_data.values())[0]
+    mask = (first_data['date'] >= vali_start_dt) & (first_data['date'] <= vali_end_dt)
+    vali_obs = first_data[mask]
+    obs_segments = _extract_recession_segments(
+        vali_obs['date'].values, vali_obs['obs_Q'].values
+    )
+
+    metric_segments = {}
+    for metric in metrics:
+        if metric not in all_data:
+            continue
+        data = all_data[metric]
+        mask = (data['date'] >= vali_start_dt) & (data['date'] <= vali_end_dt)
+        vali = data[mask]
+        segs = _extract_recession_segments(
+            vali['date'].values, vali['sim_Q'].values
+        )
+        if segs:
+            metric_segments[metric] = segs
+
+    if not obs_segments and not metric_segments:
+        print("  No recession segments found (validation period may be too short)")
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # --- Left panel: normalized recession overlay ---
+    ax = axes[0]
+
+    # Plot observed segments
+    for seg in obs_segments:
+        t = np.arange(len(seg['Q_norm']))
+        ax.plot(t, seg['Q_norm'], 'k-', linewidth=0.6, alpha=0.4)
+    # Dummy for legend
+    if obs_segments:
+        ax.plot([], [], 'k-', linewidth=1.5, label='Observed')
+
+    # Plot each metric's segments
+    for metric in metrics:
+        if metric not in metric_segments:
+            continue
+        color = METRIC_COLORS.get(metric, '#333333')
+        label = METRIC_DISPLAY_NAMES.get(metric, metric)
+        for seg in metric_segments[metric]:
+            t = np.arange(len(seg['Q_norm']))
+            ax.plot(t, seg['Q_norm'], '-', color=color, linewidth=0.6, alpha=0.4)
+        # Dummy for legend
+        ax.plot([], [], '-', color=color, linewidth=1.5, label=label)
+
+    # Reference exponential curves
+    t_ref = np.arange(30)
+    for k_ref, ls in [(0.02, ':'), (0.05, '--'), (0.10, ':')]:
+        ax.plot(t_ref, np.exp(-k_ref * t_ref), color='grey', linestyle=ls,
+                linewidth=0.8, alpha=0.5)
+        ax.text(t_ref[-1] + 0.5, np.exp(-k_ref * t_ref[-1]),
+                f'k={k_ref}', fontsize=7, color='grey', va='center')
+
+    ax.set_xlabel('Days since recession start')
+    ax.set_ylabel('Q / Q$_0$')
+    ax.set_title('Normalized Recession Curves (Nov-Mar)')
+    ax.set_ylim(0, 1.05)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    # --- Right panel: recession constant boxplots ---
+    ax = axes[1]
+
+    box_data = []
+    box_labels = []
+    box_colors = []
+
+    # Observed
+    obs_k = [s['k'] for s in obs_segments if np.isfinite(s['k'])]
+    if obs_k:
+        box_data.append(obs_k)
+        box_labels.append('Observed')
+        box_colors.append('black')
+
+    # Each metric
+    for metric in metrics:
+        if metric not in metric_segments:
+            continue
+        k_vals = [s['k'] for s in metric_segments[metric] if np.isfinite(s['k'])]
+        if k_vals:
+            box_data.append(k_vals)
+            box_labels.append(METRIC_DISPLAY_NAMES.get(metric, metric))
+            box_colors.append(METRIC_COLORS.get(metric, '#333333'))
+
+    if box_data:
+        bp = ax.boxplot(box_data, labels=box_labels, patch_artist=True)
+        for patch, color in zip(bp['boxes'], box_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+            patch.set_edgecolor('black')
+
+        # Add individual points
+        for i, (data, color) in enumerate(zip(box_data, box_colors)):
+            x = np.random.normal(i + 1, 0.04, size=len(data))
+            ax.scatter(x, data, color=color, s=15, alpha=0.5, zorder=5,
+                       edgecolors='none')
+
+        # Add count labels
+        for i, data in enumerate(box_data):
+            ax.text(i + 1, ax.get_ylim()[1] * 0.95, f'n={len(data)}',
+                    ha='center', fontsize=8, color='grey')
+
+    ax.set_ylabel('Recession constant k [1/day]')
+    ax.set_title('Recession Constants')
+    ax.grid(True, alpha=0.3, axis='y')
+    if len(box_labels) > 3:
+        plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+
+    fig.suptitle(f'Recession Analysis — {gauge_id} {model_type} ({config_key})', fontsize=13)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    save_path = plot_dirs['storage'] / f'recession_analysis_{gauge_id}_{model_type}.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {save_path}")
+
+
 def plot_metric_hydrograph_timeseries(base_config, metrics, all_data, plot_dirs,
                                        validation_start, validation_end):
     """Full hydrograph timeseries overlay for validation period."""
@@ -749,6 +964,8 @@ def run_complete_metric_postprocessing(gauge_id, config_key, model_type='HBV',
          [base_config, metrics, plot_dirs]),
         ('Soil Storage', plot_metric_soil_storage,
          [base_config, metrics, plot_dirs, validation_start, validation_end]),
+        ('Recession Analysis', plot_metric_recession_analysis,
+         [base_config, metrics, all_data, plot_dirs, validation_start, validation_end]),
     ]
 
     results = {}
