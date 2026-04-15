@@ -121,7 +121,7 @@ HBV:
       X05: 1.0
       X06: 1.0
       X07: 7.0
-      X08: 100.0
+      X08: 10.0                             # percolation: capped at 10 mm/d (Konz & Seibert 2010, glacierized Himalaya)
       X09: 0.5
       X10: 0.1
       X11: 6.0
