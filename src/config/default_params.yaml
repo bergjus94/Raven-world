@@ -191,8 +191,8 @@ HMETS:
     X17: 0.0114                 # Percolation
     X18: 0.0243                 # Topsoil baseflow
     X19: 0.0069                 # Phreatic baseflow
-    X20: 310.7211               # Topsoil thickness
-    X21: 916.1947               # Phreatic thickness
+    X20: 0.25                   # Topsoil thickness
+    X21: 1.0                    # Phreatic thickness
     X22: 1.0                     # Rain correction
     X23: 1.0                     # Snow correction
 
