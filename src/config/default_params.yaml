@@ -140,6 +140,9 @@ HBV:
   # Conditions: 'not_coupled' (included when coupled: false),
   #             'precip_correction' (included when precip_correction: true in namelist)
   optional:
+      X08: 'has_slow_reservoir'      # MAX_PERC_RATE — only with 2+ reservoirs
+      X10: 'has_slow_reservoir'      # K2 — only with slow reservoir
+      X16: 'has_slow_reservoir'      # MAX_CAP_RISE_RATE — only with fast+slow
       X19: 'not_coupled'
       X20: 'precip_correction'
       X21: 'precip_correction'

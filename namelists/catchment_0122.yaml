@@ -16,6 +16,8 @@ models:
 configurations:
   - subdaily
   - glogem_subdaily
+  - gw_1_layer
+  - gw_1_layer_glogem
 
 calibration:
   metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]

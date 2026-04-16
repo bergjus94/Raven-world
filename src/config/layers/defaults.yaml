@@ -20,6 +20,9 @@ criteria:
   - elevation
   - landuse
 
+# --- Subsurface structure default ---
+subsurface_structure: 'gw_2_layer'
+
 # --- Meteorological forcing default ---
 meteo_source: 'ERA5'
 

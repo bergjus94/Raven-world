@@ -1,0 +1,9 @@
+# Uncoupled, ERA5, subdaily melt, 1-layer groundwater (single reservoir)
+_config_key: 'gw_1_layer'
+display_name: 'HBV 1-Layer GW'
+color: '#bcbd22'
+coupled: false
+glacier_source: 'none'
+subsurface_structure: 'gw_1_layer'
+
+compatible_models: [HBV]

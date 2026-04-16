@@ -1,0 +1,11 @@
+# Coupled GloGEM TSLA, ERA5, subdaily melt, 1-layer groundwater (single reservoir)
+_config_key: 'gw_1_layer_glogem'
+display_name: 'HBV 1-Layer GW + GloGEM'
+color: '#17becf'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+subsurface_structure: 'gw_1_layer'
