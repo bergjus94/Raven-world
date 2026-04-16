@@ -45,7 +45,7 @@ HBV:
     X02: HBV_Melt_Factor                # Snow melt factor [mm/d/°C]
     X03: HBV_Refreeze_Factor            # Refreeze factor [mm/d/°C]
     X04: HBV_Snow_SWI                   # Snow water saturation [-]
-    X05: HBV_Porosity                   # Soil porosity [-]
+    #X05: HBV_Porosity                   # Soil porosity [-] — fixed at 1.0 (conceptual reservoir, not physical soil)
     X06: HBV_Field_Capacity             # Field capacity [-]
     X07: HBV_Beta                       # Infiltration exponent [-]
     X08: HBV_Max_Perc_Rate             # Percolation rate [mm/d]
@@ -54,7 +54,7 @@ HBV:
     X11: HBV_T_Conc_Max_Bas             # Time of concentration [d]
     #X12: HBV_Precip_Lapse               # Precipitation lapse rate [mm/d/km]
     #X13: HBV_Adiabatic_Lapse            # Temperature lapse rate [°C/km]
-    X14: HBV_Sat_Wilt                   # Wilting point saturation [-]
+    #X14: HBV_Sat_Wilt                   # Wilting point saturation [-] — fixed at 0.0 (not in standard HBV)
     X15: HBV_Baseflow_N                  # Baseflow exponent [-]
     X16: HBV_Max_Cap_Rise_Rate          # Capillary rise rate [mm/d]
     X17: HBV_Thickness_Topsoil          # Topsoil thickness [m]
@@ -70,25 +70,25 @@ HBV:
     X02: 4.072232                       # Melt factor
     X03: 2.001574                       # Refreeze factor
     X04: 0.03473693                     # Snow SWI
-    X05: 0.09985144                     # Porosity
+    #X05: 1.0                            # Porosity — fixed
     X06: 0.506052                       # Field capacity
-    X07: 3.438486                       # Beta
+    X07: 3.0                             # Beta
     X08: 3.0                             # Max perc rate
     X09: 0.4606565                      # Fast baseflow
     X10: 0.06303738                     # Slow baseflow
     X11: 2.277781                       # Time of concentration
     #X12: 4.873686                       # Precip lapse
     #X13: 0.5718813                      # Adiabatic lapse
-    X14: 0.04505643                     # Sat wilt
+    #X14: 0.0                            # Sat wilt — fixed
     X15: 0.877607                       # Baseflow N
     X16: 0.5                             # Cap rise rate
-    X17: 2.036937                       # Topsoil thickness
+    X17: 0.25                            # Topsoil thickness
     X18: 0.4452843                      # Forest correction
     X19: 0.6771759                       # Glacier storage
     X20: 1.141608                        # Rain correction
     X21: 1.024278                        # Snow correction
     HBV_Time_To_Peak: 1.1388905         # Derived: X11 / 2
-    HBV_Initial_Thickness_Topsoil: 1018.4685  # Derived: X17 * 500
+    HBV_Initial_Thickness_Topsoil: 125.0      # Derived: X17 * 500
 
 
   lower:
@@ -96,19 +96,19 @@ HBV:
       X02: 2.3
       X03: 0.0
       X04: 0.0
-      X05: 0.0
+      #X05: 1.0                    # POROSITY — fixed at 1.0
       X06: 0.3
-      X07: 0.0
+      X07: 1.0
       X08: 0.0
       X09: 0.05
       X10: 0.001
       X11: 0.01
       #X12: 0.0
       #X13: 0.0                    # ADIABATIC_LAPSE — fixed at 6.0 in HBV preprocessor, not calibrated
-      X14: 0.0
+      #X14: 0.0                    # SAT_WILT — fixed at 0.0
       X15: 1.0                            # baseflow exponent: ≥1 for glacier-fed catchments (linear to mild nonlinearity)
       X16: 0.0
-      X17: 0.01
+      X17: 0.05
       X18: 0.0
       X19: 0.05
       X20: 0.8
@@ -118,19 +118,19 @@ HBV:
       X02: 10.0
       X03: 8.0
       X04: 0.1
-      X05: 1.0
+      #X05: 1.0                    # POROSITY — fixed at 1.0
       X06: 1.0
-      X07: 7.0
+      X07: 6.0
       X08: 10.0                             # percolation: capped at 10 mm/d (Konz & Seibert 2010, glacierized Himalaya)
       X09: 0.5
       X10: 0.1
       X11: 6.0
       #X12: 5.0
       #X13: 5.0                    # ADIABATIC_LAPSE — fixed at 6.0 in HBV preprocessor, not calibrated
-      X14: 0.2
+      #X14: 0.0                    # SAT_WILT — fixed at 0.0
       X15: 3.0                             # capped: high exponents kill winter baseflow in glacier-fed catchments
       X16: 2.0                              # capillary rise: 0-2 mm/d (Seibert 2005, Lindström 1997)
-      X17: 3.0
+      X17: 0.5
       X18: 2.0
       X19: 1.0
       X20: 1.5
