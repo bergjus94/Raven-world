@@ -1266,9 +1266,9 @@ class HBVProcessor:
                 "  #                        POROSITY,   FIELD_CAPACITY,  SAT_WILT,  BETA,       MAX_CAP_RISE_RATE,       CONSTANT,        CONSTANT,              CONSTANT,",
                 f"    [DEFAULT],            {self.params['HBV'][param_or_name]['X05']},  {self.params['HBV'][param_or_name]['X06']}, {self.params['HBV'][param_or_name]['X14']}, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
                 "  #                                                        CONSTANT,                                     MAX_PERC_RATE,     BASEFLOW_COEFF_FAST, 1+BASEFLOW_N=1+ALPHA,",
-                f"     FAST_RES,                _DEFAULT,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
+                f"     FAST_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
                 "  #                                                        CONSTANT,                                                      BASEFLOW_COEFF_SLOW,              CONSTANT,",
-                f"     SLOW_RES,                _DEFAULT,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X10']},                   1.0",
+                f"     SLOW_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X10']},                   1.0",
                 ":EndSoilParameterList"
             ]
         }
