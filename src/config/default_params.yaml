@@ -62,6 +62,8 @@ HBV:
     X19: HBV_Glac_Storage_Coeff          # Glacier storage coefficient [-]
     X20: HBV_Rain_Corr                   # Rain correction factor [-]
     X21: HBV_Snow_Corr                   # Snow correction factor [-]
+    X22: HBV_Perc_Slow_To_Deep            # Percolation SLOW→DEEP [mm/d]
+    X23: HBV_Baseflow_Coeff_Deep          # Deep GW baseflow [1/d]
     HBV_Time_To_Peak: HBV_Time_To_Peak # Derived: X11 / 2
     HBV_Initial_Thickness_Topsoil: HBV_Initial_Thickness_Topsoil  # Derived: X17 * 500
 
@@ -87,6 +89,8 @@ HBV:
     X19: 0.6771759                       # Glacier storage
     X20: 1.141608                        # Rain correction
     X21: 1.024278                        # Snow correction
+    X22: 1.0                             # Perc slow to deep
+    X23: 0.001                           # Deep baseflow
     HBV_Time_To_Peak: 1.1388905         # Derived: X11 / 2
     HBV_Initial_Thickness_Topsoil: 125.0      # Derived: X17 * 500
 
@@ -113,6 +117,8 @@ HBV:
       X19: 0.05
       X20: 0.8
       X21: 0.8
+      X22: 0.0
+      X23: 0.0003
   upper:
       X01: 3.0
       X02: 10.0
@@ -135,6 +141,8 @@ HBV:
       X19: 1.0
       X20: 1.5
       X21: 1.5
+      X22: 2.0                              # perc slow→deep: 0-2 mm/d
+      X23: 0.005                            # deep baseflow: ~200d to ~9yr residence
 
   # Optional parameters: only included in calibration when the condition is met.
   # Conditions: 'not_coupled' (included when coupled: false),
@@ -143,6 +151,8 @@ HBV:
       X08: 'has_slow_reservoir'      # MAX_PERC_RATE — only with 2+ reservoirs
       X10: 'has_slow_reservoir'      # K2 — only with slow reservoir
       X16: 'has_slow_reservoir'      # MAX_CAP_RISE_RATE — only with fast+slow
+      X22: 'has_deep_reservoir'      # PERC_SLOW_TO_DEEP — only with deep GW
+      X23: 'has_deep_reservoir'      # K3 — only with deep GW
       X19: 'not_coupled'
       X20: 'precip_correction'
       X21: 'precip_correction'

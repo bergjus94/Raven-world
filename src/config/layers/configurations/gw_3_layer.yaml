@@ -1,0 +1,9 @@
+# Uncoupled, ERA5, subdaily melt, 3-layer groundwater (fast + slow + deep)
+_config_key: 'gw_3_layer'
+display_name: 'HBV 3-Layer GW'
+color: '#9467bd'
+coupled: false
+glacier_source: 'none'
+subsurface_structure: 'gw_3_layer'
+
+compatible_models: [HBV]

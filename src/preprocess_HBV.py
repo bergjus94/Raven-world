@@ -1221,9 +1221,15 @@ class HBVProcessor:
                 "       TOPSOIL,      1.0,    0.0,       0",
                 *(  [
                     "       SINGLE_RES,   1.0,    0.0,       0",
-                    ] if self.subsurface_structure == 'gw_1_layer' else [
+                    ] if self.subsurface_structure == 'gw_1_layer' else
+                    [
                     "       FAST_RES,     1.0,    0.0,       0",
                     "       SLOW_RES,     1.0,    0.0,       0",
+                    ] if self.subsurface_structure == 'gw_2_layer' else
+                    [
+                    "       FAST_RES,     1.0,    0.0,       0",
+                    "       SLOW_RES,     1.0,    0.0,       0",
+                    "       DEEP_GW,      1.0,    0.0,       0",
                     ]
                 ),
                 ":EndSoilClasses"
@@ -1239,6 +1245,8 @@ class HBVProcessor:
                 *(  [f"   DEFAULT_P,      2,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   SINGLE_RES,  100.0"]
                     if self.subsurface_structure == 'gw_1_layer' else
                     [f"   DEFAULT_P,      3,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0"]
+                    if self.subsurface_structure == 'gw_2_layer' else
+                    [f"   DEFAULT_P,      4,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0, DEEP_GW,    100.0"]
                 ),
                 ":EndSoilProfiles"
             ],
@@ -1288,6 +1296,13 @@ class HBVProcessor:
                     f"    [DEFAULT],                     1.0,  {self.params['HBV'][param_or_name]['X06']},          0.0, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
                     f"     FAST_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
                     f"     SLOW_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X10']},                   1.0",
+                    ] if self.subsurface_structure == 'gw_2_layer' else
+                    # --- gw_3_layer: TOPSOIL + FAST_RES + SLOW_RES + DEEP_GW ---
+                    [
+                    f"    [DEFAULT],                     1.0,  {self.params['HBV'][param_or_name]['X06']},          0.0, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
+                    f"     FAST_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
+                    f"     SLOW_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X22']},    {self.params['HBV'][param_or_name]['X10']},                   1.0",
+                    f"     DEEP_GW,                      1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X23']},                   1.0",
                     ]
                 ),
                 ":EndSoilParameterList"
@@ -1383,9 +1398,16 @@ class HBVProcessor:
             "#Soil Alias Layer Definitions": (
                 [
                     ":Alias       SINGLE_RESERVOIR SOIL[1]",
-                ] if self.subsurface_structure == 'gw_1_layer' else [
+                ] if self.subsurface_structure == 'gw_1_layer' else
+                [
                     ":Alias       FAST_RESERVOIR SOIL[1]",
                     ":Alias       SLOW_RESERVOIR SOIL[2]",
+                    ":LakeStorage SLOW_RESERVOIR",
+                ] if self.subsurface_structure == 'gw_2_layer' else
+                [
+                    ":Alias       FAST_RESERVOIR SOIL[1]",
+                    ":Alias       SLOW_RESERVOIR SOIL[2]",
+                    ":Alias       DEEP_RESERVOIR SOIL[3]",
                     ":LakeStorage SLOW_RESERVOIR",
                 ]
             ),
@@ -1445,6 +1467,26 @@ class HBVProcessor:
                     "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
                     "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs FAST_RESERVOIR 1.0",
                     "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SLOW_RESERVOIR 1.0",
+                    ] if self.subsurface_structure == 'gw_2_layer' else
+                    # --- gw_3_layer: fast + slow + deep ---
+                    [
+                    "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
+                    "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
+                    "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
+                    "       :-->Conditional HRU_TYPE IS_NOT ROCK",
+                    "       :-->Conditional HRU_TYPE IS_NOT LAKE",
+                    "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
+                    "   :CapillaryRise     RISE_HBV           FAST_RESERVOIR 	SOIL[0]",
+                    "   :LakeEvaporation   LAKE_EVAP_BASIC    SLOW_RESERVOIR  ATMOSPHERE",
+                    "   :Percolation       PERC_CONSTANT      FAST_RESERVOIR 	SLOW_RESERVOIR",
+                    "   :Percolation       PERC_CONSTANT      SLOW_RESERVOIR 	DEEP_RESERVOIR",
+                    "   :Baseflow          BASE_POWER_LAW     FAST_RESERVOIR  SURFACE_WATER",
+                    "   :Baseflow          BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER",
+                    "   :Baseflow          BASE_LINEAR        DEEP_RESERVOIR  SURFACE_WATER",
+                    "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
+                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs FAST_RESERVOIR 1.0",
+                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SLOW_RESERVOIR 1.0",
+                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs DEEP_RESERVOIR 1.0",
                     ]
                 ),
                 ":EndHydrologicProcesses"
@@ -1475,7 +1517,7 @@ class HBVProcessor:
             "#Lower Groundwater Storage": [
                 "# Initial groundwater storage - for each HRU",
                 "",
-                f":InitialConditions {'SOIL[1]' if self.subsurface_structure == 'gw_1_layer' else 'SOIL[2]'}",
+                f":InitialConditions {'SOIL[1]' if self.subsurface_structure == 'gw_1_layer' else 'SOIL[2]' if self.subsurface_structure == 'gw_2_layer' else 'SOIL[2]'}",
                 "# derived from thickness: HBV_THICKNESS_TOPSOIL [m] * 1000.0 / 2.0",
                 f"{self.params['HBV'][param_or_name]['HBV_Initial_Thickness_Topsoil']}",
                 ":EndInitialConditions"

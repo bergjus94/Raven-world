@@ -1,0 +1,11 @@
+# Coupled GloGEM TSLA, ERA5, subdaily melt, 3-layer groundwater (fast + slow + deep)
+_config_key: 'gw_3_layer_glogem'
+display_name: 'HBV 3-Layer GW + GloGEM'
+color: '#8c564b'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+subsurface_structure: 'gw_3_layer'

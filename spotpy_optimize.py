@@ -167,6 +167,9 @@ class RavenSCEUA(object):
             elif condition == 'has_slow_reservoir':
                 structure = self.namelist.get('subsurface_structure', 'gw_2_layer')
                 include = structure not in ['gw_1_layer']
+            elif condition == 'has_deep_reservoir':
+                structure = self.namelist.get('subsurface_structure', 'gw_2_layer')
+                include = structure in ['gw_3_layer']
 
             if not include:
                 skip_params.add(param_key)

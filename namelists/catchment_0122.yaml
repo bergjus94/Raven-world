@@ -6,23 +6,21 @@ catchment: '0122'
 display_name: 'Swat @ Kalam'
 
 start_date: '1980-01-01'
-end_date: '1997-12-31'
-cali_end_date: '1989-12-31'
-warm_up_date: '1978-01-01'
+end_date: '1985-12-31'
+cali_end_date: '1983-12-31'
+warm_up_date: '1979-01-01'
 
 models:
   - HBV
 
 configurations:
-  - subdaily
-  - glogem_subdaily
   - gw_1_layer
-  - gw_1_layer_glogem
+  - gw_3_layer
 
 calibration:
-  metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]
-  iterations: 5000
-  ngs: 15
+  metrics: [KGE]
+  iterations: 10
+  ngs: 5
 
 future:
-  enabled: true
+  enabled: false
