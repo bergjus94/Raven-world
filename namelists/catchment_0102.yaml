@@ -14,12 +14,15 @@ models:
   - HBV
 
 configurations:
-  - subdaily
-  - glogem_subdaily
+  - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
+  - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
+  - gw_3_layer_glogem     # S2: fast + slow + deep GW
+  - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
+  - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW
 
 calibration:
-  metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]
-  iterations: 5000
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
   ngs: 15
 
 future:
