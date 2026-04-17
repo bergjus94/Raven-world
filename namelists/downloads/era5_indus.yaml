@@ -1,0 +1,29 @@
+# =============================================================================
+# ERA5-Land download: Indus basin, 1970-2019 on the clean 0.1 deg native grid
+# =============================================================================
+# Full re-download in a reduced variable set, to replace the legacy Indus-Era5/
+# files (which are on an interpolated non-standard grid from an older CDS
+# server behavior that no longer exists).
+#
+# Output goes to a NEW folder (Indus-Era5-native) so the legacy files remain
+# untouched until this sweep finishes and is verified.
+
+start_date: '1970-01-01'
+end_date:   '2023-12-31'
+
+# Derive bbox from the Indus catchments shapefile (31 catchments covering the
+# 0100-series, including the northern and western outliers).
+# Server path:
+shape_path: '/home/jberg@giub.local/Raven_world/01_data/topo/catchment_shapefile/catchments_Indus/all_catchments.shp'
+buffer_degrees: 0.1
+# Resulting bbox (after buffer): N=37.19, S=31.00, W=67.44, E=81.92
+
+output_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/Indus-Era5-native'
+
+variables:
+  - geopotential            # time-invariant surface elevation (one-shot)
+  - 2m_temperature
+  - total_precipitation
+  - potential_evaporation
+
+max_workers: 4

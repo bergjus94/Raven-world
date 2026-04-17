@@ -471,66 +471,93 @@ def process_gauge_ultra_parallel(gauge_id, years, months, variables, shapefile_p
     return results
 
 
+def read_download_namelist(path):
+    """
+    Load a dedicated download namelist (separate from catchment namelists).
+
+    Required fields: start_date, end_date, variables, output_dir.
+    One of (area | shape_path) must be provided — area wins if both are set.
+
+    Optional: months (default: 1..12), buffer_degrees (0.1), max_workers (4).
+    """
+    with open(path, 'r') as f:
+        cfg = yaml.safe_load(f)
+
+    required = ['start_date', 'end_date', 'variables', 'output_dir']
+    missing = [k for k in required if k not in cfg]
+    if missing:
+        raise ValueError(f"namelist {path} missing required fields: {missing}")
+    if 'area' not in cfg and 'shape_path' not in cfg:
+        raise ValueError(f"namelist {path} must set either 'area' or 'shape_path'")
+
+    start_year = int(str(cfg['start_date']).split('-')[0])
+    end_year = int(str(cfg['end_date']).split('-')[0])
+    cfg['_years'] = list(range(start_year, end_year + 1))
+    cfg.setdefault('months', list(range(1, 13)))
+    cfg.setdefault('buffer_degrees', 0.1)
+    cfg.setdefault('max_workers', 4)
+    return cfg
+
+
+def _resolve_area(cfg):
+    """Return an [N, W, S, E] list — either from cfg['area'] directly or from cfg['shape_path']."""
+    if 'area' in cfg:
+        a = cfg['area']
+        if isinstance(a, dict):
+            return [a['north'], a['west'], a['south'], a['east']]
+        return list(a)  # already [N, W, S, E]
+    return get_extent_from_shapefile(cfg['shape_path'], cfg['buffer_degrees'])
+
+
 if __name__ == "__main__":
-    # Read parameters from namelist.yaml
-    namelist_path = "/home/jberg/OneDrive/Raven-world/namelist.yaml"
-    gauge_id, years, shapefile_path, meteo_output_dir = read_namelist(namelist_path)
-    
-    # Configuration
-    months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    
-    variables = [
-        'geopotential',
-        '2m_temperature',
-        'total_precipitation',
-        'evaporation_from_vegetation_transpiration',
-        'surface_solar_radiation_downwards',
-        'surface_pressure',
-        'total_evaporation',
-    ]
-    
-    # Choose parallel mode
-    max_workers = 4  # Start with 4, can increase if stable
-    
-    print(f"\n{'='*80}")
-    print(f"ERA5-LAND DOWNLOAD CONFIGURATION")
-    print(f"{'='*80}")
-    print(f"Gauge ID: {gauge_id}")
-    print(f"Years: {years}")
-    print(f"Months: {months}")
-    print(f"Shapefile: {shapefile_path}")
-    print(f"Output directory: {meteo_output_dir}")
-    print(f"Variables: {len(variables)}")
-    for var in variables:
-        print(f"  - {var}")
-    
-    print(f"\n🚀 Starting ERA5-Land download (PARALLEL)...")
-    
-    # Option 1: Moderate parallelization (recommended)
-    results = process_gauge_parallel(
-        gauge_id=gauge_id,
-        years=years,
-        months=months,
-        variables=variables,
-        shapefile_path=shapefile_path,
-        base_output_dir=meteo_output_dir,
-        max_workers=max_workers
-    )
-    
-    # Option 2: Ultra parallelization (use with caution)
-    # results = process_gauge_ultra_parallel(
-    #     gauge_id=gauge_id,
-    #     years=years,
-    #     months=months,
-    #     variables=variables,
-    #     shapefile_path=shapefile_path,
-    #     base_output_dir=meteo_output_dir,
-    #     max_workers=6  # Be careful not to exceed API limits
-    # )
-    
-    if results:
-        print(f"\n🎉 Parallel download complete for gauge {gauge_id}!")
-        for variable, files in results.items():
-            print(f"   {variable}: {len(files)} files")
-    else:
-        print(f"\n❌ Download failed for gauge {gauge_id}")
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Download ERA5-Land from a dedicated download namelist.')
+    parser.add_argument('namelist', help='Path to download namelist YAML (see namelists/downloads/)')
+    args = parser.parse_args()
+
+    cfg = read_download_namelist(args.namelist)
+    area = _resolve_area(cfg)
+    if area is None:
+        raise SystemExit(f"could not resolve download area from {args.namelist}")
+
+    os.makedirs(cfg['output_dir'], exist_ok=True)
+
+    print(f"\n{'='*80}\nERA5-LAND DOWNLOAD\n{'='*80}")
+    print(f"Namelist:    {args.namelist}")
+    print(f"Date range:  {cfg['start_date']} -> {cfg['end_date']}  ({len(cfg['_years'])} years)")
+    print(f"Area [N,W,S,E]: {area}")
+    print(f"Output:      {cfg['output_dir']}")
+    print(f"Workers:     {cfg['max_workers']}")
+    print(f"Variables ({len(cfg['variables'])}):")
+    for v in cfg['variables']:
+        print(f"  - {v}")
+
+    variables = list(cfg['variables'])
+    results = {}
+
+    if 'geopotential' in variables:
+        print(f"\nDownloading geopotential (time-invariant)...")
+        geo = download_geopotential_once(cfg['output_dir'], area)
+        results['geopotential'] = [geo] if geo else []
+        variables.remove('geopotential')
+
+    for variable in variables:
+        print(f"\nProcessing variable: {variable}")
+        files = download_multiple_months_parallel(
+            variable=variable,
+            years=cfg['_years'],
+            months=cfg['months'],
+            output_dir=cfg['output_dir'],
+            area=area,
+            max_workers=cfg['max_workers'],
+        )
+        results[variable] = files
+
+    print(f"\n{'='*80}\nSUMMARY\n{'='*80}")
+    total = 0
+    for v, files in results.items():
+        n = len(files)
+        total += n
+        print(f"  {v:50s} {n} files")
+    print(f"  TOTAL: {total} files")
