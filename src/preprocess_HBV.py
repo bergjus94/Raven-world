@@ -1219,8 +1219,13 @@ class HBVProcessor:
                 "   :Attributes,",
                 "   :Units,",
                 "       TOPSOIL,      1.0,    0.0,       0",
-                "       SLOW_RES,     1.0,    0.0,       0",
-                "       FAST_RES,     1.0,    0.0,       0",
+                *(  [
+                    "       SINGLE_RES,   1.0,    0.0,       0",
+                    ] if self.subsurface_structure == 'gw_1_layer' else [
+                    "       FAST_RES,     1.0,    0.0,       0",
+                    "       SLOW_RES,     1.0,    0.0,       0",
+                    ]
+                ),
                 ":EndSoilClasses"
             ],
             "#Soil Profiles": [
