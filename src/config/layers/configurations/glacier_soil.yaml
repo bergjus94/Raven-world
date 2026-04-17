@@ -1,4 +1,4 @@
-# Uncoupled, ERA5, subdaily melt, glacier soil routing
+# Uncoupled, ERA5, subdaily melt, glacier soil routing (gw_2_layer + glacier connectivity)
 # MASKED_GLACIER HRUs get a real soil profile — meltwater infiltrates
 # through proglacial soil before reaching reservoirs
 _config_key: 'glacier_soil'
@@ -6,6 +6,7 @@ display_name: 'HBV Glacier Soil'
 color: '#2ca02c'
 coupled: false
 glacier_source: 'none'
-subsurface_structure: 'glacier_soil'
+subsurface_structure: 'gw_2_layer'
+glacier_routing: true
 
 compatible_models: [HBV]

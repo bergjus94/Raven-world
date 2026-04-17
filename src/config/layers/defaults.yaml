@@ -22,6 +22,7 @@ criteria:
 
 # --- Subsurface structure default ---
 subsurface_structure: 'gw_2_layer'
+glacier_routing: false
 
 # --- Meteorological forcing default ---
 meteo_source: 'ERA5'

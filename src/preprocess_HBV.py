@@ -85,10 +85,11 @@ class HBVProcessor:
 
         # Subsurface structure
         self.subsurface_structure = namelist.get('subsurface_structure', 'gw_2_layer')
-        valid_structures = ['gw_1_layer', 'gw_2_layer', 'gw_3_layer', 'glacier_soil']
+        valid_structures = ['gw_1_layer', 'gw_2_layer', 'gw_3_layer']
         if self.subsurface_structure not in valid_structures:
             raise ValueError(f"Invalid subsurface_structure: {self.subsurface_structure}. Must be one of {valid_structures}")
-        print(f"Subsurface structure: {self.subsurface_structure}")
+        self.glacier_routing = namelist.get('glacier_routing', False)
+        print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}")
 
         # ✅ ADD ONLY THIS - warm_up_date
         if 'warm_up_date' in namelist:
@@ -1225,7 +1226,7 @@ class HBVProcessor:
                     [
                     "       FAST_RES,     1.0,    0.0,       0",
                     "       SLOW_RES,     1.0,    0.0,       0",
-                    ] if self.subsurface_structure in ['gw_2_layer', 'glacier_soil'] else
+                    ] if self.subsurface_structure == 'gw_2_layer' else
                     [
                     "       FAST_RES,     1.0,    0.0,       0",
                     "       SLOW_RES,     1.0,    0.0,       0",
@@ -1241,14 +1242,19 @@ class HBVProcessor:
                 "    GLACIER, 0",
                 "    LAKE, 0",
                 "    ROCK, 0",
-                *(  [f"    MASKED_GLACIER, 3,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0"]
-                    if self.subsurface_structure == 'glacier_soil' else
+                *(  # MASKED_GLACIER: soil profile if glacier_routing, else impermeable
+                    [f"    MASKED_GLACIER, {2 if self.subsurface_structure == 'gw_1_layer' else 4 if self.subsurface_structure == 'gw_3_layer' else 3},"
+                     f"    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},"
+                     + ("   SINGLE_RES,  100.0" if self.subsurface_structure == 'gw_1_layer'
+                        else "   FAST_RES,    100.0, SLOW_RES,    100.0" if self.subsurface_structure == 'gw_2_layer'
+                        else "   FAST_RES,    100.0, SLOW_RES,    100.0, DEEP_GW,    100.0")]
+                    if self.glacier_routing else
                     ["    MASKED_GLACIER, 0"]
                 ),
                 *(  [f"   DEFAULT_P,      2,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   SINGLE_RES,  100.0"]
                     if self.subsurface_structure == 'gw_1_layer' else
                     [f"   DEFAULT_P,      3,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0"]
-                    if self.subsurface_structure in ['gw_2_layer', 'glacier_soil'] else
+                    if self.subsurface_structure == 'gw_2_layer' else
                     [f"   DEFAULT_P,      4,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0, DEEP_GW,    100.0"]
                 ),
                 ":EndSoilProfiles"
@@ -1299,7 +1305,7 @@ class HBVProcessor:
                     f"    [DEFAULT],                     1.0,  {self.params['HBV'][param_or_name]['X06']},          0.0, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
                     f"     FAST_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
                     f"     SLOW_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X10']},                   1.0",
-                    ] if self.subsurface_structure in ['gw_2_layer', 'glacier_soil'] else
+                    ] if self.subsurface_structure == 'gw_2_layer' else
                     # --- gw_3_layer: TOPSOIL + FAST_RES + SLOW_RES + DEEP_GW ---
                     [
                     f"    [DEFAULT],                     1.0,  {self.params['HBV'][param_or_name]['X06']},          0.0, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
@@ -1406,7 +1412,7 @@ class HBVProcessor:
                     ":Alias       FAST_RESERVOIR SOIL[1]",
                     ":Alias       SLOW_RESERVOIR SOIL[2]",
                     ":LakeStorage SLOW_RESERVOIR",
-                ] if self.subsurface_structure in ['gw_2_layer', 'glacier_soil'] else
+                ] if self.subsurface_structure == 'gw_2_layer' else
                 [
                     ":Alias       FAST_RESERVOIR SOIL[1]",
                     ":Alias       SLOW_RESERVOIR SOIL[2]",
@@ -1446,7 +1452,7 @@ class HBVProcessor:
                     [
                     "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   SINGLE_RESERVOIR",
                     "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
+                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if not self.glacier_routing else []),
                     "       :-->Conditional HRU_TYPE IS_NOT ROCK",
                     "       :-->Conditional HRU_TYPE IS_NOT LAKE",
                     "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
@@ -1454,27 +1460,11 @@ class HBVProcessor:
                     "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
                     "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SINGLE_RESERVOIR 1.0",
                     ] if self.subsurface_structure == 'gw_1_layer' else
-                    # --- glacier_soil: same as gw_2_layer but MASKED_GLACIER included in flush ---
-                    [
-                    "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
-                    "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    "       :-->Conditional HRU_TYPE IS_NOT ROCK",
-                    "       :-->Conditional HRU_TYPE IS_NOT LAKE",
-                    "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
-                    "   :CapillaryRise     RISE_HBV           FAST_RESERVOIR 	SOIL[0]",
-                    "   :LakeEvaporation   LAKE_EVAP_BASIC    SLOW_RESERVOIR  ATMOSPHERE",
-                    "   :Percolation       PERC_CONSTANT      FAST_RESERVOIR 	SLOW_RESERVOIR",
-                    "   :Baseflow          BASE_POWER_LAW     FAST_RESERVOIR  SURFACE_WATER",
-                    "   :Baseflow          BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER",
-                    "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs FAST_RESERVOIR 1.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SLOW_RESERVOIR 1.0",
-                    ] if self.subsurface_structure == 'glacier_soil' else
                     # --- gw_2_layer: standard fast + slow ---
                     [
                     "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
                     "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
+                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if not self.glacier_routing else []),
                     "       :-->Conditional HRU_TYPE IS_NOT ROCK",
                     "       :-->Conditional HRU_TYPE IS_NOT LAKE",
                     "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
@@ -1491,7 +1481,7 @@ class HBVProcessor:
                     [
                     "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
                     "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
+                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if not self.glacier_routing else []),
                     "       :-->Conditional HRU_TYPE IS_NOT ROCK",
                     "       :-->Conditional HRU_TYPE IS_NOT LAKE",
                     "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
