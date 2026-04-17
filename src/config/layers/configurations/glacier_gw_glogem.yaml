@@ -1,0 +1,19 @@
+# Coupled GloGEM TSLA, ERA5, subdaily melt, SPHY-style glacier->GW split (Structure 5, Paper 5)
+# Meltwater arriving as IRRIGATION into PONDED_WATER on MASKED_GLACIER HRUs is split
+# by the :Split process into GlacROF*SURFACE_WATER + (1-GlacROF)*SLOW_RESERVOIR before
+# :Infiltration. MASKED_GLACIER keeps IMPERM=1.0 so TOPSOIL stays empty — DEEP_GW
+# fills only via :Percolation SLOW -> DEEP, preserving its slow 3rd-timescale identity.
+# Reference: Terink et al. 2015 (SPHY v2.0, GMD); Lutz et al. 2014 (Nat. Clim. Change).
+_config_key: 'glacier_gw_glogem'
+display_name: 'HBV Glacier-GW Split + GloGEM'
+color: '#17becf'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+subsurface_structure: 'gw_3_layer'
+glacier_routing: 'split_to_slow'
+
+compatible_models: [HBV]

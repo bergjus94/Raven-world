@@ -170,6 +170,11 @@ class RavenSCEUA(object):
             elif condition == 'has_deep_reservoir':
                 structure = self.namelist.get('subsurface_structure', 'gw_2_layer')
                 include = structure in ['gw_3_layer']
+            elif condition == 'has_glacier_split':
+                routing = self.namelist.get('glacier_routing', 'none')
+                if isinstance(routing, bool):
+                    routing = 'through_soil' if routing else 'none'
+                include = routing == 'split_to_slow'
 
             if not include:
                 skip_params.add(param_key)
@@ -269,6 +274,8 @@ class RavenSCEUA(object):
             'output': self.model_dir / f'{self.gauge_id}_{self.model_type}.rvh'},
             {'template': templates_dir / f'{self.gauge_id}_{self.model_type}.rvt.tpl',
             'output': self.model_dir / f'{self.gauge_id}_{self.model_type}.rvt'},
+            {'template': templates_dir / f'{self.gauge_id}_{self.model_type}.rvi.tpl',
+            'output': self.model_dir / f'{self.gauge_id}_{self.model_type}.rvi'},
         ]
         
         # Process each template file

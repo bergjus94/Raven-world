@@ -64,6 +64,7 @@ HBV:
     X21: HBV_Snow_Corr                   # Snow correction factor [-]
     X22: HBV_Perc_Slow_To_Deep            # Percolation SLOW→DEEP [mm/d]
     X23: HBV_Baseflow_Coeff_Deep          # Deep GW baseflow [1/d]
+    X24: HBV_GlacROF                      # Glacier fast-runoff fraction (SPHY-style split) [-]
     HBV_Time_To_Peak: HBV_Time_To_Peak # Derived: X11 / 2
     HBV_Initial_Thickness_Topsoil: HBV_Initial_Thickness_Topsoil  # Derived: X17 * 500
 
@@ -91,6 +92,7 @@ HBV:
     X21: 1.024278                        # Snow correction
     X22: 1.0                             # Perc slow to deep
     X23: 0.001                           # Deep baseflow
+    X24: 0.7                             # GlacROF: fast fraction of glacier melt (SPHY default, Lutz 2014)
     HBV_Time_To_Peak: 1.1388905         # Derived: X11 / 2
     HBV_Initial_Thickness_Topsoil: 125.0      # Derived: X17 * 500
 
@@ -119,6 +121,7 @@ HBV:
       X21: 0.8
       X22: 0.0
       X23: 0.0003
+      X24: 0.5                              # GlacROF lower: 50% fast runoff
   upper:
       X01: 3.0
       X02: 10.0
@@ -143,6 +146,7 @@ HBV:
       X21: 1.5
       X22: 2.0                              # perc slow→deep: 0-2 mm/d
       X23: 0.005                            # deep baseflow: ~200d to ~9yr residence
+      X24: 0.9                              # GlacROF upper: 90% fast runoff (SPHY range 0.5-0.9 per Lutz 2014)
 
   # Optional parameters: only included in calibration when the condition is met.
   # Conditions: 'not_coupled' (included when coupled: false),
@@ -153,6 +157,7 @@ HBV:
       X16: 'has_slow_reservoir'      # MAX_CAP_RISE_RATE — only with fast+slow
       X22: 'has_deep_reservoir'      # PERC_SLOW_TO_DEEP — only with deep GW
       X23: 'has_deep_reservoir'      # K3 — only with deep GW
+      X24: 'has_glacier_split'       # GlacROF — only with glacier_routing='split_to_slow'
       X19: 'not_coupled'
       X20: 'precip_correction'
       X21: 'precip_correction'

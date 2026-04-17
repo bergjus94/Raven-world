@@ -88,7 +88,20 @@ class HBVProcessor:
         valid_structures = ['gw_1_layer', 'gw_2_layer', 'gw_3_layer']
         if self.subsurface_structure not in valid_structures:
             raise ValueError(f"Invalid subsurface_structure: {self.subsurface_structure}. Must be one of {valid_structures}")
-        self.glacier_routing = namelist.get('glacier_routing', False)
+        # glacier_routing: enum controlling how glacier meltwater enters the subsurface.
+        #   'none'          — meltwater stays on MASKED_GLACIER (baseline)
+        #   'through_soil'  — MASKED_GLACIER gets a soil profile and melt infiltrates (Structure 3)
+        #   'split_to_slow' — SPHY-style :Split routes melt to GlacROF*SURFACE + (1-GlacROF)*SLOW_RES (Structure 5)
+        # Accept legacy bool (True -> 'through_soil', False -> 'none') for backward compat.
+        raw_gr = namelist.get('glacier_routing', 'none')
+        if isinstance(raw_gr, bool):
+            raw_gr = 'through_soil' if raw_gr else 'none'
+        self.glacier_routing = raw_gr
+        valid_routings = ['none', 'through_soil', 'split_to_slow']
+        if self.glacier_routing not in valid_routings:
+            raise ValueError(f"Invalid glacier_routing: {self.glacier_routing}. Must be one of {valid_routings}")
+        if self.glacier_routing == 'split_to_slow' and self.subsurface_structure != 'gw_3_layer':
+            raise ValueError(f"glacier_routing='split_to_slow' requires subsurface_structure='gw_3_layer', got '{self.subsurface_structure}'")
         print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}")
 
         # ✅ ADD ONLY THIS - warm_up_date
@@ -1242,13 +1255,14 @@ class HBVProcessor:
                 "    GLACIER, 0",
                 "    LAKE, 0",
                 "    ROCK, 0",
-                *(  # MASKED_GLACIER: soil profile if glacier_routing, else impermeable
+                *(  # MASKED_GLACIER: needs a soil profile for both 'through_soil' (melt infiltrates)
+                    # and 'split_to_slow' (needs SLOW_RES/DEEP_GW layers for :Split target and DEEP percolation chain).
                     [f"    MASKED_GLACIER, {2 if self.subsurface_structure == 'gw_1_layer' else 4 if self.subsurface_structure == 'gw_3_layer' else 3},"
                      f"    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},"
                      + ("   SINGLE_RES,  100.0" if self.subsurface_structure == 'gw_1_layer'
                         else "   FAST_RES,    100.0, SLOW_RES,    100.0" if self.subsurface_structure == 'gw_2_layer'
                         else "   FAST_RES,    100.0, SLOW_RES,    100.0, DEEP_GW,    100.0")]
-                    if self.glacier_routing else
+                    if self.glacier_routing != 'none' else
                     ["    MASKED_GLACIER, 0"]
                 ),
                 *(  [f"   DEFAULT_P,      2,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   SINGLE_RES,  100.0"]
@@ -1331,8 +1345,9 @@ class HBVProcessor:
         hru_groups_definition = self._get_hru_groups_definition()
         
         # Use namelist dates
-        rvi_sections = self._create_rvi_sections(self.start_date, self.end_date, 
-                                            self.cali_end_date, hru_groups_definition)
+        rvi_sections = self._create_rvi_sections(self.start_date, self.end_date,
+                                            self.cali_end_date, hru_groups_definition,
+                                            param_or_name)
 
         # Write the file
         with open(file_path, 'w') as ff:
@@ -1357,8 +1372,15 @@ class HBVProcessor:
             return f":DefineHRUGroups {base_groups}"
 
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
-                        hru_groups_definition: str) -> Dict[str, List[str]]:
-        """Create all sections for RVI file."""
+                        hru_groups_definition: str,
+                        param_or_name: str = 'init') -> Dict[str, List[str]]:
+        """Create all sections for RVI file.
+
+        param_or_name selects how calibratable rvi-resident parameters (currently
+        only GlacROF for Structure 5) are rendered: 'names' writes the template
+        placeholder text (e.g. 'HBV_GlacROF'), 'init' writes the numeric initial
+        value. Matches the dict layout in config/default_params.yaml.
+        """
         
         # ✅ DETERMINE ACTUAL START DATE (warm-up or simulation)
         if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
@@ -1447,12 +1469,18 @@ class HBVProcessor:
                 *(["   :SnowToIce         ANNUAL             SNOW            GLACIER_ICE",
                    "   :GlacierDeltaH     HUSS               GLACIER_ICE     GLACIER_ICE"]
                   if not self.coupled and self.config.get('glacier_method') == 'DeltaH' else []),
+                # SPHY-style glacier-GW split (Structure 5): route MASKED_GLACIER PONDED_WATER
+                # to GlacROF*SURFACE_WATER + (1-GlacROF)*SLOW_RESERVOIR BEFORE :Infiltration so
+                # no melt enters TOPSOIL (MASKED_GLACIER keeps IMPERM=1).
+                *([f"   :Split             RAVEN_DEFAULT      PONDED_WATER    SURFACE_WATER   SLOW_RESERVOIR   {self.params['HBV'][param_or_name]['X24']}",
+                   "       :-->Conditional HRU_TYPE IS MASKED_GLACIER"]
+                  if self.glacier_routing == 'split_to_slow' else []),
                 "   :Infiltration      INF_HBV            PONDED_WATER    MULTIPLE",
                 *(  # --- gw_1_layer: single reservoir ---
                     [
                     "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   SINGLE_RESERVOIR",
                     "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if not self.glacier_routing else []),
+                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if self.glacier_routing != 'through_soil' else []),
                     "       :-->Conditional HRU_TYPE IS_NOT ROCK",
                     "       :-->Conditional HRU_TYPE IS_NOT LAKE",
                     "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
@@ -1464,7 +1492,7 @@ class HBVProcessor:
                     [
                     "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
                     "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if not self.glacier_routing else []),
+                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if self.glacier_routing != 'through_soil' else []),
                     "       :-->Conditional HRU_TYPE IS_NOT ROCK",
                     "       :-->Conditional HRU_TYPE IS_NOT LAKE",
                     "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
@@ -1481,7 +1509,7 @@ class HBVProcessor:
                     [
                     "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
                     "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if not self.glacier_routing else []),
+                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if self.glacier_routing != 'through_soil' else []),
                     "       :-->Conditional HRU_TYPE IS_NOT ROCK",
                     "       :-->Conditional HRU_TYPE IS_NOT LAKE",
                     "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
@@ -1523,13 +1551,20 @@ class HBVProcessor:
                 "1,             1.0",
                 ":EndBasinInitialConditions"
             ],
-            "#Lower Groundwater Storage": [
-                "# Initial groundwater storage - for each HRU",
-                "",
+            # Initial groundwater storage: start all subsurface reservoirs at 0.
+            # A real warm-up period (namelist `warm_up_date` -> `start_date`) fills
+            # them from the forcing — a non-zero IC previously created a spin-up
+            # artifact that biased HRU 1 especially once MASKED_GLACIER received a
+            # real soil profile (Structure 3 / Structure 5).
+            "#Subsurface Storage Initial Conditions": [
                 f":InitialConditions {'SOIL[1]' if self.subsurface_structure == 'gw_1_layer' else 'SOIL[2]'}",
-                "# derived from thickness: HBV_THICKNESS_TOPSOIL [m] * 1000.0 / 2.0",
-                f"{self.params['HBV'][param_or_name]['HBV_Initial_Thickness_Topsoil']}",
-                ":EndInitialConditions"
+                "0.0",
+                ":EndInitialConditions",
+                *([
+                    ":InitialConditions SOIL[3]",
+                    "0.0",
+                    ":EndInitialConditions",
+                ] if self.subsurface_structure == 'gw_3_layer' else []),
             ]
         }
 
