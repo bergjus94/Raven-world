@@ -16,6 +16,7 @@ models:
 configurations:
   - gw_1_layer
   - gw_3_layer
+  - glacier_soil
 
 calibration:
   metrics: [KGE]

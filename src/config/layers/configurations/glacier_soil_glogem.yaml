@@ -1,0 +1,13 @@
+# Coupled GloGEM TSLA, ERA5, subdaily melt, glacier soil routing
+# MASKED_GLACIER HRUs get a real soil profile — GloGEM meltwater infiltrates
+# through proglacial soil before reaching reservoirs
+_config_key: 'glacier_soil_glogem'
+display_name: 'HBV Glacier Soil + GloGEM'
+color: '#98df8a'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+subsurface_structure: 'glacier_soil'
