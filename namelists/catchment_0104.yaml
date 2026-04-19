@@ -3,6 +3,7 @@
 # =============================================================================
 
 catchment: '0104'
+display_name: 'Kunhar @ Naran'
 
 start_date: '1980-01-01'
 end_date: '2008-12-31'
@@ -11,13 +12,16 @@ warm_up_date: '1978-01-01'
 
 models:
   - HBV
+  - HMETS
+  - HYMOD
+  - MOHYSE
 
 configurations:
   - subdaily
   - glogem_subdaily
 
 calibration:
-  metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]
+  metrics: [KGE, LogKGE]
   iterations: 5000
   ngs: 15
 
