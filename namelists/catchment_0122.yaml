@@ -14,9 +14,11 @@ models:
   - HBV
 
 configurations:
-  - gw_1_layer
-  - gw_3_layer
-  - glacier_soil
+  - glogem_subdaily
+  - gw_1_layer_glogem
+  - gw_3_layer_glogem
+  - glacier_soil_glogem
+  - glacier_gw_glogem
 
 calibration:
   metrics: [KGE]

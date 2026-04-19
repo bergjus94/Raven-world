@@ -1,0 +1,41 @@
+# =============================================================================
+# Catchment 0122 — Structure comparison SMOKE TEST
+# =============================================================================
+# Purpose: verify the full 5-structure x 2-metric calibration sweep runs clean
+# locally with 10 iterations before committing server time to the real run on
+# catchment 0102.
+#
+# Scope: 5 glogem-coupled subsurface structures x 2 metrics (KGE, KGE_WB)
+#        = 10 calibration jobs.
+#
+# Dry-run tip: pair with --skip-future to skip Phase C1 (future projections)
+# and shave ~15 min off the run:
+#   python run_full_pipeline.py namelists/catchment_0122_structure_test.yaml \
+#       --skip-future
+# =============================================================================
+
+catchment: '0122'
+display_name: 'Swat @ Kalam (structure test)'
+
+start_date: '1980-01-01'
+end_date:   '1985-12-31'
+cali_end_date: '1983-12-31'
+warm_up_date:  '1979-01-01'
+
+models:
+  - HBV
+
+configurations:
+  - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
+  - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
+  - gw_3_layer_glogem     # S2: fast + slow + deep GW
+  - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
+  - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW
+
+calibration:
+  metrics: [KGE, KGE_WB]
+  iterations: 10
+  ngs: 5
+
+future:
+  enabled: false
