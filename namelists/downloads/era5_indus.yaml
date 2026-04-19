@@ -14,7 +14,7 @@ end_date:   '2023-12-31'
 # Derive bbox from the Indus catchments shapefile (31 catchments covering the
 # 0100-series, including the northern and western outliers).
 # Server path:
-shape_path: '/home/jberg@giub.local/Raven_world/01_data/topo/catchment_shapefile/catchments_Indus/all_catchments.shp'
+shape_path: '/home/jberg@giub.local/Raven_world/01_data/topo/catchment_shapefile/all_catchments.shp'
 buffer_degrees: 0.1
 # Resulting bbox (after buffer): N=37.19, S=31.00, W=67.44, E=81.92
 
