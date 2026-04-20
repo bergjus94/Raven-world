@@ -75,6 +75,13 @@ class StreamflowProcessor:
         else:
             self.stream_file = Path(stream_dir)
 
+        # CSV format overrides for regions with non-standard streamflow files
+        # (e.g. CAMELS-CH uses ';' and column 'discharge_vol(m3/s)').  Defaults
+        # preserve the Indus convention: comma-separated, columns already named
+        # 'date' and 'Q_obs'.
+        self.stream_sep = config.get('stream_sep', ',')
+        self.stream_columns = config.get('stream_columns', {}) or {}
+
         # Centralized path construction
         paths = get_paths(config)
         self.output_path = paths['data_obs_dir']
@@ -334,8 +341,12 @@ class StreamflowProcessor:
         try:
             if not self.stream_file.exists():
                 raise FileNotFoundError(f"Streamflow file not found: {self.stream_file}")
-            
-            df_streamflow = pd.read_csv(self.stream_file)
+
+            df_streamflow = pd.read_csv(self.stream_file, sep=self.stream_sep)
+            if self.stream_columns:
+                # Invert mapping: {target: source} -> rename(source -> target)
+                rename_map = {src: tgt for tgt, src in self.stream_columns.items()}
+                df_streamflow = df_streamflow.rename(columns=rename_map)
             
             if self.debug:
                 print(f"📂 Loaded streamflow data with shape: {df_streamflow.shape}")

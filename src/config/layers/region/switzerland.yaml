@@ -1,0 +1,67 @@
+# =============================================================================
+# Region layer: Switzerland
+# =============================================================================
+# Overrides applied when a catchment sets `region: switzerland` in its
+# namelist. Loaded after the env (machine-paths) layer so these regional
+# defaults can differ from the Indus baseline.
+#
+# Note: main_dir/raven_executable come from the env layer — do NOT repeat
+# them here.
+# =============================================================================
+
+# --- Meteorological forcing ---
+meteo_source: 'MeteoSwiss'
+
+# MeteoSwiss does not provide PET — use Oudin formulation (derives PET from temperature)
+pet_method: 'OUDIN'
+
+# MeteoSwiss source files live under main_dir (resolved at runtime)
+meteoswiss_dir: '01_data/meteo/Switzerland'
+
+forcing_files:
+  - '01_data/meteo/Switzerland/RhiresD_v2.0_swiss.lv95_198101010000_202012310000_elev.nc'
+  - '01_data/meteo/Switzerland/TabsD_v2.0_swiss.lv95_198101010000_202012310000_elev.nc'
+  - '01_data/meteo/Switzerland/TmaxD_v2.0_swiss.lv95_198101010000_202012310000_elev.nc'
+  - '01_data/meteo/Switzerland/TminD_v2.0_swiss.lv95_198101010000_202012310000_elev.nc'
+
+# --- Topography (SRTM already in WGS84; DHM25 alternative is in EPSG:21781) ---
+raster_dir: '01_data/topo/Switzerland/SRTM_dem.tif'
+landuse_dir: '01_data/topo/Switzerland/landuse_50m.tif'
+
+# --- Glacier outlines (RGI region 11: Central Europe) ---
+glacier_dir: '01_data/topo/glacier_outlines/nsdic0770_11.rgi60.CentralEurope/11_rgi60_CentralEurope.shp'
+
+# --- GloGEM data (Switzerland basin; flat layout — no TSLA/ subfolder) ---
+# Files follow pattern:
+#   GloGEM_<component>_Switzerland_<model>_<scenario>.nc
+# where <model> is an RCM_GCM pair (e.g. SMHI-RCA_ECEARTH) and <scenario>
+# is ssp126/245/585. Only DMI-HIRHAM_ECEARTH, MPICSC-REMO[12]_MPIESM and
+# SMHI-RCA_ECEARTH ship ssp126 variants — pick any of them.
+basin_name: 'Switzerland'
+glogem_dir: '01_data/GloGEM/Switzerland'
+glogem_model: 'SMHI-RCA_ECEARTH'
+glogem_scenario: 'ssp126'
+
+# --- Streamflow: CAMELS-CH CSV format ---
+# File template: the catchment layer supplies the path template.
+# CAMELS-CH files use semicolon separator and 'discharge_vol(m3/s)' column.
+stream_dir: '01_data/streamflow/CAMELS_CH_obs_based_{gauge_id}.csv'
+stream_sep: ';'
+stream_columns:
+  date: 'date'
+  Q_obs: 'discharge_vol(m3/s)'
+
+# --- Warm-up strategy ---
+# MeteoSwiss starts 1981-01-01; CAMELS-CH streamflow starts 1981-01-01; GloGEM
+# Switzerland starts 1979-10-01. With sim_start ≥ 1991 all three support real
+# pre-simulation data for a 10-year warm-up. Defaulting to 'cycle' here so
+# short-record or short-sim catchments still work — override to 'real' in the
+# individual catchment namelist when you explicitly want observed warm-up.
+warmup:
+  method: 'cycle'
+  cycle_years: 10
+
+# --- Future projections: deferred (CH2018 handled separately) ---
+future: false
+future_projections:
+  enabled: false

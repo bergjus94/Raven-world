@@ -77,10 +77,13 @@ class HBVProcessor:
         self._pet_method = namelist.get('pet_method', None)
         self.author = namelist.get('author', 'Justine Berg')
 
-        # ✅ NEW: Meteorological data source (ERA5 or HAR)
+        # ✅ Meteorological data source (ERA5, HAR, or MeteoSwiss)
         self.meteo_source = namelist.get('meteo_source', 'ERA5').upper()
-        if self.meteo_source not in ['ERA5', 'HAR']:
-            raise ValueError(f"Invalid meteo_source: {self.meteo_source}. Must be 'ERA5' or 'HAR'")
+        if self.meteo_source not in ['ERA5', 'HAR', 'METEOSWISS']:
+            raise ValueError(
+                f"Invalid meteo_source: {self.meteo_source}. "
+                f"Must be 'ERA5', 'HAR', or 'MeteoSwiss'"
+            )
         print(f"Meteorological data source: {self.meteo_source}")
 
         # Subsurface structure
@@ -804,6 +807,9 @@ class HBVProcessor:
         if self.meteo_source == 'HAR':
             temp_filename = 'har_monthly_temperature_averages.csv'
             pet_filename = 'har_monthly_pet_averages.csv'
+        elif self.meteo_source == 'METEOSWISS':
+            temp_filename = 'meteoswiss_monthly_temperature_averages.csv'
+            pet_filename = 'meteoswiss_monthly_pet_averages.csv'  # not produced — triggers OUDIN fallback
         else:  # ERA5 (default)
             temp_filename = 'monthly_temperature_averages.csv'
             pet_filename = 'monthly_pet_averages.csv'
@@ -926,6 +932,25 @@ class HBVProcessor:
             dim_names = "west_east south_north time"
 
             print(f"📊 Using HAR meteorological data")
+
+        elif self.meteo_source == 'METEOSWISS':
+            # MeteoSwiss file names (written by MeteoSwissAnalyzer)
+            precip_file = 'prec_Meteoswiss.nc'
+            temp_mean_file = 'temp_Meteoswiss.nc'
+            temp_max_file = 'temp_max_Meteoswiss.nc'
+            temp_min_file = 'temp_min_Meteoswiss.nc'
+            grid_weights_file = f'{self._rel_topo}/GridWeights_MeteoSwiss.txt'
+
+            # MeteoSwiss variable names (native)
+            precip_var = 'RhiresD'
+            temp_var = 'TabsD'
+            temp_max_var = 'TmaxD'
+            temp_min_var = 'TminD'
+
+            # MeteoSwiss dimension names (regular N/E grid with 2-D lat/lon coords)
+            dim_names = "E N time"
+
+            print(f"📊 Using MeteoSwiss meteorological data")
 
         else:  # ERA5 (default)
             # ERA5-Land file names and configuration

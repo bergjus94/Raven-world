@@ -23,6 +23,8 @@ from preprocess_meteo import (
     GridWeightsGenerator,
     HARAnalyzer,
     HARGridWeightsGenerator,
+    MeteoSwissAnalyzer,
+    MeteoSwissGridWeightsGenerator,
     process_tphipr_precipitation,
 )
 from preprocess_catchment import (
@@ -124,20 +126,35 @@ def process_meteorological_data(namelist_path: str, meteo_source: str, debug: bo
         
     elif meteo_source_upper == 'HAR':
         print("🏔️ Processing HAR meteorological data...")
-        
+
         # Initialize HAR analyzer
         har_analyzer = HARAnalyzer(namelist_path)
         results['analyzer'] = har_analyzer
         results['source'] = 'HAR'
-        
+
         # Generate grid weights for HAR
         print("🧮 Generating HAR grid weights...")
         har_gw = HARGridWeightsGenerator(namelist_path)
         har_gw.generate()
         results['grid_weights'] = har_gw
-        
+
+    elif meteo_source_upper in ('METEOSWISS', 'METEO_SWISS'):
+        print("🇨🇭 Processing MeteoSwiss meteorological data...")
+
+        # Initialize MeteoSwiss analyzer
+        ms_analyzer = MeteoSwissAnalyzer(namelist_path)
+        ms_analyzer.process()
+        results['analyzer'] = ms_analyzer
+        results['source'] = 'MeteoSwiss'
+
+        # Generate grid weights for MeteoSwiss
+        print("🧮 Generating MeteoSwiss grid weights...")
+        ms_gw = MeteoSwissGridWeightsGenerator(namelist_path)
+        ms_gw.generate()
+        results['grid_weights'] = ms_gw
+
     else:
-        raise ValueError(f"Unknown meteo_source: {meteo_source}. Supported: 'ERA5Land', 'HAR'")
+        raise ValueError(f"Unknown meteo_source: {meteo_source}. Supported: 'ERA5Land', 'HAR', 'MeteoSwiss'")
     
     print(f"   ✅ Meteorological data processing completed ({results['source']})")
     

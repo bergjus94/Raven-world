@@ -1,0 +1,15 @@
+gauge_id: '2268'
+display_name: 'Rhone @ Gletsch'
+region: 'switzerland'
+
+# Data available 1981-2020; use a short window for the smoke test
+start_date: '2000-01-01'
+end_date: '2005-12-31'
+cali_end_date: '2003-12-31'
+warm_up_date: '1999-01-01'
+validation_start: '2003-12-31'
+validation_end: '2005-12-31'
+
+calibration:
+  cali_end_date: '2003-12-31'
+  vali_end_date: '2005-12-31'

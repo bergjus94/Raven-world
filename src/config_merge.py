@@ -1,7 +1,15 @@
 """
 Composable configuration system for Raven hydrological modeling.
 
-Merges YAML layer files in order: defaults <- env <- catchment <- configuration <- model <- overrides
+Merges YAML layer files in order:
+    defaults <- env <- catchment <- configuration <- region <- model <- overrides
+
+The optional `region` layer lets a geographic region (e.g. switzerland) swap
+bulk data-source settings without duplicating them in every catchment file.
+A catchment namelist opts in via `region: <name>`. The layer is applied
+after `configuration` so regional overrides (basin_name, glogem_dir, meteo
+paths, etc.) beat config-layer defaults that were originally written with
+the Indus basin in mind.
 Produces the same flat namelist dict that all downstream code expects.
 
 Usage:
@@ -150,11 +158,23 @@ def load_config(
     config_layer = _load_yaml(ld / 'configurations' / f'{configuration}.yaml')
     model_layer = _load_yaml(ld / 'models' / f'{model}.yaml')
 
-    # Merge in order: defaults <- env <- catchment <- configuration <- model
+    # Optional region layer — opted-in via `region: <name>` in the catchment
+    # layer (or an override). Applied after configuration so regional data
+    # sources (basin_name, glogem_dir, meteo_source) override config-layer
+    # defaults that assume the Indus basin.
+    region_name = catchment_layer.get('region') or (overrides or {}).get('region')
+    region_layer = {}
+    if region_name:
+        region_path = ld / 'region' / f'{region_name}.yaml'
+        if region_path.exists():
+            region_layer = _load_yaml(region_path)
+
+    # Merge in order: defaults <- env <- catchment <- configuration <- region <- model
     merged = defaults
     merged = deep_merge(merged, env_layer)
     merged = deep_merge(merged, catchment_layer)
     merged = deep_merge(merged, config_layer)
+    merged = deep_merge(merged, region_layer)
     merged = deep_merge(merged, model_layer)
 
     # Apply CLI overrides last
