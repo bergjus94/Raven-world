@@ -1355,6 +1355,10 @@ class RavenSCEUA(object):
                 "  :CustomOutput DAILY AVERAGE From:SOIL[1] BY_BASIN\n",
                 "  :CustomOutput DAILY AVERAGE From:SOIL[2] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE From:SOIL[2] BY_BASIN\n",
+                # SOIL[3] is only present in the 3-layer deep-GW structure (gw_3_layer_*);
+                # Raven emits a harmless warning when the compartment is absent.
+                "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_BASIN\n",
                 "  :WriteMassLoadings\n",
             ]
             
