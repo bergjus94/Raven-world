@@ -118,7 +118,7 @@ HBV:
       X18: 0.0
       X19: 0.05
       X20: 0.8
-      X21: 0.8
+      # X21 bounds omitted — tied to X20 via _get_tied_parameters (single-factor precip correction)
       X22: 0.0
       X23: 0.0003
       X24: 0.5                              # GlacROF lower: 50% fast runoff
@@ -143,7 +143,7 @@ HBV:
       X18: 2.0
       X19: 1.0
       X20: 1.5
-      X21: 1.5
+      # X21 bounds omitted — tied to X20 via _get_tied_parameters
       X22: 2.0                              # perc slow→deep: 0-2 mm/d
       X23: 0.005                            # deep baseflow: ~200d to ~9yr residence
       X24: 0.9                              # GlacROF upper: 90% fast runoff (SPHY range 0.5-0.9 per Lutz 2014)
