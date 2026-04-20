@@ -11,14 +11,14 @@ display_name: 'Shigar @ Shigar'
 
 start_date: '1985-01-01'
 end_date: '1997-12-31'
-cali_end_date: '1992-12-31'
+cali_end_date: '1991-12-31'
 warm_up_date: '1975-01-01'
 
 # 10-yr warm-up cycled from the first 10 yrs of simulation data (1985-1994),
-# each year used exactly once. Very short-record catchment (13 yr total), so
-# the cycle block covers the full calibration period (1985-1992) plus the
-# first 2 yrs of validation — harmless since warm-up outputs are not compared
-# against observations.
+# each year used exactly once. Very short-record catchment (13 yr total,
+# 7-yr cal 1985-1991 / 6-yr vali 1992-1997), so the cycle block covers the
+# full calibration period plus the first 3 yrs of validation — harmless
+# since warm-up outputs are not compared against observations.
 warmup:
   method: 'cycle'
   cycle_years: 10
