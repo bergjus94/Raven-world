@@ -227,9 +227,15 @@ class RavenSCEUA(object):
             # HBV tied parameters
             if 'HBV_T_Conc_Max_Bas' in params_dict:
                 tied_params['HBV_Time_To_Peak'] = params_dict['HBV_T_Conc_Max_Bas'] / 2.0
-            
+
             if 'HBV_Thickness_Topsoil' in params_dict:
                 tied_params['HBV_Initial_Thickness_Topsoil'] = params_dict['HBV_Thickness_Topsoil'] * 500.0
+
+            # Single-factor precipitation correction: tie snow_corr to rain_corr so
+            # one calibrated Cx is applied uniformly to both phases. Active whenever
+            # HBV_Rain_Corr is in the optimized set (i.e. precip_correction: true).
+            if 'HBV_Rain_Corr' in params_dict:
+                tied_params['HBV_Snow_Corr'] = params_dict['HBV_Rain_Corr']
 
         elif self.model_type == 'GR4J':
             # GR4J tied parameter
@@ -1180,13 +1186,20 @@ class RavenSCEUA(object):
             print("\n" + "="*50)
             print(f"Running final model with best parameter set (iteration {best_idx+1})")
             print("="*50)
-            
-            # SECOND: Modify the RVI file to add extended output options for final run
+
+            # Order matters here:
+            # 1) Write best params to all .rv* files (rebuilds RVI fresh from template)
+            # 2) Append extended output options to the now-fresh RVI
+            # 3) Run Raven WITHOUT passing params, so step 1 is not redone and the
+            #    extended-output RVI is preserved.
+            print("Writing best parameters to model files...")
+            self._write_parameters_to_file(best_params)
+
             print("Adding extended output options to RVI file for final run...")
             self._add_extended_output_options()
-            
-            # THIRD: Run the model with the modified RVI file
-            obj_value, vali_obj = self._run_model(best_params)  # Don't pass parameters again since files are already written
+
+            # Run with no args so _run_model skips _write_parameters_to_file
+            obj_value, vali_obj = self._run_model()
             
             print(f"Final run with best parameters:")
             print(f"  Calibration {self.obj_function}: {obj_value:.4f}")

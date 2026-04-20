@@ -88,8 +88,8 @@ HBV:
     X17: 0.25                            # Topsoil thickness
     X18: 0.4452843                      # Forest correction
     X19: 0.6771759                       # Glacier storage
-    X20: 1.141608                        # Rain correction
-    X21: 1.024278                        # Snow correction
+    X20: 1.0                             # Rain correction (single Cx; = 1.0 means no correction)
+    X21: 1.0                             # Snow correction (tied to X20 via _get_tied_parameters — never separately calibrated)
     X22: 1.0                             # Perc slow to deep
     X23: 0.001                           # Deep baseflow
     X24: 0.7                             # GlacROF: fast fraction of glacier melt (SPHY default, Lutz 2014)
@@ -159,8 +159,7 @@ HBV:
       X23: 'has_deep_reservoir'      # K3 — only with deep GW
       X24: 'has_glacier_split'       # GlacROF — only with glacier_routing='split_to_slow'
       X19: 'not_coupled'
-      X20: 'precip_correction'
-      X21: 'precip_correction'
+      X20: 'precip_correction'           # Single bulk Cx; X21 is tied to X20 (see spotpy_optimize._get_tied_parameters)
 
 HMETS:
   # HMETS (Hydrological Model - École de Technologie Supérieure) parameters
