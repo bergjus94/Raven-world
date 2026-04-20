@@ -1,6 +1,10 @@
 # =============================================================================
 # Catchment 0118 - Shigar @ Shigar
 # =============================================================================
+# Server production run: 5 glogem-coupled subsurface structures × 2 metrics
+# with ERA5-Land bulk precipitation correction. 10-yr cycled warm-up to
+# equilibrate deep GW storage (each year used once, no repetition).
+# =============================================================================
 
 catchment: '0118'
 display_name: 'Shigar @ Shigar'
@@ -8,19 +12,34 @@ display_name: 'Shigar @ Shigar'
 start_date: '1985-01-01'
 end_date: '1997-12-31'
 cali_end_date: '1992-12-31'
-warm_up_date: '1983-01-01'
+warm_up_date: '1975-01-01'
+
+# 10-yr warm-up cycled from the first 10 yrs of simulation data (1985-1994),
+# each year used exactly once. Very short-record catchment (13 yr total), so
+# the cycle block covers the full calibration period (1985-1992) plus the
+# first 2 yrs of validation — harmless since warm-up outputs are not compared
+# against observations.
+warmup:
+  method: 'cycle'
+  cycle_years: 10
+
+# ERA5-Land bulk precipitation correction on; snow_corr tied to rain_corr
+precip_correction: true
 
 models:
   - HBV
 
 configurations:
-  - subdaily
-  - glogem_subdaily
+  - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
+  - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
+  - gw_3_layer_glogem     # S2: fast + slow + deep GW
+  - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
+  - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW
 
 calibration:
-  metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]
-  iterations: 5000
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
   ngs: 15
 
 future:
-  enabled: true
+  enabled: false
