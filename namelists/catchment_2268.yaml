@@ -1,0 +1,46 @@
+# =============================================================================
+# Catchment 2268 - Rhone @ Gletsch (Switzerland)
+# =============================================================================
+# Server production run mirroring 0102: 5 glogem-coupled subsurface structures
+# × 2 metrics. MeteoSwiss forcing via region: switzerland (MeteoSwiss +
+# CAMELS-CH streamflow + RGI-11 glaciers). 10-yr real warm-up, 11-yr
+# calibration, 10-yr validation. Future projections deferred (CH2018 path
+# not yet integrated).
+# =============================================================================
+
+catchment: '2268'
+display_name: 'Rhone @ Gletsch'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+# Use real pre-simulation data for warm-up — MeteoSwiss/CAMELS-CH/GloGEM
+# all cover 1981+ so 1990-1999 is available as observed forcing.
+warmup:
+  method: 'real'
+
+# Apply single-factor precipitation correction for consistency with the Indus
+# runs. MeteoSwiss is gauge-adjusted so expect Cx close to 1.0, but leave it
+# free to let the calibration decide.
+precip_correction: true
+
+models:
+  - HBV
+
+configurations:
+  - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
+  - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
+  - gw_3_layer_glogem     # S2: fast + slow + deep GW
+  - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile
+  - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW
+
+calibration:
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
+  ngs: 15
+
+future:
+  enabled: false
