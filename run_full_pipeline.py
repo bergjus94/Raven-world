@@ -708,7 +708,7 @@ def _run_multi_config(catchment_nml, args):
     # Extract overrides from the catchment namelist
     overrides = {}
     for key in ('start_date', 'end_date', 'cali_end_date', 'warm_up_date',
-                'display_name', 'gauge_id'):
+                'display_name', 'gauge_id', 'warmup'):
         if key in catchment_nml:
             overrides[key] = catchment_nml[key]
     if 'calibration' in catchment_nml:

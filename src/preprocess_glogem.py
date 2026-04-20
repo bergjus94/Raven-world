@@ -77,7 +77,20 @@ class GloGEMProcessor:
             self.warm_up_date = config['warm_up_date']
         else:
             self.warm_up_date = None
-        
+
+        # Warm-up strategy (shared with meteo preprocessors; see defaults.yaml)
+        warmup_cfg = config.get('warmup') or {}
+        self.warmup_method = warmup_cfg.get('method', 'cycle')
+        self.warmup_cycle_years = int(warmup_cfg.get('cycle_years', 1))
+        if self.warmup_method not in ('cycle', 'real'):
+            raise ValueError(
+                f"warmup.method must be 'cycle' or 'real', got '{self.warmup_method}'"
+            )
+        if self.warmup_cycle_years < 1:
+            raise ValueError(
+                f"warmup.cycle_years must be >= 1, got {self.warmup_cycle_years}"
+            )
+
         self.debug = config.get('debug', False)
 
         self.irrigation_variable = config.get('irrigation_variable', 'discharge').lower()
@@ -747,22 +760,40 @@ class GloGEMProcessor:
         else:
             start_date_for_file = pd.to_datetime(self.start_date)
             simulation_start = None
-        
+
         end_date_for_file = pd.to_datetime(self.end_date)
         sim_start = pd.to_datetime(self.start_date)
-        
+
+        # Data-loading start: for method='real' read from warmup_date to
+        # ingest real pre-simulation data; for method='cycle' read only
+        # the simulation period (synthesis prepended below).
+        if (self.warmup_method == 'real'
+                and hasattr(self, 'warm_up_date')
+                and self.warm_up_date is not None):
+            data_load_start = pd.to_datetime(self.warm_up_date)
+            # Validate: record must reach warm_up_date for 'real' to succeed
+            if all_nc_times[0] > data_load_start:
+                raise ValueError(
+                    f"warmup.method='real' but GloGEM record starts "
+                    f"{pd.Timestamp(all_nc_times[0]).date()}, after warm_up_date "
+                    f"{data_load_start.date()}. Extend the GloGEM data or "
+                    f"set warmup.method='cycle'."
+                )
+        else:
+            data_load_start = sim_start
+
         # ✅ Create boolean masks for time and glacier filtering
-        time_mask = (all_nc_times >= sim_start) & (all_nc_times <= end_date_for_file)
+        time_mask = (all_nc_times >= data_load_start) & (all_nc_times <= end_date_for_file)
         glacier_mask = np.isin(all_glacier_ids, matching_glaciers)
-        
+
         # Get indices for subsetting
         time_indices = np.where(time_mask)[0]
         glacier_indices = np.where(glacier_mask)[0]
-        
-        self.logger.info(f"Selecting simulation period: {sim_start.date()} to {end_date_for_file.date()}")
+
+        self.logger.info(f"Selecting period: {data_load_start.date()} to {end_date_for_file.date()}")
         self.logger.info(f"Time steps in range: {len(time_indices)}")
         self.logger.info(f"Glaciers to extract: {len(glacier_indices)}")
-        
+
         if len(time_indices) == 0:
             self.logger.error("No time steps found in the specified date range!")
             ds_glogem.close()
@@ -912,62 +943,86 @@ class GloGEMProcessor:
         # Clean up
         del discharge_data
         
-        # ✅ Handle warm-up period by repeating first year
-        if simulation_start is not None:
-            self.logger.info("Processing warm-up period...")
-            
-            # Find first year of simulation data in result_sim
-            first_year_end = simulation_start + pd.DateOffset(years=1) - pd.Timedelta(days=1)
-            if first_year_end > end_date_for_file:
-                first_year_end = end_date_for_file
-            
-            # ✅ FIX: Convert to numpy datetime64 for comparison
+        # ✅ Handle warm-up period
+        # - method='real': result_sim already spans [warm_up_date, end_date]; skip synthesis
+        # - method='cycle': tile first `cycle_years` years of simulation data forward
+        if simulation_start is not None and self.warmup_method == 'real':
+            self.logger.info(
+                "warmup.method='real' — result_sim already contains real pre-simulation data, "
+                "no synthesis needed"
+            )
+            result_array = result_sim
+            full_times = pd.DatetimeIndex(sim_times)
+        elif simulation_start is not None:
+            self.logger.info(
+                f"Processing warm-up period "
+                f"(method='cycle', cycle_years={self.warmup_cycle_years})..."
+            )
+
+            # Cycle block: first `cycle_years` years of simulation data
+            cycle_block_end = (
+                simulation_start
+                + pd.DateOffset(years=self.warmup_cycle_years)
+                - pd.Timedelta(days=1)
+            )
+            if cycle_block_end > end_date_for_file:
+                cycle_block_end = end_date_for_file
+
             sim_times_np = sim_times.values if hasattr(sim_times, 'values') else np.array(sim_times)
+            cycle_block_end_np = np.datetime64(cycle_block_end)
             simulation_start_np = np.datetime64(simulation_start)
-            first_year_end_np = np.datetime64(first_year_end)
-            
-            # Find indices for first year
-            first_year_mask = (sim_times_np >= simulation_start_np) & (sim_times_np <= first_year_end_np)
-            first_year_indices = np.where(first_year_mask)[0]
-            
-            self.logger.info(f"Looking for first year: {simulation_start.date()} to {first_year_end.date()}")
-            self.logger.info(f"Found {len(first_year_indices)} days in first year")
-            
-            if len(first_year_indices) == 0:
-                self.logger.warning("No data found for first year of simulation!")
-                self.logger.warning(f"Available: {sim_times[0].date()} to {sim_times[-1].date()}")
-                # Use first 365 days of available data
-                first_year_indices = np.arange(min(365, len(sim_times)))
-                self.logger.warning(f"Using first {len(first_year_indices)} days instead")
-            
-            first_year_data = result_sim[first_year_indices, :]
-            
-            self.logger.info(f"First year data shape: {first_year_data.shape}")
-            
-            # Calculate how many days needed for warm-up
+
+            cycle_mask = (sim_times_np >= simulation_start_np) & (sim_times_np <= cycle_block_end_np)
+            cycle_indices = np.where(cycle_mask)[0]
+
+            self.logger.info(
+                f"Cycle block: {simulation_start.date()} to {cycle_block_end.date()} "
+                f"({len(cycle_indices)} days)"
+            )
+
+            # Validate cycle block has enough data (≥95% of expected)
+            expected_block_days = (cycle_block_end - simulation_start).days + 1
+            if len(cycle_indices) < 0.95 * expected_block_days:
+                raise ValueError(
+                    f"warmup.cycle_years={self.warmup_cycle_years} requires "
+                    f"{expected_block_days} days in the first {self.warmup_cycle_years} "
+                    f"simulation year(s) of GloGEM but only {len(cycle_indices)} are "
+                    f"available. Reduce cycle_years or extend the simulation end date."
+                )
+
+            if len(cycle_indices) == 0:
+                self.logger.warning("No data found for cycle block — falling back to first 365 days")
+                cycle_indices = np.arange(min(365, len(sim_times)))
+
+            cycle_block_data = result_sim[cycle_indices, :]
+            block_days = len(cycle_block_data)
             warmup_days = (simulation_start - start_date_for_file).days
-            
+
             if warmup_days > 0:
-                n_repetitions = max(1, int(np.ceil(warmup_days / len(first_year_data))))
-                
-                self.logger.info(f"Warm-up days needed: {warmup_days}, repeating first year {n_repetitions} time(s)")
-                
-                # ✅ OPTIMIZED: Create warm-up data using numpy tile
-                warmup_data = np.tile(first_year_data, (n_repetitions, 1))
-                
-                # Trim to exact warm-up length
-                warmup_data = warmup_data[:warmup_days, :]
-                
-                # Create warm-up time array
+                n_repetitions = max(1, int(np.ceil(warmup_days / block_days)))
+                self.logger.info(
+                    f"Warm-up days needed: {warmup_days}, tiling cycle block "
+                    f"{n_repetitions} time(s)"
+                )
+
+                # Tile the block to fill warm-up
+                warmup_data = np.tile(cycle_block_data, (n_repetitions, 1))
+                warmup_data = warmup_data[:warmup_days, :]  # trim to exact length
+
                 warmup_times = pd.date_range(start=start_date_for_file, periods=warmup_days, freq='D')
-                
-                self.logger.info(f"Warm-up data: {warmup_times[0].date()} to {warmup_times[-1].date()} ({len(warmup_data)} days)")
-                
-                # ✅ OPTIMIZED: Concatenate using numpy
+
+                self.logger.info(
+                    f"Warm-up data: {warmup_times[0].date()} to {warmup_times[-1].date()} "
+                    f"({len(warmup_data)} days)"
+                )
+
                 result_array = np.vstack([warmup_data, result_sim])
                 full_times = warmup_times.append(pd.DatetimeIndex(sim_times))
-                
-                self.logger.info(f"Combined data: {full_times[0].date()} to {full_times[-1].date()} ({len(result_array)} days)")
+
+                self.logger.info(
+                    f"Combined data: {full_times[0].date()} to {full_times[-1].date()} "
+                    f"({len(result_array)} days)"
+                )
             else:
                 result_array = result_sim
                 full_times = pd.DatetimeIndex(sim_times)
@@ -1022,16 +1077,18 @@ class GloGEMProcessor:
             'n_hrus': num_hrus,
         })
         
-        if simulation_start is not None and warmup_days > 0:
-            ds.attrs.update({
+        if simulation_start is not None:
+            meta = {
                 'warmup_included': 'true',
                 'warmup_start': str(start_date_for_file.date()),
                 'warmup_end': str((simulation_start - pd.Timedelta(days=1)).date()),
                 'simulation_start': str(simulation_start.date()),
                 'simulation_end': str(end_date_for_file.date()),
-                'warmup_method': 'repeat_first_year',
-                'warmup_repetitions': n_repetitions
-            })
+                'warmup_method': self.warmup_method,
+            }
+            if self.warmup_method == 'cycle':
+                meta['warmup_cycle_years'] = self.warmup_cycle_years
+            ds.attrs.update(meta)
         
         # Save
         self.logger.info(f"Saving to {output_path}...")

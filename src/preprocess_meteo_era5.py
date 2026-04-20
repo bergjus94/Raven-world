@@ -482,12 +482,15 @@ class ERA5LandAnalyzer(MeteoBase):
             return dataset
         
         try:
-            # Warm-up will be added later
-            start_date_str = self.start_date.strftime('%Y-%m-%d')
+            # For method='real' clip from warm_up_date to ingest pre-simulation
+            # data; for method='cycle' clip from start_date and let the base
+            # class synthesize warm-up from simulation data.
+            effective_start = self._effective_start_date()
+            start_date_str = effective_start.strftime('%Y-%m-%d')
             end_date_str = self.end_date.strftime('%Y-%m-%d')
-            
-            self.logger.debug(f"Filtering to simulation period: {start_date_str} to {end_date_str}")
-            
+
+            self.logger.debug(f"Filtering to period: {start_date_str} to {end_date_str}")
+
             # Filter to date range
             filtered_ds = dataset.sel(time=slice(start_date_str, end_date_str))
             

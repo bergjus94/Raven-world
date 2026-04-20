@@ -127,8 +127,40 @@ class MeteoBase:
             self.warmup_date = None
             self.logger.debug("No warm-up period configured")
 
+        # Warm-up strategy (see defaults.yaml docstring)
+        warmup_cfg = self.config.get('warmup') or {}
+        self.warmup_method = warmup_cfg.get('method', 'cycle')
+        self.warmup_cycle_years = int(warmup_cfg.get('cycle_years', 1))
+        if self.warmup_method not in ('cycle', 'real'):
+            raise ValueError(
+                f"warmup.method must be 'cycle' or 'real', got '{self.warmup_method}'"
+            )
+        if self.warmup_cycle_years < 1:
+            raise ValueError(
+                f"warmup.cycle_years must be >= 1, got {self.warmup_cycle_years}"
+            )
+        if self.warmup_date is not None:
+            self.logger.info(
+                f"Warm-up method: {self.warmup_method}"
+                f"{f' (cycle_years={self.warmup_cycle_years})' if self.warmup_method == 'cycle' else ''}"
+            )
+
         # Load catchment shapefile for spatial clipping
         self.catchment_extent = self._load_catchment_shapefile()
+
+    #---------------------------------------------------------------------------------
+
+    def _effective_start_date(self) -> pd.Timestamp:
+        """
+        Date from which source data should be clipped.
+
+        Returns `warm_up_date` for `method='real'` (so analyzers can ingest
+        pre-simulation data), otherwise `start_date` (synthetic warm-up will
+        be prepended later by `_add_warmup_to_files`).
+        """
+        if self.warmup_method == 'real' and self.warmup_date is not None:
+            return self.warmup_date
+        return self.start_date
 
     #---------------------------------------------------------------------------------
 
@@ -203,30 +235,52 @@ class MeteoBase:
 
     def _add_warmup_to_files(self, file_list: List[Path]) -> List[Path]:
         """
-        Add warm-up period to processed HAR meteorological files by repeating the first year
-        ✅ FIXED: Properly handles elevation (keeps it 2D, time-invariant)
-        ✅ FIXED: Uses temporary file to avoid permission errors
-        ✅ FIXED: Ensures no duplicate timestamps at warm-up/simulation boundary
-        
+        Prepend warm-up period to processed meteorological files.
+
+        Strategy controlled by `warmup.method` in the namelist:
+          * 'real'  — require the file to already contain data back to
+            `warm_up_date`. If not, raise an error (user asked for real
+            data, pipeline refuses to silently synthesize).
+          * 'cycle' — tile the first `warmup.cycle_years` years of
+            simulation data forward (C1 direction) to fill the warm-up
+            window. cycle_years=1 reproduces the legacy "repeat first
+            year" behavior bit-for-bit.
+
+        Preserves:
+          - Elevation as 2D time-invariant
+          - Temp-file atomic write
+          - Duplicate / non-consecutive time step detection
+
         Parameters
         ----------
         file_list : List[Path]
             List of processed daily NetCDF files
-            
+
         Returns
         -------
         List[Path]
-            List of files with warm-up period included
+            List of files with warm-up period included (or unchanged for
+            'real' mode when files already cover the warm-up window).
         """
         self.logger.info("Adding warm-up period to meteorological files...")
-        
-        # Calculate how many years of warm-up we need
-        years_diff = (self.start_date - self.warmup_date).days / 365.25
-        n_repetitions = max(1, int(np.ceil(years_diff)))
-        
+
+        # Cycle-block length in days. The first cycle_years of simulation
+        # data is tiled forward to fill the warm-up window.
+        cycle_block_end = (
+            self.start_date
+            + pd.DateOffset(years=self.warmup_cycle_years)
+            - pd.Timedelta(days=1)
+        )
+        if cycle_block_end > self.end_date:
+            cycle_block_end = self.end_date
+
+        # How much warm-up data we need
+        warmup_days_needed = (self.start_date - self.warmup_date).days
+
         self.logger.info(f"📅 Warm-up configuration:")
         self.logger.info(f"   Period: {self.warmup_date.date()} to {(self.start_date - pd.Timedelta(days=1)).date()}")
-        self.logger.info(f"   Repetitions: {n_repetitions} year(s)")
+        self.logger.info(f"   Method: {self.warmup_method}"
+                         f"{f' (cycle_years={self.warmup_cycle_years})' if self.warmup_method == 'cycle' else ''}")
         
         updated_files = []
         
@@ -305,87 +359,129 @@ class MeteoBase:
                     self.logger.warning(f"⚠️ Original data has {original_duplicates.sum()} duplicate timestamps - removing them")
                     ds = ds.isel(time=~original_duplicates)  # in-memory operation, instant
 
-                # Extract first year of simulation data (NOW without elevation)
-                first_year_end = self.start_date + pd.DateOffset(years=1) - pd.Timedelta(days=1)
-                
-                # Make sure we don't go beyond the end date
-                if first_year_end > self.end_date:
-                    first_year_end = self.end_date
-                    self.logger.warning(f"First year extends beyond end_date for {file_path.name}")
-                
-                # Get first year of data (WITHOUT elevation)
-                first_year = ds.sel(time=slice(self.start_date, first_year_end))
-                
-                self.logger.debug(f"  First year: {first_year.time.min().values} to {first_year.time.max().values}")
-                self.logger.debug(f"  Days: {len(first_year.time)}")
-                
-                # Repeat the first year n times
-                repeated_datasets = []
-                current_time = pd.to_datetime(self.warmup_date)
-                
-                for i in range(n_repetitions):
-                    # Create a copy with adjusted time coordinates
-                    year_copy = first_year.copy(deep=True)
-                    
-                    # Calculate new time coordinates
-                    time_deltas = first_year.time - first_year.time.values[0]
-                    new_times = current_time + time_deltas
-                    
-                    # Update time coordinate
-                    year_copy['time'] = new_times
-                    repeated_datasets.append(year_copy)
-                    
-                    # Move to next year
-                    current_time = new_times.values[-1] + pd.Timedelta(days=1)
-                    
-                    self.logger.debug(f"  Repetition {i+1}: {new_times.values[0]} to {new_times.values[-1]}")
-                
-                # ✅ CONCATENATE ONLY METEOROLOGICAL DATA (no elevation in either dataset)
-                warmup_data = xr.concat(repeated_datasets, dim='time')
-                
-                # ✅ FIX: Trim warm-up to EXACTLY end one day before simulation start
-                # This ensures no overlap!
-                warmup_end = self.start_date - pd.Timedelta(days=1)
-                warmup_data = warmup_data.sel(time=slice(self.warmup_date, warmup_end))
-                
-                self.logger.info(f"  Warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values} ({len(warmup_data.time)} days)")
-                
-                # ✅ FIX: Verify no overlap before concatenation
-                warmup_last_time = pd.to_datetime(warmup_data.time.values[-1])
-                sim_first_time = pd.to_datetime(ds.time.values[0])
-                
-                self.logger.debug(f"  Last warm-up time: {warmup_last_time}")
-                self.logger.debug(f"  First simulation time: {sim_first_time}")
-                
-                if warmup_last_time >= sim_first_time:
-                    self.logger.warning(f"⚠️ Overlap detected! Trimming warm-up to avoid duplicate")
-                    # Remove the last timestamp from warm-up if it overlaps
-                    warmup_data = warmup_data.isel(time=slice(None, -1))
-                    self.logger.info(f"  Trimmed warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values}")
-                
-                # Cache lengths before closing (used in metadata below)
-                n_warmup_days = len(warmup_data.time)
-                n_sim_days = len(ds.time)
+                # Check whether the file already covers the warm-up window
+                # (either from method='real' with real pre-sim data or from a
+                # source file that naturally extends back far enough).
+                file_first_time = pd.Timestamp(ds.time.values[0])
+                covers_warmup = file_first_time <= self.warmup_date
 
-                # ✅ CONCATENATE (both datasets have NO elevation now)
-                combined = xr.concat([warmup_data, ds], dim='time')
-                combined = combined.sortby('time')
+                if self.warmup_method == 'real':
+                    if not covers_warmup:
+                        raise ValueError(
+                            f"warmup.method='real' but {file_path.name} starts "
+                            f"{file_first_time.date()}, after warm_up_date "
+                            f"{self.warmup_date.date()}. Extend the forcing record "
+                            f"or set warmup.method='cycle'."
+                        )
+                    # Real data already present — no synthesis needed
+                    self.logger.info(
+                        f"  ✅ File already covers warm-up window "
+                        f"({file_first_time.date()} ≤ {self.warmup_date.date()}) — no synthesis needed"
+                    )
+                    # Still need to re-attach elevation metadata and save
+                    n_warmup_days = int(((self.start_date - self.warmup_date).days))
+                    n_sim_days = len(ds.time) - n_warmup_days
+                    combined = ds
+                else:
+                    # method == 'cycle': tile first cycle_years years of sim data
+                    cycle_block = ds.sel(time=slice(self.start_date, cycle_block_end))
+                    block_days = len(cycle_block.time)
 
-                # Load into memory immediately — BEFORE any .time.values access and
-                # before closing ds.  On a network FS, lazy evaluation of xr.concat
-                # (which includes a boolean-indexed ds) hangs on the first .values call.
-                combined = combined.load()
-                ds.close()
-                warmup_data.close()
+                    if block_days == 0:
+                        raise ValueError(
+                            f"Cycle block empty for {file_path.name}: no data in "
+                            f"[{self.start_date.date()}, {cycle_block_end.date()}]"
+                        )
 
-                # Check for duplicates (all in-memory now — fast)
-                combined_times = pd.to_datetime(combined.time.values)
-                duplicates = combined_times.duplicated()
-                if duplicates.any():
-                    self.logger.warning(f"⚠️ Found {duplicates.sum()} duplicate timestamps after concatenation - removing them")
-                    combined = combined.isel(time=~duplicates)
+                    expected_block_days = (cycle_block_end - self.start_date).days + 1
+                    # Allow some slack for calendar edge cases but refuse if we
+                    # lost more than a few % — that indicates the user asked for
+                    # more cycle_years than the simulation record actually has.
+                    if block_days < 0.95 * expected_block_days:
+                        raise ValueError(
+                            f"warmup.cycle_years={self.warmup_cycle_years} requires "
+                            f"{expected_block_days} days in the first {self.warmup_cycle_years} "
+                            f"simulation year(s) but only {block_days} are available in "
+                            f"{file_path.name}. Reduce cycle_years or extend the "
+                            f"simulation end date."
+                        )
 
-                self.logger.info(f"  Combined: {combined.time.min().values} to {combined.time.max().values} ({len(combined.time)} days)")
+                    n_repetitions = max(1, int(np.ceil(warmup_days_needed / block_days)))
+                    self.logger.debug(
+                        f"  Cycle block: {cycle_block.time.min().values} to "
+                        f"{cycle_block.time.max().values} ({block_days} days)"
+                    )
+                    self.logger.debug(f"  Repetitions: {n_repetitions}")
+
+                    # Tile the block forward, time-shifted to start at warmup_date
+                    repeated_datasets = []
+                    current_time = pd.to_datetime(self.warmup_date)
+
+                    for i in range(n_repetitions):
+                        block_copy = cycle_block.copy(deep=True)
+                        time_deltas = cycle_block.time - cycle_block.time.values[0]
+                        new_times = current_time + time_deltas
+                        block_copy['time'] = new_times
+                        repeated_datasets.append(block_copy)
+                        current_time = new_times.values[-1] + pd.Timedelta(days=1)
+                        self.logger.debug(
+                            f"  Repetition {i+1}: {new_times.values[0]} to {new_times.values[-1]}"
+                        )
+
+                    # ✅ CONCATENATE ONLY METEOROLOGICAL DATA (no elevation in either dataset)
+                    warmup_data = xr.concat(repeated_datasets, dim='time')
+
+                    # ✅ FIX: Trim warm-up to EXACTLY end one day before simulation start
+                    # This ensures no overlap!
+                    warmup_end_trim = self.start_date - pd.Timedelta(days=1)
+                    warmup_data = warmup_data.sel(time=slice(self.warmup_date, warmup_end_trim))
+
+                    self.logger.info(f"  Warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values} ({len(warmup_data.time)} days)")
+
+                    # ✅ FIX: Verify no overlap before concatenation
+                    warmup_last_time = pd.to_datetime(warmup_data.time.values[-1])
+                    sim_first_time = pd.to_datetime(ds.time.values[0])
+                    self.logger.debug(f"  Last warm-up time: {warmup_last_time}")
+                    self.logger.debug(f"  First simulation time: {sim_first_time}")
+
+                    if warmup_last_time >= sim_first_time:
+                        self.logger.warning(f"⚠️ Overlap detected! Trimming warm-up to avoid duplicate")
+                        warmup_data = warmup_data.isel(time=slice(None, -1))
+                        self.logger.info(f"  Trimmed warm-up: {warmup_data.time.min().values} to {warmup_data.time.max().values}")
+
+                    # Cache lengths before closing (used in metadata below)
+                    n_warmup_days = len(warmup_data.time)
+                    n_sim_days = len(ds.time)
+
+                    # ✅ CONCATENATE (both datasets have NO elevation now)
+                    combined = xr.concat([warmup_data, ds], dim='time')
+                    combined = combined.sortby('time')
+
+                    # Load into memory immediately — BEFORE any .time.values access and
+                    # before closing ds.  On a network FS, lazy evaluation of xr.concat
+                    # (which includes a boolean-indexed ds) hangs on the first .values call.
+                    combined = combined.load()
+                    ds.close()
+                    warmup_data.close()
+
+                    # Check for duplicates (all in-memory now — fast)
+                    combined_times = pd.to_datetime(combined.time.values)
+                    duplicates = combined_times.duplicated()
+                    if duplicates.any():
+                        self.logger.warning(f"⚠️ Found {duplicates.sum()} duplicate timestamps after concatenation - removing them")
+                        combined = combined.isel(time=~duplicates)
+
+                    self.logger.info(f"  Combined: {combined.time.min().values} to {combined.time.max().values} ({len(combined.time)} days)")
+
+                # For 'real' mode, load the combined dataset (which is just ds)
+                # into memory so subsequent .time.values access is fast.
+                if self.warmup_method == 'real':
+                    combined = combined.load()
+                    ds.close()
+                    self.logger.info(
+                        f"  Data range: {combined.time.min().values} to "
+                        f"{combined.time.max().values} ({len(combined.time)} days)"
+                    )
 
                 # Check for consecutive time steps
                 time_diffs = np.diff(combined.time.values).astype('timedelta64[D]').astype(int)
@@ -411,19 +507,22 @@ class MeteoBase:
                         self.logger.debug(f"  ✅ Elevation correctly added: shape={combined['elevation'].shape}, dims={combined['elevation'].dims}")
 
                 # Update metadata
-                combined.attrs.update({
+                meta = {
                     'warmup_included': 'true',
                     'warmup_start': str(self.warmup_date.date()),
-                    'warmup_end': str(warmup_end.date()),
+                    'warmup_end': str((self.start_date - pd.Timedelta(days=1)).date()),
                     'warmup_days': n_warmup_days,
                     'simulation_start': str(self.start_date.date()),
                     'simulation_end': str(self.end_date.date()),
                     'simulation_days': n_sim_days,
-                    'warmup_method': 'repeat_first_year',
-                    'warmup_repetitions': n_repetitions,
+                    'warmup_method': self.warmup_method,
                     'total_days': len(combined.time),
-                    'elevation_included': 'true' if has_elevation else 'false'
-                })
+                    'elevation_included': 'true' if has_elevation else 'false',
+                }
+                if self.warmup_method == 'cycle':
+                    meta['warmup_cycle_years'] = self.warmup_cycle_years
+                    meta['warmup_repetitions'] = n_repetitions
+                combined.attrs.update(meta)
 
                 # ✅ NEW: Save to temporary file first, then replace original
                 import shutil

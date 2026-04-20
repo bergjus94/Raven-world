@@ -125,9 +125,11 @@ class TPHiPrAnalyzer(MeteoBase):
                 f"Clipped to catchment: lat [{miny:.3f}, {maxy:.3f}], lon [{minx:.3f}, {maxx:.3f}]"
             )
 
-        # Filter to simulation (+ warm-up) date range
+        # Filter to simulation (+ warm-up) date range.
+        # Effective start: warm_up_date for 'real' mode, start_date for
+        # 'cycle' mode (base class synthesizes warm-up from year 1).
         # Note: TPHiPr may not cover the full requested range; clip to available data.
-        start_filter = self.warmup_date if self.warmup_date is not None else self.start_date
+        start_filter = self._effective_start_date()
         ds = ds.sel(time=slice(start_filter, self.end_date))
         self.logger.info(
             f"Time range: {ds.time.values[0]} – {ds.time.values[-1]}"

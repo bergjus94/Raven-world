@@ -461,17 +461,16 @@ class HARAnalyzer(MeteoBase):
             return dataset
         
         try:
-            # Use warm-up date if available, otherwise start_date
-            if self.warmup_date is not None:
-                filter_start = self.warmup_date
-            else:
-                filter_start = self.start_date
-            
+            # Effective start date: warm_up_date for 'real' mode, start_date
+            # for 'cycle' mode (so cycle mode can synthesize warm-up from year
+            # 1 and avoid duplicates with pre-sim HAR years that overlap).
+            filter_start = self._effective_start_date()
+
             start_date_str = filter_start.strftime('%Y-%m-%d')
             end_date_str = self.end_date.strftime('%Y-%m-%d')
-            
+
             self.logger.debug(f"Filtering to period: {start_date_str} to {end_date_str}")
-            
+
             # Filter to date range
             filtered_ds = dataset.sel(time=slice(start_date_str, end_date_str))
             

@@ -27,6 +27,17 @@ glacier_routing: false
 # --- Meteorological forcing default ---
 meteo_source: 'ERA5'
 
+# --- Warm-up strategy (shared by meteo + GloGEM preprocessors) ---
+# method:
+#   'cycle' — tile the first `cycle_years` years of simulation data forward
+#             to fill the warm-up window. cycle_years=1 reproduces the
+#             legacy "repeat first year" behavior.
+#   'real'  — use actual pre-simulation data. Hard error if the forcing
+#             record does not extend back to `warm_up_date`.
+warmup:
+  method: 'cycle'
+  cycle_years: 1
+
 # --- Climate projections ---
 future: false
 
