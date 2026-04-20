@@ -1,0 +1,33 @@
+# =============================================================================
+# Catchment 2268 — Rhone @ Gletsch (Switzerland) SMOKE TEST
+# =============================================================================
+# Purpose: end-to-end validation of the MeteoSwiss integration on a small
+# Swiss catchment (39 km² upstream of Gletsch gauge). Runs the subdaily HBV
+# configuration uncoupled — glacier-coupled (CH2018) is a separate task.
+# =============================================================================
+
+catchment: '2268'
+display_name: 'Rhone @ Gletsch'
+region: 'switzerland'
+
+start_date: '1991-01-01'
+end_date: '2005-12-31'
+cali_end_date: '2000-12-31'
+warm_up_date: '1981-01-01'
+# Swiss region layer defaults warmup.method='cycle', cycle_years=10.
+# Simulation is 15 yr (1991-2005); cycle block is first 10 yr (1991-2000).
+
+models:
+  - HBV
+
+configurations:
+  - subdaily                # uncoupled baseline
+  - glogem_subdaily         # S1: coupled, 3-layer standard HBV
+
+calibration:
+  metrics: [KGE]
+  iterations: 10
+  ngs: 5
+
+future:
+  enabled: false

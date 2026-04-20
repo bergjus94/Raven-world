@@ -1,0 +1,37 @@
+# =============================================================================
+# Catchment 2256 — Rosegbach @ Pontresina (Switzerland)
+# =============================================================================
+# Overnight calibration: 5 glogem-coupled subsurface structures × 2 metrics
+# (KGE + KGE_WB) = 10 calibration jobs with 3000 iterations each.
+# =============================================================================
+
+catchment: '2256'
+display_name: 'Rosegbach @ Pontresina'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+# Use real pre-simulation data for warm-up (defensible in paper)
+warmup:
+  method: 'real'
+
+models:
+  - HBV
+
+configurations:
+  - glogem_subdaily         # S1: 3-layer standard HBV (baseline)
+  - gw_1_layer_glogem       # S0: single reservoir
+  - gw_3_layer_glogem       # S2: fast + slow + deep GW
+  - glacier_soil_glogem     # S3: MASKED_GLACIER with soil profile
+  - glacier_gw_glogem       # S5: SPHY-style glacier-gw split
+
+calibration:
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
+  ngs: 15
+
+future:
+  enabled: false
