@@ -1,6 +1,11 @@
 # =============================================================================
 # Catchment 0101 - Chandra @ Tandi
 # =============================================================================
+# Server production run: 5 glogem-coupled subsurface structures × 2 metrics
+# with ERA5-Land bulk precipitation correction. 10-yr warm-up achieved by
+# tiling the short 6.5-yr sim block (2016-06-22 to 2022-12-31) ~1.67× —
+# some year repetition is unavoidable given the short record.
+# =============================================================================
 
 catchment: '0101'
 display_name: 'Chandra @ Tandi'
@@ -8,22 +13,32 @@ display_name: 'Chandra @ Tandi'
 start_date: '2016-06-22'
 end_date: '2022-12-31'
 cali_end_date: '2020-12-31'
-warm_up_date: '2015-06-22'
+warm_up_date: '2006-06-22'
+
+# 10-yr warm-up filled by tiling a 6-yr cycle block (2016-06-22 onward)
+# forward ~1.67× to cover the warm-up window. Some year repetition is
+# unavoidable because the observational record is only 6.5 yrs.
+warmup:
+  method: 'cycle'
+  cycle_years: 6
+
+# ERA5-Land bulk precipitation correction on; snow_corr tied to rain_corr
+precip_correction: true
 
 models:
   - HBV
-  - HMETS
-  - HYMOD
-  - MOHYSE
 
 configurations:
-  - subdaily
-  - glogem_subdaily
+  - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
+  - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
+  - gw_3_layer_glogem     # S2: fast + slow + deep GW
+  - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
+  - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW
 
 calibration:
-  metrics: [KGE, LogKGE, KGE_WB, KGE_lowFDC]
-  iterations: 10
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
   ngs: 15
 
 future:
-  enabled: true
+  enabled: false
