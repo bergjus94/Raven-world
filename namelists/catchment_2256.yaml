@@ -1,8 +1,8 @@
 # =============================================================================
 # Catchment 2256 — Rosegbach @ Pontresina (Switzerland)
 # =============================================================================
-# Overnight calibration: 5 glogem-coupled subsurface structures × 2 metrics
-# (KGE + KGE_WB) = 10 calibration jobs with 3000 iterations each.
+# Overnight calibration: 6 glogem-coupled configurations × 2 metrics
+# (KGE + KGE_WB) = 12 calibration jobs with 3000 iterations each.
 # =============================================================================
 
 catchment: '2256'
@@ -22,6 +22,7 @@ models:
   - HBV
 
 configurations:
+  - glogem                  # Daily melt baseline (vs S1 subdaily)
   - glogem_subdaily         # S1: 3-layer standard HBV (baseline)
   - gw_1_layer_glogem       # S0: single reservoir
   - gw_3_layer_glogem       # S2: fast + slow + deep GW

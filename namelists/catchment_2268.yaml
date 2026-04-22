@@ -1,7 +1,7 @@
 # =============================================================================
 # Catchment 2268 - Rhone @ Gletsch (Switzerland)
 # =============================================================================
-# Server production run mirroring 0102: 5 glogem-coupled subsurface structures
+# Server production run mirroring 0102: 6 glogem-coupled configurations
 # × 2 metrics. MeteoSwiss forcing via region: switzerland (MeteoSwiss +
 # CAMELS-CH streamflow + RGI-11 glaciers). 10-yr real warm-up, 11-yr
 # calibration, 10-yr validation. Future projections deferred (CH2018 path
@@ -31,6 +31,7 @@ models:
   - HBV
 
 configurations:
+  - glogem                # Daily melt baseline (vs S1 subdaily)
   - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
   - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
   - gw_3_layer_glogem     # S2: fast + slow + deep GW

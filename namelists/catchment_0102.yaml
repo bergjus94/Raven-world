@@ -1,7 +1,7 @@
 # =============================================================================
 # Catchment 0102 - Hunza @ Dainyor
 # =============================================================================
-# Server production run: 5 glogem-coupled subsurface structures × 2 metrics
+# Server production run: 6 glogem-coupled configurations × 2 metrics
 # with ERA5-Land bulk precipitation correction (single Cx on rain+snow).
 # Future projections disabled for this calibration pass.
 # =============================================================================
@@ -28,6 +28,7 @@ models:
   - HBV
 
 configurations:
+  - glogem                # Daily melt baseline (vs S1 subdaily)
   - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
   - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
   - gw_3_layer_glogem     # S2: fast + slow + deep GW
