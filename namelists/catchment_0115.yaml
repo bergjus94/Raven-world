@@ -35,6 +35,14 @@ configurations:
   - gw_3_layer_glogem     # S2: fast + slow + deep GW
   - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
   - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW
+  # --- Exploratory sweep (untested variants) ---
+  - baseline              # Uncoupled HBV, ERA5 forcing (internal glacier model)
+  - subdaily              # Uncoupled HBV, ERA5, subdaily melt
+  - icemelt               # Uncoupled HBV with HBV_EC icemelt on glacier HRUs
+  - glogem_oudin          # GloGEM-coupled, Oudin PET instead of Hamon
+  - glogem_har            # GloGEM-coupled, HAR forcing instead of ERA5
+  - glogem_tphipr         # GloGEM-coupled, T/P bias-corrected (tphipr) forcing
+  - glogem_icimod         # GloGEM-coupled, ICIMOD forcing
 
 calibration:
   metrics: [KGE, KGE_WB]
