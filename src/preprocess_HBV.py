@@ -103,8 +103,11 @@ class HBVProcessor:
         valid_routings = ['none', 'through_soil', 'split_to_slow']
         if self.glacier_routing not in valid_routings:
             raise ValueError(f"Invalid glacier_routing: {self.glacier_routing}. Must be one of {valid_routings}")
-        if self.glacier_routing == 'split_to_slow' and self.subsurface_structure != 'gw_3_layer':
-            raise ValueError(f"glacier_routing='split_to_slow' requires subsurface_structure='gw_3_layer', got '{self.subsurface_structure}'")
+        # split_to_slow needs a SLOW_RESERVOIR as :Split target, so it's valid for
+        # gw_2_layer (FAST+SLOW) and gw_3_layer (FAST+SLOW+DEEP). It's NOT valid for
+        # gw_1_layer (SINGLE_RES only, no SLOW_RESERVOIR).
+        if self.glacier_routing == 'split_to_slow' and self.subsurface_structure not in ('gw_2_layer', 'gw_3_layer'):
+            raise ValueError(f"glacier_routing='split_to_slow' requires subsurface_structure in ('gw_2_layer', 'gw_3_layer'), got '{self.subsurface_structure}'")
         print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}")
 
         # ✅ ADD ONLY THIS - warm_up_date

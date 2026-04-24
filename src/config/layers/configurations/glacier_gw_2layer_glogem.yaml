@@ -1,0 +1,18 @@
+# Coupled GloGEM TSLA, ERA5, subdaily melt, SPHY-style glacier->GW split with 2-layer GW
+# Same SPHY-style routing as glacier_gw_glogem (Structure 5) but on the standard
+# 2-layer FAST + SLOW subsurface (no DEEP_GW). Isolates the glacier->GW connectivity
+# fix from the deep-GW-layer fix.
+# Reference: Terink et al. 2015 (SPHY v2.0, GMD); Lutz et al. 2014 (Nat. Clim. Change).
+_config_key: 'glacier_gw_2layer_glogem'
+display_name: 'HBV Glacier-GW Split + GloGEM (2-layer)'
+color: '#9edae5'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'split_to_slow'
+
+compatible_models: [HBV]
