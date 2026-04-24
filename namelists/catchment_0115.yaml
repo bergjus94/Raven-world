@@ -35,6 +35,7 @@ configurations:
   - gw_3_layer_glogem     # S2: fast + slow + deep GW
   - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
   - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW
+  - glogem_gmb            # External glacier mass balance forcing (path auto-swaps to .../GMB)
   # --- Exploratory sweep (untested variants) ---
   - baseline              # Uncoupled HBV, ERA5 forcing (internal glacier model)
   - subdaily              # Uncoupled HBV, ERA5, subdaily melt
@@ -45,7 +46,7 @@ configurations:
   - glogem_icimod         # GloGEM-coupled, ICIMOD forcing
 
 calibration:
-  metrics: [KGE, KGE_WB]
+  metrics: [KGE]
   iterations: 3000
   ngs: 15
 
