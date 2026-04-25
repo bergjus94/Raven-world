@@ -35,10 +35,9 @@ configurations:
   - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
   - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW (3-layer GW)
   - glacier_gw_2layer_glogem  # Same SPHY split but on 2-layer GW (isolates routing from deep-GW fix)
-  - glogem_gmb            # External glacier mass balance forcing (path auto-swaps to .../GMB)
 
 calibration:
-  metrics: [KGE]
+  metrics: [KGE, KGE_WB]
   iterations: 3000
   ngs: 15
 
