@@ -1,9 +1,12 @@
 # =============================================================================
 # Catchment 0115 - Shyok @ Yugo
 # =============================================================================
-# Server production run: 6 glogem-coupled configurations × 2 metrics
+# Multi-model run: HBV / HMETS / HYMOD × {glogem_subdaily, glogem_har, glogem}
 # with ERA5-Land bulk precipitation correction. 10-yr cycled warm-up to
 # equilibrate deep GW storage (each year used once, no repetition).
+#
+# `glogem` re-included because prior runs were silently subdaily before the
+# subdaily_method: null fix in b0d1fb2 — needs a true daily-melt re-run.
 # =============================================================================
 
 catchment: '0115'
@@ -27,18 +30,16 @@ precip_correction: true
 
 models:
   - HBV
+  - HMETS
+  - HYMOD
 
 configurations:
-  - glogem                # Daily melt baseline (vs S1 subdaily)
-  - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
-  - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
-  - gw_3_layer_glogem     # S2: fast + slow + deep GW
-  - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
-  - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW (3-layer GW)
-  - glacier_gw_2layer_glogem  # Same SPHY split but on 2-layer GW (isolates routing from deep-GW fix)
+  - glogem_subdaily       # S1: 3-layer standard, subdaily melt (baseline)
+  - glogem_har            # HAR forcing variant
+  - glogem                # Daily melt baseline (re-run after subdaily-leak fix)
 
 calibration:
-  metrics: [KGE, KGE_WB]
+  metrics: [KGE]
   iterations: 3000
   ngs: 15
 
