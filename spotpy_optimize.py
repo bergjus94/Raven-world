@@ -1359,6 +1359,16 @@ class RavenSCEUA(object):
                 # Raven emits a harmless warning when the compartment is absent.
                 "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_BASIN\n",
+                # Directional subsurface fluxes — separate baseflow from deep percolation.
+                # From:SOIL[2] lumps both destinations; these split it into
+                #   baseflow (SOIL[2] -> SURFACE_WATER) vs recharge (SOIL[2] -> SOIL[3]),
+                # and the deep baseflow (SOIL[3] -> SURFACE_WATER) for 3-layer runs.
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_BASIN\n",
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SOIL[3] BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SOIL[3] BY_BASIN\n",
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[3].And.SURFACE_WATER BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[3].And.SURFACE_WATER BY_BASIN\n",
                 "  :WriteMassLoadings\n",
             ]
             
