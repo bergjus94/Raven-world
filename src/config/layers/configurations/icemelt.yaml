@@ -1,4 +1,7 @@
-# Coupled GloGEM icemelt injection, ERA5 forcing
+# Coupled GloGEM icemelt injection, ERA5 forcing — DAILY melt
+# (no :SubdailyMethod line). Override defaults.yaml's project-wide
+# 'SUBDAILY_HOURLY_MELT' so this is genuinely a daily-melt baseline
+# distinct from icemelt_subdaily.
 _config_key: 'icemelt'
 display_name: 'HBV Icemelt'
 color: '#8c564b'
@@ -9,3 +12,4 @@ glogem_model: 'gfdl-esm4'
 glogem_scenario: 'ssp126'
 basin_name: 'Indus'
 irrigation_variable: 'icemelt'
+subdaily_method: null

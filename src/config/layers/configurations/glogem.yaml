@@ -1,4 +1,6 @@
-# Coupled GloGEM TSLA, ERA5 forcing
+# Coupled GloGEM TSLA, ERA5 forcing — DAILY melt (no :SubdailyMethod line).
+# Override defaults.yaml's project-wide 'SUBDAILY_HOURLY_MELT' so this config
+# is genuinely a daily-melt baseline distinct from glogem_subdaily.
 _config_key: 'glogem'
 display_name: 'HBV GloGEM'
 color: '#ff7f0e'
@@ -8,3 +10,4 @@ glogem_model: 'gfdl-esm4'
 glogem_scenario: 'ssp126'
 basin_name: 'Indus'
 irrigation_variable: 'discharge'
+subdaily_method: null

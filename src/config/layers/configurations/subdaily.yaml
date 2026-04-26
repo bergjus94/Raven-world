@@ -1,4 +1,4 @@
-# Uncoupled, ERA5, subdaily melt (same as baseline since subdaily is default)
+# Uncoupled, ERA5, subdaily melt — pairs with `baseline` (daily).
 _config_key: 'subdaily'
 display_name: 'HBV Subdaily'
 color: '#aec7e8'
