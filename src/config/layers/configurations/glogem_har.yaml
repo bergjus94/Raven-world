@@ -1,4 +1,6 @@
-# Coupled GloGEM TSLA, HAR forcing
+# Coupled GloGEM TSLA, HAR forcing — DAILY melt (override the project-wide
+# SUBDAILY_HOURLY_MELT default in defaults.yaml so this stays daily; the
+# subdaily-suffixed siblings carry the subdaily flag explicitly).
 _config_key: 'glogem_har'
 display_name: 'HBV GloGEM HAR'
 color: '#bcbd22'
@@ -9,3 +11,4 @@ glogem_scenario: 'ssp126'
 basin_name: 'Indus'
 irrigation_variable: 'discharge'
 meteo_source: 'HAR'
+subdaily_method: null

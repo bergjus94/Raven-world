@@ -1,9 +1,12 @@
 # =============================================================================
 # Catchment 0121 - Chitral @ Chitral
 # =============================================================================
-# Server production run: 6 glogem-coupled configurations × 2 metrics
-# with ERA5-Land bulk precipitation correction. 10-yr cycled warm-up to
-# equilibrate deep GW storage (each year used once, no repetition).
+# Multi-model run: HBV / HMETS / HYMOD × {baseline, glogem_har, glogem_tphipr,
+# icemelt, subdaily} with ERA5-Land bulk precipitation correction. 10-yr
+# cycled warm-up to equilibrate deep GW storage (each year used once).
+#
+# Daily-melt baselines (baseline, glogem_har, glogem_tphipr, icemelt) carry
+# subdaily_method: null; only `subdaily` keeps the project-wide subdaily flag.
 # =============================================================================
 
 catchment: '0121'
@@ -26,18 +29,18 @@ precip_correction: true
 
 models:
   - HBV
+  - HMETS
+  - HYMOD
 
 configurations:
-  - glogem                # Daily melt baseline (vs S1 subdaily)
-  - glogem_subdaily       # S1: 3-layer standard HBV (baseline)
-  - gw_1_layer_glogem     # S0: single reservoir, no fast/slow split
-  - gw_3_layer_glogem     # S2: fast + slow + deep GW
-  - glacier_soil_glogem   # S3: MASKED_GLACIER gets soil profile, meltwater infiltrates
-  - glacier_gw_glogem     # S5: SPHY-style split PONDED -> GlacROF*SW + (1-GlacROF)*SLOW (3-layer GW)
-  - glacier_gw_2layer_glogem  # Same SPHY split but on 2-layer GW (isolates routing from deep-GW fix)
+  - baseline              # Daily, no glogem coupling — uncoupled baseline
+  - glogem_har            # GloGEM-coupled, HAR forcing variant
+  - glogem_tphipr         # GloGEM-coupled, ERA5 + TPHiPr precip override
+  - icemelt               # Daily ice-melt option (no glogem coupling)
+  - subdaily              # Subdaily HBV melt scheme (the explicit subdaily one)
 
 calibration:
-  metrics: [KGE, KGE_WB]
+  metrics: [KGE]
   iterations: 3000
   ngs: 15
 

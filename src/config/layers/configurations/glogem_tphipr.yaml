@@ -1,4 +1,5 @@
-# Coupled GloGEM TSLA, ERA5 with TPHiPr precipitation override
+# Coupled GloGEM TSLA, ERA5 with TPHiPr precipitation override — DAILY melt
+# (override the project-wide SUBDAILY_HOURLY_MELT default in defaults.yaml).
 _config_key: 'glogem_tphipr'
 display_name: 'HBV GloGEM TPHiPr'
 color: '#de9ed6'
@@ -9,3 +10,4 @@ glogem_scenario: 'ssp126'
 basin_name: 'Indus'
 irrigation_variable: 'discharge'
 precip_source: 'TPHiPr'
+subdaily_method: null
