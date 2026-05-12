@@ -185,6 +185,14 @@ class CH2018PassThrough(MeteoBase):
             ds.close()
             return None
 
+        # CH2018 timestamps are noon-anchored ("days since 1981-01-01 12:00:00").
+        # Raven expects daily forcing at the start of the day for a 1-day timestep,
+        # otherwise it errors with "gridded forcing data not available at beginning
+        # of model simulation".  Shift to midnight.
+        clipped = clipped.assign_coords(
+            time=clipped['time'] - pd.Timedelta(hours=12)
+        )
+
         # Drop spatial_ref (we keep the CRS via attrs on the data var instead),
         # but preserve elevation since it's useful for lapse-rate corrections.
         keep = [v for v in (var, 'elevation') if v in clipped.data_vars]
