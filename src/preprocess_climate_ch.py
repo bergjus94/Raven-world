@@ -24,12 +24,17 @@
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+import geopandas as gpd
+import numpy as np
+import pandas as pd
 import xarray as xr
 import yaml
+from shapely.geometry import Polygon
 
 import warnings
 warnings.filterwarnings('ignore')
 
+from paths import get_paths
 from preprocess_meteo_base import MeteoBase
 
 
@@ -240,6 +245,232 @@ class CH2018PassThrough(MeteoBase):
 
 
 #--------------------------------------------------------------------------------
+########################### CH2018GridWeightsGenerator ##########################
+#--------------------------------------------------------------------------------
+
+class CH2018GridWeightsGenerator(MeteoBase):
+    """
+    Build a Raven GridWeights file for the CH2018 x/y projected grid (EPSG:2056).
+
+    The CH2018 grid is regular ~1.7 km in CH1903+ / LV95 metres, with no 2-D
+    lat/lon companion — overlay is done entirely in EPSG:2056, no reprojection
+    of coordinates to WGS84 needed.
+
+    Cell-id convention matches `:DimNamesNC x y time` in the .rvt:
+        cell_id = y_idx * nx + x_idx     (x is the fastest-varying dim)
+
+    Output: GridWeights_CH2018.txt in the HRU `topo` directory.
+    """
+
+    _logger_class_name = 'CH2018GridWeightsGenerator'
+
+    def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
+        super().__init__(namelist_path, force_reprocess)
+
+        paths = get_paths(self.config)
+        self.gridweights_dir = paths['topo_dir']
+        self.out_HRU_shape_dir = paths['topo_dir'] / 'HRU.shp'
+        self.output_file = self.gridweights_dir / 'GridWeights_CH2018.txt'
+
+        self.logger.info(
+            f"CH2018GridWeightsGenerator initialized for gauge {self.gauge_id}"
+        )
+
+    #---------------------------------------------------------------------------------
+
+    def generate(self, reference_nc: Path) -> gpd.GeoDataFrame:
+        """
+        Build GridWeights_CH2018.txt from a clipped CH2018 NetCDF as grid reference.
+
+        Parameters
+        ----------
+        reference_nc : Path
+            Path to any of the four ch2018_*.nc files produced by
+            CH2018PassThrough — they all share the same grid.
+        """
+        if self.output_file.exists() and not self.force_reprocess:
+            self.logger.info(
+                f"✅ {self.output_file.name} already exists — skipping"
+            )
+            return gpd.GeoDataFrame()
+
+        if not reference_nc.exists():
+            raise FileNotFoundError(
+                f"CH2018 reference NetCDF not found: {reference_nc}. "
+                "Run CH2018PassThrough.process_all() first."
+            )
+
+        ds = xr.open_dataset(reference_nc)
+        if 'x' not in ds.dims or 'y' not in ds.dims:
+            raise ValueError(
+                f"Expected x/y dims in {reference_nc.name}, got {list(ds.dims)}"
+            )
+        nx, ny = ds.sizes['x'], ds.sizes['y']
+        x = ds.x.values
+        y = ds.y.values
+
+        # Cell sizes from median spacing along each axis (robust to NaNs).
+        # CH2018 is regular at ~1.7 km — use abs() in case y is decreasing.
+        dx = float(np.nanmedian(np.abs(np.diff(x)))) if nx > 1 else 1737.0
+        dy = float(np.nanmedian(np.abs(np.diff(y)))) if ny > 1 else 1737.0
+        self.total_grid_cells = ny * nx
+        self.logger.info(
+            f"Grid: {ny} y × {nx} x = {self.total_grid_cells} cells "
+            f"(dx={dx:.1f} m, dy={dy:.1f} m)"
+        )
+
+        # Load HRUs and reproject to EPSG:2056 for the overlay
+        if not self.out_HRU_shape_dir.exists():
+            raise FileNotFoundError(
+                f"HRU shapefile not found: {self.out_HRU_shape_dir}"
+            )
+        HRU = gpd.read_file(self.out_HRU_shape_dir)
+        if 'HRU_ID' in HRU.columns:
+            HRU = HRU.sort_values(by='HRU_ID').reset_index(drop=True)
+            HRU['HRU ID'] = HRU['HRU_ID']
+        elif 'HRU ID' not in HRU.columns:
+            HRU['HRU ID'] = list(range(1, len(HRU) + 1))
+        hru_id_col = 'HRU ID' if 'HRU ID' in HRU.columns else 'HRU_ID'
+
+        HRU_2056 = HRU.to_crs('EPSG:2056')
+        HRU_2056['geometry'] = HRU_2056.geometry.buffer(0)  # heal invalid geoms
+        self.logger.info(f"Loaded {len(HRU_2056)} HRUs (reprojected to EPSG:2056)")
+
+        # Build cell polygons covering the catchment + buffer
+        hru_minx, hru_miny, hru_maxx, hru_maxy = HRU_2056.total_bounds
+        buf = max(dx, dy) * 4
+
+        polygons: List[Polygon] = []
+        cell_ids: List[str] = []
+        half_dx, half_dy = dx / 2.0, dy / 2.0
+
+        for j in range(ny):
+            cy = float(y[j])
+            if not np.isfinite(cy) or cy < hru_miny - buf or cy > hru_maxy + buf:
+                continue
+            for i in range(nx):
+                cx = float(x[i])
+                if not np.isfinite(cx) or cx < hru_minx - buf or cx > hru_maxx + buf:
+                    continue
+                polygons.append(Polygon([
+                    (cx - half_dx, cy - half_dy),
+                    (cx + half_dx, cy - half_dy),
+                    (cx + half_dx, cy + half_dy),
+                    (cx - half_dx, cy + half_dy),
+                ]))
+                # Match :DimNamesNC "x y time" → x is fastest
+                cell_ids.append(str(j * nx + i))
+
+        ch2018_grid = gpd.GeoDataFrame(
+            {'cell_id': cell_ids, 'geometry': polygons}, crs='EPSG:2056'
+        )
+        self.logger.info(
+            f"Built {len(ch2018_grid)} grid polygons (catchment + buffer)"
+        )
+
+        # Overlay HRUs × grid; areas are already in m² since both are EPSG:2056
+        self.logger.info("Computing HRU–grid intersection…")
+        res = HRU_2056.overlay(ch2018_grid, how='intersection')
+        res['area'] = res.geometry.area
+
+        hru_totals = res.groupby(hru_id_col)['area'].transform('sum')
+        res['area_rel'] = np.where(hru_totals > 0, res['area'] / hru_totals, 0)
+        res['area_rel'] = res['area_rel'].round(5)
+
+        def _normalize(g):
+            tot = g['area_rel'].sum()
+            g['normalized_relative_area'] = (
+                (g['area_rel'] / tot).round(5) if tot > 0 else 0
+            )
+            return g
+
+        relative_area = res.groupby(hru_id_col, group_keys=False).apply(_normalize)
+
+        # Fill missing HRUs (no grid overlap) with the nearest cell, weight=1
+        all_hrus = set(HRU_2056[hru_id_col].values)
+        seen = set(relative_area[hru_id_col].values)
+        missing = all_hrus - seen
+        if missing:
+            self.logger.warning(
+                f"⚠️ {len(missing)} HRUs have no CH2018-grid overlap "
+                "(expected with ~1.7 km cells on small HRUs); assigning nearest cell"
+            )
+            new_rows = []
+            grid_centroids = ch2018_grid.geometry.centroid
+            for hid in missing:
+                hru_geom = HRU_2056[HRU_2056[hru_id_col] == hid].geometry.values[0]
+                distances = grid_centroids.distance(hru_geom.centroid)
+                nearest_cell_id = ch2018_grid.loc[distances.idxmin(), 'cell_id']
+                new_rows.append({
+                    hru_id_col: hid,
+                    'cell_id': nearest_cell_id,
+                    'area_rel': 1.0,
+                    'normalized_relative_area': 1.0,
+                    'area': 0,
+                    'geometry': hru_geom,
+                })
+            relative_area = pd.concat(
+                [relative_area, gpd.GeoDataFrame(new_rows, crs='EPSG:2056')],
+                ignore_index=True,
+            )
+            self.logger.info(f"✅ Added {len(new_rows)} nearest-cell assignments")
+
+        # Sanity check
+        sums = relative_area.groupby(hru_id_col)['normalized_relative_area'].sum()
+        bad = sums[~np.isclose(sums, 1.0, atol=1e-3)]
+        if len(bad) > 0:
+            self.logger.warning(
+                f"⚠️ {len(bad)} HRUs have weight sums ≠ 1.0 (max dev {abs(bad-1).max():.4f})"
+            )
+        else:
+            self.logger.info("✅ All HRU weight sums equal 1.0")
+
+        self._write_gridweights(HRU, relative_area, hru_id_col)
+        ds.close()
+        self.logger.info("CH2018 grid weights generation complete!")
+        return relative_area
+
+    #---------------------------------------------------------------------------------
+
+    def _write_gridweights(
+        self,
+        hru: gpd.GeoDataFrame,
+        relative_area: gpd.GeoDataFrame,
+        hru_id_col: str,
+    ) -> None:
+        number_HRUs = len(hru)
+        number_cells = getattr(self, 'total_grid_cells', len(relative_area))
+
+        self.gridweights_dir.mkdir(parents=True, exist_ok=True)
+        self.logger.info(f"Writing {self.output_file}")
+        with open(self.output_file, 'w') as ff:
+            ff.write('# ---------------------------------------------- \n')
+            ff.write('# Raven GridWeights file for CH2018 climate data \n')
+            ff.write('# Generated by CH2018GridWeightsGenerator        \n')
+            ff.write(f'# Catchment: {self.gauge_id}                    \n')
+            ff.write(f'# Model type: {self.model_type}                 \n')
+            ff.write('# Cell-id convention: y_idx * nx + x_idx         \n')
+            ff.write('#   (matches :DimNamesNC "x y time" in .rvt)     \n')
+            ff.write('# ---------------------------------------------- \n')
+            ff.write('\n')
+            ff.write(':GridWeights                     \n')
+            ff.write('   #                                \n')
+            ff.write('   # [# HRUs]                       \n')
+            ff.write(f'   :NumberHRUs       {number_HRUs}            \n')
+            ff.write(f'   :NumberGridCells       {number_cells}            \n')
+            ff.write('   #                                \n')
+            ff.write('   # [HRU ID] [Cell #] [w_kl]       \n')
+            for _, row in relative_area.iterrows():
+                ff.write(f"   {row[hru_id_col]}   {row['cell_id']}   "
+                         f"{row['normalized_relative_area']}\n")
+            ff.write(':EndGridWeights \n')
+
+        self.logger.info(
+            f"✅ {self.output_file.name} written ({len(relative_area)} rows)"
+        )
+
+
+#--------------------------------------------------------------------------------
 ############################### top-level entry #################################
 #--------------------------------------------------------------------------------
 
@@ -281,6 +512,7 @@ def process_ch2018_climate(
         )
 
     results: Dict[tuple, Dict[str, Optional[Path]]] = {}
+    grid_weights_done = False
     for model_id in models:
         for scenario in scenarios:
             print(f"\n{'='*60}")
@@ -293,4 +525,21 @@ def process_ch2018_climate(
                 force_reprocess=force_reprocess,
             )
             results[(model_id, scenario)] = proc.process_all(variables=variables)
+
+            # Generate the GridWeights once — all (model, scenario, var) combos
+            # share the same CH2018 ~1.7 km grid.
+            if not grid_weights_done:
+                ref = next(
+                    (p for p in results[(model_id, scenario)].values() if p is not None),
+                    None,
+                )
+                if ref is not None:
+                    print(f"\n  🧮 Generating GridWeights_CH2018.txt (one-time)…")
+                    gw = CH2018GridWeightsGenerator(
+                        namelist_path=namelist_path,
+                        force_reprocess=force_reprocess,
+                    )
+                    gw.generate(reference_nc=ref)
+                    grid_weights_done = True
+
     return results

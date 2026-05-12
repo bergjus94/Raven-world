@@ -1025,6 +1025,35 @@ class HBVProcessor:
             precip_dim_names = dim_names
             print(f"Using CMIP6 forcing: {model_id} / {scenario}")
 
+        # Override all forcing files for CH2018 transient projections (Swiss
+        # catchments). CH2018 is already QM-bias-corrected to MeteoSwiss; we
+        # pass it through CH2018PassThrough which keeps the native variable
+        # names (pr / tas / tasmax / tasmin) and projected x/y dims.
+        if self.config.get('future', False) and self.config.get('ch2018_models'):
+            models    = self.config['ch2018_models']
+            scenarios = self.config.get('ch2018_scenarios', ['RCP85'])
+            model_id  = models[0].replace('/', '_').replace(' ', '_')
+            scenario  = scenarios[0]
+
+            precip_file    = f'ch2018_{model_id}_{scenario}_precip.nc'
+            temp_mean_file = f'ch2018_{model_id}_{scenario}_temp_mean.nc'
+            temp_max_file  = f'ch2018_{model_id}_{scenario}_temp_max.nc'
+            temp_min_file  = f'ch2018_{model_id}_{scenario}_temp_min.nc'
+
+            # CH2018 native variable names (no rename in pass-through)
+            precip_var    = 'pr'
+            temp_var      = 'tas'
+            temp_max_var  = 'tasmax'
+            temp_min_var  = 'tasmin'
+
+            # CH2018 native projected dim names; cell_id = y_idx * nx + x_idx
+            dim_names       = "x y time"
+            precip_dim_names = dim_names
+
+            grid_weights_file   = f'{self._rel_topo}/GridWeights_CH2018.txt'
+            precip_weights_file = grid_weights_file
+            print(f"🇨🇭 Using CH2018 forcing: {model_id} / {scenario}")
+
         # ✅ Override precipitation source if TPHiPr is requested
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_file = 'tphipr_precip.nc'
