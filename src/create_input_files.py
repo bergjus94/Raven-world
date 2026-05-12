@@ -388,6 +388,21 @@ def main(namelist_path: str, force_reprocess: bool = False):
             traceback.print_exc()
             return False
 
+    # Optional: CH2025 GWL slices (future=True, Swiss catchments)
+    # Same pass-through philosophy — CH2025 is QM-corrected to 1991-2020 obs.
+    # Each file is a 30-year noleap window at +X°C; the pass-through assigns
+    # a real calendar window per GWL (configurable via ch2025_gwl_years).
+    if nml.get('future', False) and nml.get('ch2025_models'):
+        print("\n🇨🇭 STEP 5f: Clipping CH2025 GWL projections (pass-through)...")
+        try:
+            from preprocess_climate_ch import process_ch2025_climate
+            process_ch2025_climate(namelist_path, force_reprocess=force_reprocess)
+            print("   ✅ CH2025 clip completed!")
+        except Exception as e:
+            print(f"   ❌ Error in CH2025 clip: {e}")
+            traceback.print_exc()
+            return False
+
     # Compute per-subbasin monthly T/PET averages (multi-subbasin only)
     if nml.get('subbasins'):
         print("   🌡️ Computing per-subbasin monthly T/PET averages...")

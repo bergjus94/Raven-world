@@ -1054,6 +1054,35 @@ class HBVProcessor:
             precip_weights_file = grid_weights_file
             print(f"🇨🇭 Using CH2018 forcing: {model_id} / {scenario}")
 
+        # Override forcings for CH2025 GWL slices.  Same pass-through approach
+        # as CH2018 (no QDM, no regrid), but CH2025 lives on the MeteoSwiss
+        # 1 km N/E grid family with 2-D lat/lon coords — different from CH2018's
+        # ~1.7 km projected x/y grid, so it needs its own GridWeights file.
+        if self.config.get('future', False) and self.config.get('ch2025_models'):
+            models = self.config['ch2025_models']
+            gwls   = self.config.get('ch2025_gwls', ['gwl2.0'])
+            model_id = models[0].replace('/', '_').replace(' ', '_')
+            gwl      = gwls[0]
+
+            precip_file    = f'ch2025_{model_id}_{gwl}_precip.nc'
+            temp_mean_file = f'ch2025_{model_id}_{gwl}_temp_mean.nc'
+            temp_max_file  = f'ch2025_{model_id}_{gwl}_temp_max.nc'
+            temp_min_file  = f'ch2025_{model_id}_{gwl}_temp_min.nc'
+
+            # CH2025 native variable names (same source vars as CH2018)
+            precip_var    = 'pr'
+            temp_var      = 'tas'
+            temp_max_var  = 'tasmax'
+            temp_min_var  = 'tasmin'
+
+            # CH2025 uses MeteoSwiss-style N/E dims with 2-D lat/lon
+            dim_names       = "E N time"
+            precip_dim_names = dim_names
+
+            grid_weights_file   = f'{self._rel_topo}/GridWeights_CH2025.txt'
+            precip_weights_file = grid_weights_file
+            print(f"🇨🇭 Using CH2025 forcing: {model_id} / {gwl}")
+
         # ✅ Override precipitation source if TPHiPr is requested
         if self.config.get('precip_source', '').upper() == 'TPHIPR':
             precip_file = 'tphipr_precip.nc'

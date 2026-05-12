@@ -10,9 +10,17 @@
 ####   - grid: EPSG:2056 (CH1903+ / LV95), dims (time, y, x), ~2 km
 ####   - time: proleptic_gregorian calendar, 1981-01-01 → 2099-12-31
 ####
-#### Phase 2: CH2025 GWL-based scenarios (deferred to separate class)
+#### Phase 2: CH2025 GWL-based scenarios (CH2025GWLPassThrough)
+####   - File pattern: CH2025/daily_gridded/
+####                   ogd-climate-scenarios-ch2025-grid_ch_<var>_<rcm-gcm>_<gwl>.nc
+####   - vars: pr (mm/day), tas / tasmax / tasmin (°C)
+####   - grid: EPSG:2056 (1 km Swiss LV95, 240 N × 370 E with 2-D lat/lon)
+####     — same family as MeteoSwiss but offset by a few cells (NOT identical)
+####   - time: 10950 days (30 noleap years) per file with synthetic axis;
+####     pass-through assigns a real calendar window per GWL
 ####
 #### Output files: <shared_data_dir>/ch2018_<model>_<scenario>_<vtype>.nc
+####                <shared_data_dir>/ch2025_<model>_<gwl>_<vtype>.nc
 ####   where vtype ∈ {precip, temp_mean, temp_max, temp_min}
 ####
 #### Source variable names (pr/tas/tasmax/tasmin) and projected (y, x)
@@ -479,6 +487,417 @@ class CH2018GridWeightsGenerator(MeteoBase):
 
 
 #--------------------------------------------------------------------------------
+############################### CH2025GWLPassThrough ############################
+#--------------------------------------------------------------------------------
+
+class CH2025GWLPassThrough(MeteoBase):
+    """
+    Clip CH2025 Global-Warming-Level (GWL) projections to catchment + assign
+    a real calendar window.
+
+    CH2025 files are 30-year noleap windows on a synthetic time axis
+    (`days since 1-1-1`).  Raven needs real calendar dates, so we map the
+    10,950 sequential daily values onto a gregorian range starting at
+    `gwl_start_year` (configurable per GWL).  This drifts ~1 week over 30
+    years vs the source's nominal 30-noleap-year coverage — acceptable for
+    "climatology at +X°C" framing, not for year-by-year specifics.
+
+    CH2025 grid is 240 N × 370 E in EPSG:2056 with 2-D lat/lon (same family
+    as MeteoSwiss observations but offset by a few cells — not identical).
+    """
+
+    _logger_class_name = 'CH2025GWLPassThrough'
+
+    # Same source variables as CH2018
+    VAR_MAP: Dict[str, str] = {
+        'pr':     'precip',
+        'tas':    'temp_mean',
+        'tasmax': 'temp_max',
+        'tasmin': 'temp_min',
+    }
+
+    # Default GWL → assigned start year (override via ch2025_gwl_years in
+    # the namelist).  These are conservative midpoints — the actual year a
+    # specific RCM-GCM crosses a given GWL varies by ~10 years across the
+    # ensemble; task #10 will add a per-model mapping when needed.
+    DEFAULT_GWL_START_YEARS: Dict[str, int] = {
+        'ref91-20': 1991,
+        'gwl1.5':   2031,
+        'gwl2.0':   2041,
+        'gwl2.5':   2051,
+        'gwl3.0':   2061,
+    }
+
+    def __init__(
+        self,
+        namelist_path: Union[str, Path],
+        model_id:      str,
+        gwl:           str,
+        force_reprocess: bool = False,
+    ) -> None:
+        super().__init__(namelist_path, force_reprocess)
+
+        self.model_id = model_id   # e.g. "smhi-rca-ecearth"
+        self.gwl = gwl             # e.g. "gwl2.0", "ref91-20"
+
+        ch2025_dir = self.config.get('ch2025_dir')
+        if not ch2025_dir:
+            raise ValueError(
+                "`ch2025_dir` must be set in namelist when future.source='CH2025'"
+            )
+        self.ch2025_dir = Path(ch2025_dir)
+        if not self.ch2025_dir.exists():
+            raise FileNotFoundError(
+                f"CH2025 root not found: {self.ch2025_dir} "
+                "(check SMB mount or local path)"
+            )
+
+        # GWL → assigned start year (allows namelist override)
+        user_years = self.config.get('ch2025_gwl_years') or {}
+        if gwl in user_years:
+            self.gwl_start_year = int(user_years[gwl])
+        elif gwl in self.DEFAULT_GWL_START_YEARS:
+            self.gwl_start_year = self.DEFAULT_GWL_START_YEARS[gwl]
+        else:
+            raise ValueError(
+                f"Unknown GWL '{gwl}' — no default start year.  "
+                f"Provide ch2025_gwl_years.{gwl} in namelist."
+            )
+
+        # ~5 km buffer (CH2025 grid is 1 km, so ~5 cells)
+        self.spatial_buffer_m = float(self.config.get('ch2025_spatial_buffer_m', 5000))
+
+        self.logger.info(
+            f"CH2025GWLPassThrough initialized | model={model_id} | gwl={gwl} "
+            f"→ assigned years {self.gwl_start_year}+"
+        )
+
+    #---------------------------------------------------------------------------------
+
+    def _source_file(self, var: str) -> Path:
+        """Resolve the CH2025 source NetCDF for a given variable."""
+        return (
+            self.ch2025_dir
+            / f'ogd-climate-scenarios-ch2025-grid_ch_{var}_{self.model_id}_{self.gwl}.nc'
+        )
+
+    #---------------------------------------------------------------------------------
+
+    def _output_file(self, var_type: str) -> Path:
+        """Resolve the output NetCDF for a given variable type."""
+        model_safe = self.model_id.replace('/', '_').replace(' ', '_')
+        return (
+            self.shared_data_dir
+            / f'ch2025_{model_safe}_{self.gwl}_{var_type}.nc'
+        )
+
+    #---------------------------------------------------------------------------------
+
+    def _catchment_bbox_2056(self) -> tuple:
+        """Catchment bbox (minx, miny, maxx, maxy) in EPSG:2056 metres."""
+        if self.catchment_extent is None:
+            raise RuntimeError("Catchment shapefile not loaded")
+        ext = self.catchment_extent.to_crs("EPSG:2056")
+        return tuple(ext.total_bounds)
+
+    #---------------------------------------------------------------------------------
+
+    def _assign_calendar_time(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Replace the source's synthetic time axis with a real calendar range
+        starting at self.gwl_start_year.  Source has 10,950 noleap days; we
+        map them 1-to-1 onto consecutive gregorian dates.  The end date is
+        approximate (drifts ~1 week from the nominal 30-year window).
+        """
+        n = ds.sizes['time']
+        new_time = pd.date_range(
+            start=f'{self.gwl_start_year}-01-01',
+            periods=n,
+            freq='1D',
+        )
+        return ds.assign_coords(time=new_time)
+
+    #---------------------------------------------------------------------------------
+
+    def process_variable(self, var: str) -> Optional[Path]:
+        """Clip one CH2025 variable, assign calendar, save."""
+        if var not in self.VAR_MAP:
+            raise KeyError(f"Unknown CH2025 variable '{var}'")
+        var_type = self.VAR_MAP[var]
+        out = self._output_file(var_type)
+
+        if out.exists() and not self.force_reprocess:
+            self.logger.info(f"  ✅ {out.name} exists, skipping")
+            return out
+
+        src = self._source_file(var)
+        if not src.exists():
+            self.logger.error(f"  ✗ source missing: {src}")
+            return None
+
+        self.logger.info(f"  Processing {var}: {src.name}")
+        ds = xr.open_dataset(src)
+
+        # Spatial clip via projected E/N coords (CH2025 uses LV95 metres)
+        minx, miny, maxx, maxy = self._catchment_bbox_2056()
+        buf = self.spatial_buffer_m
+        e_inc = bool(ds.E.values[1] > ds.E.values[0])
+        n_inc = bool(ds.N.values[1] > ds.N.values[0])
+        e_slice = slice(minx - buf, maxx + buf) if e_inc else slice(maxx + buf, minx - buf)
+        n_slice = slice(miny - buf, maxy + buf) if n_inc else slice(maxy + buf, miny - buf)
+        clipped = ds.sel(E=e_slice, N=n_slice)
+
+        if clipped.sizes.get('E', 0) == 0 or clipped.sizes.get('N', 0) == 0:
+            self.logger.error(f"  ✗ {var}: empty after spatial clip")
+            ds.close()
+            return None
+
+        # Map the synthetic time axis onto a real calendar window
+        clipped = self._assign_calendar_time(clipped)
+
+        # Drop the swiss_lv95_coordinates auxiliary variable — not needed
+        # downstream and confuses NetCDF writers.
+        drop_vars = [v for v in ('swiss_lv95_coordinates',) if v in clipped.data_vars]
+        if drop_vars:
+            clipped = clipped.drop_vars(drop_vars)
+
+        # Strip grid_mapping attrs to keep NetCDF writer happy
+        for v in clipped.data_vars:
+            clipped[v].attrs.pop('grid_mapping', None)
+
+        clipped.attrs.update({
+            'processed_by': 'CH2025GWLPassThrough',
+            'source_file': src.name,
+            'ch2025_model': self.model_id,
+            'ch2025_gwl': self.gwl,
+            'assigned_calendar_start': f'{self.gwl_start_year}-01-01',
+            'time_axis_note': (
+                'Source CH2025 file uses synthetic 10,950-day noleap window; '
+                'mapped 1-to-1 onto gregorian daily sequence starting at '
+                'assigned_calendar_start.  Time labels are not the exact years '
+                'the model crosses this GWL — see ch2025_gwl_years in namelist.'
+            ),
+            'gauge_id': str(self.gauge_id),
+            'crs': 'EPSG:2056 (CH1903+ / LV95)',
+        })
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        clipped.to_netcdf(out)
+        ds.close()
+
+        self.logger.info(
+            f"    ✅ {out.name} ({clipped.sizes['time']} days, "
+            f"{clipped.sizes['N']}×{clipped.sizes['E']} cells, "
+            f"calendar {self.gwl_start_year}+)"
+        )
+        return out
+
+    #---------------------------------------------------------------------------------
+
+    def process_all(
+        self,
+        variables: Optional[List[str]] = None,
+    ) -> Dict[str, Optional[Path]]:
+        if variables is None:
+            variables = list(self.VAR_MAP.keys())
+        self.logger.info(
+            f"❄️  CH2025 clip | model={self.model_id} | gwl={self.gwl} "
+            f"| {len(variables)} variables"
+        )
+        results: Dict[str, Optional[Path]] = {}
+        for var in variables:
+            try:
+                results[var] = self.process_variable(var)
+            except Exception as e:
+                self.logger.error(f"  ✗ {var} failed: {e}")
+                results[var] = None
+        return results
+
+
+#--------------------------------------------------------------------------------
+########################### CH2025GridWeightsGenerator ##########################
+#--------------------------------------------------------------------------------
+
+class CH2025GridWeightsGenerator(MeteoBase):
+    """
+    Build a Raven GridWeights file for the CH2025 grid (1 km Swiss LV95,
+    240 N × 370 E with 2-D lat/lon).
+
+    Cell-id convention matches `:DimNamesNC E N time`:
+        cell_id = N_idx * nE + E_idx  (E is the fastest-varying dim)
+    — same as MeteoSwiss but the actual cell coordinates differ.
+    """
+
+    _logger_class_name = 'CH2025GridWeightsGenerator'
+
+    def __init__(self, namelist_path: Union[str, Path], force_reprocess: bool = False) -> None:
+        super().__init__(namelist_path, force_reprocess)
+        paths = get_paths(self.config)
+        self.gridweights_dir = paths['topo_dir']
+        self.out_HRU_shape_dir = paths['topo_dir'] / 'HRU.shp'
+        self.output_file = self.gridweights_dir / 'GridWeights_CH2025.txt'
+
+        self.logger.info(
+            f"CH2025GridWeightsGenerator initialized for gauge {self.gauge_id}"
+        )
+
+    def generate(self, reference_nc: Path) -> gpd.GeoDataFrame:
+        """
+        Build GridWeights_CH2025.txt from any clipped CH2025 NetCDF as reference.
+        All (model, gwl, var) combos share the same grid.
+        """
+        if self.output_file.exists() and not self.force_reprocess:
+            self.logger.info(f"✅ {self.output_file.name} exists, skipping")
+            return gpd.GeoDataFrame()
+
+        if not reference_nc.exists():
+            raise FileNotFoundError(
+                f"CH2025 reference NetCDF not found: {reference_nc}. "
+                "Run CH2025GWLPassThrough.process_all() first."
+            )
+
+        ds = xr.open_dataset(reference_nc)
+        if 'N' not in ds.dims or 'E' not in ds.dims:
+            raise ValueError(
+                f"Expected N/E dims in {reference_nc.name}, got {list(ds.dims)}"
+            )
+        if 'lat' not in ds.coords or 'lon' not in ds.coords:
+            raise ValueError("CH2025 file missing 2-D lat/lon coordinates")
+
+        ny, nx = ds.sizes['N'], ds.sizes['E']
+        self.total_grid_cells = ny * nx
+        lat_2d = ds.coords['lat'].values
+        lon_2d = ds.coords['lon'].values
+        self.logger.info(f"Grid: {ny} N × {nx} E = {self.total_grid_cells} cells")
+
+        # Half-cell sizes from median spacing
+        dlat = float(np.nanmedian(np.abs(np.diff(lat_2d, axis=0)))) / 2 if ny > 1 else 0.005
+        dlon = float(np.nanmedian(np.abs(np.diff(lon_2d, axis=1)))) / 2 if nx > 1 else 0.007
+        self.logger.info(f"Cell half-size: dlat={dlat:.5f}°, dlon={dlon:.5f}°")
+
+        # HRUs in WGS84 to match the lat/lon polygons
+        if not self.out_HRU_shape_dir.exists():
+            raise FileNotFoundError(f"HRU shapefile not found: {self.out_HRU_shape_dir}")
+        HRU = gpd.read_file(self.out_HRU_shape_dir)
+        if 'HRU_ID' in HRU.columns:
+            HRU = HRU.sort_values(by='HRU_ID').reset_index(drop=True)
+            HRU['HRU ID'] = HRU['HRU_ID']
+        elif 'HRU ID' not in HRU.columns:
+            HRU['HRU ID'] = list(range(1, len(HRU) + 1))
+        hru_id_col = 'HRU ID' if 'HRU ID' in HRU.columns else 'HRU_ID'
+        HRU_wgs = HRU.to_crs('EPSG:4326')
+        HRU_wgs['geometry'] = HRU_wgs.geometry.buffer(0)
+
+        hru_minx, hru_miny, hru_maxx, hru_maxy = HRU_wgs.total_bounds
+        buf_lat = dlat * 4
+        buf_lon = dlon * 4
+
+        polygons: List[Polygon] = []
+        cell_ids: List[str] = []
+        for j in range(ny):
+            for i in range(nx):
+                cx = float(lon_2d[j, i])
+                cy = float(lat_2d[j, i])
+                if not (np.isfinite(cx) and np.isfinite(cy)):
+                    continue
+                if (cx < hru_minx - buf_lon or cx > hru_maxx + buf_lon or
+                        cy < hru_miny - buf_lat or cy > hru_maxy + buf_lat):
+                    continue
+                polygons.append(Polygon([
+                    (cx - dlon, cy - dlat),
+                    (cx + dlon, cy - dlat),
+                    (cx + dlon, cy + dlat),
+                    (cx - dlon, cy + dlat),
+                ]))
+                # cell_id = N_idx * nE + E_idx (matches :DimNamesNC "E N time")
+                cell_ids.append(str(j * nx + i))
+
+        ch2025_grid = gpd.GeoDataFrame(
+            {'cell_id': cell_ids, 'geometry': polygons}, crs='EPSG:4326'
+        )
+        self.logger.info(f"Built {len(ch2025_grid)} grid polygons (catchment extent)")
+
+        self.logger.info("Computing HRU–grid intersection…")
+        res = HRU_wgs.overlay(ch2025_grid, how='intersection')
+        # Equal-area projection for area calculation
+        res_proj = res.to_crs('ESRI:54009')
+        res['area'] = res_proj.geometry.area
+        hru_totals = res.groupby(hru_id_col)['area'].transform('sum')
+        res['area_rel'] = np.where(hru_totals > 0, res['area'] / hru_totals, 0)
+        res['area_rel'] = res['area_rel'].round(5)
+
+        def _norm(g):
+            tot = g['area_rel'].sum()
+            g['normalized_relative_area'] = (g['area_rel'] / tot).round(5) if tot > 0 else 0
+            return g
+
+        relative_area = res.groupby(hru_id_col, group_keys=False).apply(_norm)
+
+        # Nearest-cell fallback for any HRU with no overlap
+        missing = set(HRU_wgs[hru_id_col].values) - set(relative_area[hru_id_col].values)
+        if missing:
+            self.logger.warning(
+                f"⚠️ {len(missing)} HRUs have no CH2025 grid overlap; assigning nearest cell"
+            )
+            new_rows = []
+            centroids = ch2025_grid.geometry.centroid
+            for hid in missing:
+                hru_geom = HRU_wgs[HRU_wgs[hru_id_col] == hid].geometry.values[0]
+                nearest = ch2025_grid.loc[centroids.distance(hru_geom.centroid).idxmin(), 'cell_id']
+                new_rows.append({
+                    hru_id_col: hid,
+                    'cell_id': nearest,
+                    'area_rel': 1.0,
+                    'normalized_relative_area': 1.0,
+                    'area': 0,
+                    'geometry': hru_geom,
+                })
+            relative_area = pd.concat(
+                [relative_area, gpd.GeoDataFrame(new_rows, crs='EPSG:4326')],
+                ignore_index=True,
+            )
+            self.logger.info(f"✅ Added {len(new_rows)} nearest-cell assignments")
+
+        sums = relative_area.groupby(hru_id_col)['normalized_relative_area'].sum()
+        bad = sums[~np.isclose(sums, 1.0, atol=1e-3)]
+        if len(bad) == 0:
+            self.logger.info("✅ All HRU weight sums equal 1.0")
+        else:
+            self.logger.warning(f"⚠️ {len(bad)} HRUs have weight sums ≠ 1.0")
+
+        self._write_gridweights(HRU, relative_area, hru_id_col)
+        ds.close()
+        return relative_area
+
+    def _write_gridweights(self, hru, relative_area, hru_id_col):
+        n_hrus = len(hru)
+        n_cells = getattr(self, 'total_grid_cells', len(relative_area))
+        self.gridweights_dir.mkdir(parents=True, exist_ok=True)
+        self.logger.info(f"Writing {self.output_file}")
+        with open(self.output_file, 'w') as ff:
+            ff.write('# ---------------------------------------------- \n')
+            ff.write('# Raven GridWeights file for CH2025 climate data \n')
+            ff.write('# Generated by CH2025GridWeightsGenerator        \n')
+            ff.write(f'# Catchment: {self.gauge_id}                    \n')
+            ff.write(f'# Model type: {self.model_type}                 \n')
+            ff.write('# Cell-id convention: N_idx * nE + E_idx         \n')
+            ff.write('#   (matches :DimNamesNC "E N time" in .rvt)     \n')
+            ff.write('# ---------------------------------------------- \n')
+            ff.write('\n:GridWeights                     \n')
+            ff.write('   # [# HRUs]                       \n')
+            ff.write(f'   :NumberHRUs       {n_hrus}            \n')
+            ff.write(f'   :NumberGridCells       {n_cells}            \n')
+            ff.write('   # [HRU ID] [Cell #] [w_kl]       \n')
+            for _, row in relative_area.iterrows():
+                ff.write(f"   {row[hru_id_col]}   {row['cell_id']}   "
+                         f"{row['normalized_relative_area']}\n")
+            ff.write(':EndGridWeights \n')
+        self.logger.info(
+            f"✅ {self.output_file.name} written ({len(relative_area)} rows)"
+        )
+
+
+#--------------------------------------------------------------------------------
 ############################### top-level entry #################################
 #--------------------------------------------------------------------------------
 
@@ -544,6 +963,77 @@ def process_ch2018_climate(
                 if ref is not None:
                     print(f"\n  🧮 Generating GridWeights_CH2018.txt (one-time)…")
                     gw = CH2018GridWeightsGenerator(
+                        namelist_path=namelist_path,
+                        force_reprocess=force_reprocess,
+                    )
+                    gw.generate(reference_nc=ref)
+                    grid_weights_done = True
+
+    return results
+
+
+def process_ch2025_climate(
+    namelist_path: Union[str, Path],
+    force_reprocess: bool = False,
+) -> Dict[tuple, Dict[str, Optional[Path]]]:
+    """
+    Top-level entry point — call from create_input_files.py when namelist
+    has `ch2025_models` and `ch2025_gwls` set with future=True.
+
+    Namelist keys consumed
+    ----------------------
+    ch2025_dir        : str  root dir of CH2025 daily_gridded
+    ch2025_models     : list of '<rcm>-<gcm>' lowercase strings,
+                        e.g. ['smhi-rca-ecearth']
+    ch2025_gwls       : list of GWL strings, e.g. ['gwl2.0', 'gwl3.0']
+    ch2025_variables  : list (optional)  subset of {pr, tas, tasmax, tasmin}
+    ch2025_gwl_years  : dict (optional)  override default GWL→start-year map
+
+    Returns
+    -------
+    dict  { (model_id, gwl) -> { var -> output Path or None } }
+    """
+    with open(namelist_path) as f:
+        config = yaml.safe_load(f)
+
+    models = config.get('ch2025_models') or []
+    gwls = config.get('ch2025_gwls') or []
+    variables = config.get('ch2025_variables')
+
+    if not models:
+        raise ValueError(
+            "CH2025 future run requires `ch2025_models` in namelist — "
+            "e.g. ['smhi-rca-ecearth']"
+        )
+    if not gwls:
+        raise ValueError(
+            "CH2025 future run requires `ch2025_gwls` in namelist — "
+            "e.g. ['gwl2.0', 'gwl3.0']"
+        )
+
+    results: Dict[tuple, Dict[str, Optional[Path]]] = {}
+    grid_weights_done = False
+    for model_id in models:
+        for gwl in gwls:
+            print(f"\n{'='*60}")
+            print(f"  CH2025 clip | model={model_id} | gwl={gwl}")
+            print(f"{'='*60}")
+            proc = CH2025GWLPassThrough(
+                namelist_path=namelist_path,
+                model_id=model_id,
+                gwl=gwl,
+                force_reprocess=force_reprocess,
+            )
+            results[(model_id, gwl)] = proc.process_all(variables=variables)
+
+            if not grid_weights_done:
+                ref = next(
+                    (p for p in results[(model_id, gwl)].values() if p is not None),
+                    None,
+                )
+                if ref is not None:
+                    print(f"\n  🧮 Generating GridWeights_CH2025.txt (one-time)…")
+                    gw = CH2025GridWeightsGenerator(
                         namelist_path=namelist_path,
                         force_reprocess=force_reprocess,
                     )
