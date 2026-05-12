@@ -567,6 +567,14 @@ class CH2025GWLPassThrough(MeteoBase):
         # ~5 km buffer (CH2025 grid is 1 km, so ~5 cells)
         self.spatial_buffer_m = float(self.config.get('ch2025_spatial_buffer_m', 5000))
 
+        # CH2025 source files don't ship elevation (unlike CH2018's _elev variants).
+        # The HBV .rvt expects :ElevationVarNameNC elevation in the temp/precip
+        # blocks for lapse-rate corrections, so we embed it from the MeteoSwiss
+        # topo file, which sits on EXACTLY the CH2025 grid (chy+1e6=N, chx+2e6=E).
+        # Override via `ch2025_topo_file` in namelist if the path moves.
+        topo_default = self.main_dir / '01_data/meteo/Switzerland/topo.swiss02_ch01r.swisscors.nc'
+        self.topo_file = Path(self.config.get('ch2025_topo_file', topo_default))
+
         self.logger.info(
             f"CH2025GWLPassThrough initialized | model={model_id} | gwl={gwl} "
             f"→ assigned years {self.gwl_start_year}+"
@@ -599,6 +607,37 @@ class CH2025GWLPassThrough(MeteoBase):
             raise RuntimeError("Catchment shapefile not loaded")
         ext = self.catchment_extent.to_crs("EPSG:2056")
         return tuple(ext.total_bounds)
+
+    #---------------------------------------------------------------------------------
+
+    def _load_elevation_on_ch2025_grid(self) -> Optional[xr.DataArray]:
+        """
+        Load Swiss MeteoSwiss topo, shift chx/chy to LV95 coords, and rename
+        to N/E so it can be matched against CH2025 grid via sel().
+
+        Returns the elevation DataArray (dims: N, E; units: m) or None if
+        the topo file isn't available.
+        """
+        if not self.topo_file.exists():
+            self.logger.warning(
+                f"Swiss topo file not found: {self.topo_file} — CH2025 outputs "
+                "will NOT have elevation; the HBV .rvt's :ElevationVarNameNC "
+                "lapse-rate correction will fail"
+            )
+            return None
+        topo = xr.open_dataset(self.topo_file, decode_times=False)
+        # chx (LV03 east, ~474500–843500) → LV95 E (~2474500–2843500)
+        # chy (LV03 north, ~64500–303500)  → LV95 N (~1064500–1303500)
+        topo = topo.assign_coords(
+            chx=topo.chx + 2_000_000,
+            chy=topo.chy + 1_000_000,
+        )
+        height = (
+            topo['height']
+            .squeeze('time', drop=True)
+            .rename({'chy': 'N', 'chx': 'E'})
+        )
+        return height
 
     #---------------------------------------------------------------------------------
 
@@ -660,6 +699,20 @@ class CH2025GWLPassThrough(MeteoBase):
         drop_vars = [v for v in ('swiss_lv95_coordinates',) if v in clipped.data_vars]
         if drop_vars:
             clipped = clipped.drop_vars(drop_vars)
+
+        # Embed elevation on the CH2025 cell grid (from the Swiss topo file).
+        # This lets the HBV .rvt's :ElevationVarNameNC elevation lapse-rate
+        # correction work without modification.
+        elev = self._load_elevation_on_ch2025_grid()
+        if elev is not None:
+            try:
+                clipped['elevation'] = elev.sel(N=clipped.N, E=clipped.E)
+                clipped['elevation'].attrs.update({'units': 'm', 'long_name': 'surface elevation'})
+                self.logger.debug(
+                    f"    embedded elevation ({clipped.sizes['N']}×{clipped.sizes['E']} cells)"
+                )
+            except Exception as e:
+                self.logger.warning(f"    elevation lookup failed: {e}")
 
         # Strip grid_mapping attrs to keep NetCDF writer happy
         for v in clipped.data_vars:
