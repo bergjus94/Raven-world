@@ -375,6 +375,19 @@ def main(namelist_path: str, force_reprocess: bool = False):
             traceback.print_exc()
             return False
 
+    # Optional: CH2018 transient climate scenarios (future=True, Swiss catchments)
+    # No QDM — CH2018 is already QM-bias-corrected to MeteoSwiss observations.
+    if nml.get('future', False) and nml.get('ch2018_models'):
+        print("\n🇨🇭 STEP 5e: Clipping CH2018 transient projections (pass-through)...")
+        try:
+            from preprocess_climate_ch import process_ch2018_climate
+            process_ch2018_climate(namelist_path, force_reprocess=force_reprocess)
+            print("   ✅ CH2018 clip completed!")
+        except Exception as e:
+            print(f"   ❌ Error in CH2018 clip: {e}")
+            traceback.print_exc()
+            return False
+
     # Compute per-subbasin monthly T/PET averages (multi-subbasin only)
     if nml.get('subbasins'):
         print("   🌡️ Computing per-subbasin monthly T/PET averages...")

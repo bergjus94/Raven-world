@@ -7,3 +7,8 @@ meteo_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/Indus-Era5'
 meteo_har_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/HAR'
 cmip6_dir: '/home/jberg@giub.local/Raven_world/01_data/CMIP6'
 raven_executable: '/home/jberg@giub.local/RavenHydroFramework/build/Raven'
+
+# CH2018 / CH2025 climate scenarios — hydroshare directly mounted on server.
+# TODO: verify exact server mount path
+ch2018_dir: '/storage/hydroshare/data/Meteorology/Switzerland/CH2018/QMgrid'
+ch2025_dir: '/storage/hydroshare/data/Meteorology/Switzerland/CH2025/daily_gridded'

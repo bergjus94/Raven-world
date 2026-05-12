@@ -7,3 +7,9 @@ meteo_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/Indus-Era5'
 meteo_har_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/meteo/HAR'
 cmip6_dir: '/home/jberg/OneDrive/Raven_worldwide/01_data/CMIP6'
 raven_executable: '/home/jberg/RavenHydroFramework/build/Raven'
+
+# CH2018 / CH2025 climate scenarios live on the GIUB hydroshare SMB mount
+# (~500 GB, not copied to OneDrive). UID 1001 is jberg's. Re-mount the share
+# via Files (nautilus) if the path returns FileNotFoundError.
+ch2018_dir: '/run/user/1001/gvfs/smb-share:server=hydroshare.giub.unibe.ch,share=data/Meteorology/Switzerland/CH2018/QMgrid'
+ch2025_dir: '/run/user/1001/gvfs/smb-share:server=hydroshare.giub.unibe.ch,share=data/Meteorology/Switzerland/CH2025/daily_gridded'
