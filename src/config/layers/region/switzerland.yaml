@@ -31,6 +31,14 @@ landuse_dir: '01_data/topo/Switzerland/landuse_50m.tif'
 # --- Glacier outlines (RGI region 11: Central Europe) ---
 glacier_dir: '01_data/topo/glacier_outlines/nsdic0770_11.rgi60.CentralEurope/11_rgi60_CentralEurope.shp'
 
+# --- Snow forcing (SLF OSHD daily SWE) ---
+# Gated by snow_enabled — opt-in per catchment.  When enabled, the SnowProcessor
+# clips the gridded SWE NetCDF to the catchment, aggregates per elevation band
+# and per HRU, and writes diagnostic CSVs to data_obs/.  Preprocessing only —
+# not yet wired to calibration.
+snow_enabled: true
+swe_dir: '01_data/snow/SWECLQMD_ch01h.swiss.lv95_WY_1962_2023.nc'
+
 # --- GloGEM data (Switzerland basin; flat layout — no TSLA/ subfolder) ---
 # Files follow pattern:
 #   GloGEM_<component>_Switzerland_<model>_<scenario>.nc

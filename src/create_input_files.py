@@ -35,6 +35,7 @@ from preprocess_catchment import (
 )
 from preprocess_streamflow import StreamflowProcessor
 from preprocess_glogem import GloGEMProcessor, MultiSubbasinGloGEMProcessor
+from preprocess_snow import SnowProcessor
 
 # Import model-specific processors
 from preprocess_HBV import HBVProcessor
@@ -442,6 +443,21 @@ def main(namelist_path: str, force_reprocess: bool = False):
             traceback.print_exc()
     else:
         print("\n⏭️ STEP 6: Skipping GloGEM processing (coupled=False)")
+
+    # =========================================================================
+    # STEP 6b: Process snow data (only if snow_enabled — Swiss catchments)
+    # =========================================================================
+    if nml.get('snow_enabled', False):
+        print("\n❄️ STEP 6b: Processing SLF OSHD SWE data...")
+        try:
+            snow_processor = SnowProcessor(namelist_path, force_reprocess=force_reprocess)
+            snow_processor.process()
+            print("   ✅ Snow processing completed!")
+        except Exception as e:
+            print(f"   ❌ Error processing snow data: {e}")
+            traceback.print_exc()
+    else:
+        print("\n⏭️ STEP 6b: Skipping snow processing (snow_enabled=False)")
 
     # =========================================================================
     # STEP 7: Process model-specific files
