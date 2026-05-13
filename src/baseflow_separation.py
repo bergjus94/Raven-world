@@ -607,13 +607,27 @@ class BaseflowValidator:
 
     #---------------------------------------------------------------------------------
 
+    # Winter months used for metrics — Nov through March in northern hemisphere.
+    # Restricting to winter avoids contamination of the filter by snowmelt and
+    # glacier-melt, both of which produce smooth daily Q signals that filters
+    # misclassify as baseflow (see Stahl et al. 2008, Klaus & McDonnell 2013).
+    WINTER_MONTHS = (11, 12, 1, 2, 3)
+
     def metrics(
         self,
         method: str = 'eckhardt',
         eckhardt_kwargs: Optional[dict] = None,
     ) -> dict:
-        """Compute baseflow-comparison metrics on the overlap period."""
+        """
+        Compute baseflow-comparison metrics on the **winter-only** overlap.
+
+        Filters are run on the full record (so they have continuous data for
+        the recursive math), but the metrics aggregate only over Nov–Mar to
+        avoid melt-water being misclassified as baseflow.
+        """
         df = self.aligned(method=method, eckhardt_kwargs=eckhardt_kwargs)
+        # Restrict to winter for the metric aggregation
+        df = df[df.index.month.isin(self.WINTER_MONTHS)]
         o = df['baseflow_obs'].values
         s = df['baseflow_sim'].values
         Q = df['Q_obs'].values
@@ -647,6 +661,7 @@ class BaseflowValidator:
 
         return {
             'sep_method': method,
+            'window':     'winter (Nov-Mar)',
             'n':         int(len(o)),
             'BFI_obs':   bfi_obs,
             'BFI_sim':   bfi_sim,
@@ -679,14 +694,29 @@ class BaseflowValidator:
 
         fig, axes = plt.subplots(2, 2, figsize=(14, 9))
 
-        # 1. Timeseries: Q + obs baseflow + sim baseflow
+        # 1. Timeseries: Q + obs baseflow + sim baseflow (winter shaded)
         axes[0, 0].fill_between(df.index, 0, df['Q_obs'],
                                 color='#cccccc', alpha=0.5, label='Q obs')
         axes[0, 0].plot(df.index, df['baseflow_obs'], color='#1f77b4',
                         linewidth=1.2, label=f'Baseflow obs ({method})')
         axes[0, 0].plot(df.index, df['baseflow_sim'], color='#d62728',
                         linewidth=1.2, label=f'Baseflow sim ({method})')
-        axes[0, 0].set_title('Observed vs simulated baseflow')
+        # Shade winter months (where the metrics are computed)
+        winter_mask = pd.Series(df.index.month.isin(self.WINTER_MONTHS), index=df.index)
+        # Find contiguous winter runs and shade them
+        in_winter = False
+        start = None
+        for t, w in winter_mask.items():
+            if w and not in_winter:
+                start = t
+                in_winter = True
+            elif not w and in_winter:
+                axes[0, 0].axvspan(start, t, color='#9ecae1', alpha=0.15, zorder=0)
+                in_winter = False
+        if in_winter:
+            axes[0, 0].axvspan(start, winter_mask.index[-1],
+                               color='#9ecae1', alpha=0.15, zorder=0)
+        axes[0, 0].set_title('Obs vs sim baseflow (blue shading = winter metric window)')
         axes[0, 0].set_ylabel('Q (m³/s)')
         axes[0, 0].legend(fontsize=8)
         axes[0, 0].grid(alpha=0.3)
@@ -711,10 +741,13 @@ class BaseflowValidator:
                         color='#1f77b4', label='obs')
         axes[1, 0].plot(range(1, 13), month_bfi_sim.values, 's-',
                         color='#d62728', label='sim')
+        # Shade winter months in this panel too
+        for wm in self.WINTER_MONTHS:
+            axes[1, 0].axvspan(wm - 0.5, wm + 0.5, color='#9ecae1', alpha=0.15, zorder=0)
         axes[1, 0].set_xticks(range(1, 13))
         axes[1, 0].set_xticklabels(['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])
         axes[1, 0].set_ylabel('Monthly BFI')
-        axes[1, 0].set_title('Monthly BFI cycle')
+        axes[1, 0].set_title('Monthly BFI — blue: filter trustworthy; white: melt-contaminated')
         axes[1, 0].legend(fontsize=8)
         axes[1, 0].grid(alpha=0.3)
         axes[1, 0].set_ylim(0, 1)
@@ -740,7 +773,7 @@ class BaseflowValidator:
         ytable.auto_set_font_size(False)
         ytable.set_fontsize(10)
         ytable.scale(1, 1.4)
-        axes[1, 1].set_title(f'Metrics  ({method})')
+        axes[1, 1].set_title(f'Metrics  ({method}, winter Nov-Mar)')
 
         suptitle = f'Baseflow validation — {self.name}' if self.name else 'Baseflow validation'
         fig.suptitle(suptitle, fontsize=13, fontweight='bold')
