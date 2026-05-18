@@ -368,7 +368,7 @@ class CatchmentProcessor:
             raise FileNotFoundError(
                 f"Upper Indus DEM not found: {upper_indus_dem_path}\n"
                 f"Expected path from namelist: {self.config['raster_dir']}\n"
-                f"Please run download_SRTM_Indus.py first to download the DEM"
+                f"Please run download_SRTM_region.py first to download the DEM"
             )
         
         self.logger.debug(f"Opening Upper Indus DEM: {upper_indus_dem_path.name}")

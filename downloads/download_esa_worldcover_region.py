@@ -490,7 +490,7 @@ def print_landuse_info(landuse_path):
 
 # Whole-region bounding boxes (West, South, East, North) for region-mode
 # downloads.  Keep aligned with REGIONS in
-# catchment_deliniation/catchment_delineation.py and download_SRTM_Indus.py.
+# catchment_deliniation/catchment_delineation.py and download_SRTM_region.py.
 REGION_BBOXES = {
     'indus':  (71.0, 30.5, 82.0, 37.5),   # Upper Indus Basin
     'ganges': (80.0, 26.3, 92.5, 30.5),   # Ganges (Nepal + Bhutan)
