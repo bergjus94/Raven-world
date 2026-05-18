@@ -265,86 +265,90 @@ def print_dem_info(dem_path):
     except Exception as e:
         print(f"Could not read DEM info: {e}")
 
-def download_upper_indus_dem(output_dir):
+# Whole-region bounding boxes (West, South, East, North) for the
+# region-mode download.  Keep aligned with REGIONS in
+# catchment_deliniation/catchment_delineation.py.
+REGION_BBOXES = {
+    'indus':  (71.0, 30.5, 82.0, 37.5),   # Upper Indus Basin
+    'ganges': (80.0, 26.3, 92.5, 30.5),   # Ganges (Nepal + Bhutan)
+}
+
+
+def download_region_dem(region, output_dir):
+    """Download a single DEM covering the entire region's bounding box.
+
+    region : key into REGION_BBOXES ('indus', 'ganges', ...).
+    output_dir : where to write dem_<Region>.tif.
     """
-    Download DEM for the entire Upper Indus Basin
-    
-    Parameters:
-    -----------
-    output_dir : str
-        Directory where to save the DEM
-    
-    Returns:
-    --------
-    str or None
-        Path to the downloaded DEM, or None if failed
-    """
-    # Upper Indus Basin bounding box
-    upper_indus_bbox = (
-        71.0,  # West
-        30.5,  # South
-        82.0,  # East
-        37.5   # North
-    )
-    
-    minx, miny, maxx, maxy = upper_indus_bbox
+    if region not in REGION_BBOXES:
+        raise ValueError(
+            f"Unknown region '{region}'. Available: {sorted(REGION_BBOXES)}"
+        )
+    bbox = REGION_BBOXES[region]
+    minx, miny, maxx, maxy = bbox
     width_deg = maxx - minx
     height_deg = maxy - miny
-    
-    print("\n" + "="*70)
-    print("DOWNLOADING UPPER INDUS BASIN DEM")
-    print("="*70)
+
+    region_title = region.capitalize()
+    print("\n" + "=" * 70)
+    print(f"DOWNLOADING {region_title.upper()} BASIN DEM")
+    print("=" * 70)
     print(f"\nBounding Box:")
     print(f"  West:  {minx}° (Longitude)")
     print(f"  South: {miny}° (Latitude)")
     print(f"  East:  {maxx}° (Longitude)")
     print(f"  North: {maxy}° (Latitude)")
-    print(f"\nCoverage: {width_deg:.1f}° x {height_deg:.1f}° (~{width_deg*111:.0f} x {height_deg*111:.0f} km)")
+    print(f"\nCoverage: {width_deg:.1f}° x {height_deg:.1f}° "
+          f"(~{width_deg*111:.0f} x {height_deg*111:.0f} km)")
     print(f"Area: ~{width_deg*111 * height_deg*111:,.0f} km²")
-    
-    # Create output directory if it doesn't exist
+
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Output path
-    dem_output = os.path.join(output_dir, "dem_Indus.tif")
-    
-    # Check if already exists
+    dem_output = os.path.join(output_dir, f"dem_{region_title}.tif")
+
     if os.path.exists(dem_output) and os.path.getsize(dem_output) > 1000:
         print(f"\n✅ DEM already exists: {dem_output}")
         print_dem_info(dem_output)
         return dem_output
-    
+
     print(f"\nOutput: {dem_output}")
-    print("\n" + "-"*70)
-    
-    # Download
-    if download_dem(upper_indus_bbox, dem_output):
-        print("\n" + "="*70)
-        print("✅ SUCCESS - UPPER INDUS DEM DOWNLOADED")
-        print("="*70)
+    print("\n" + "-" * 70)
+
+    if download_dem(bbox, dem_output):
+        print("\n" + "=" * 70)
+        print(f"✅ SUCCESS - {region_title.upper()} DEM DOWNLOADED")
+        print("=" * 70)
         print_dem_info(dem_output)
         return dem_output
     else:
-        print("\n" + "="*70)
-        print("❌ FAILED - UPPER INDUS DEM DOWNLOAD FAILED")
+        print("\n" + "=" * 70)
+        print(f"❌ FAILED - {region_title.upper()} DEM DOWNLOAD FAILED")
         print("="*70)
         return None
 
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Download SRTM DEM for catchments or Upper Indus Basin')
-    parser.add_argument('--mode', choices=['catchment', 'indus'], default='indus',
-                       help='Download mode: catchment (from namelist) or indus (Upper Indus Basin)')
-    parser.add_argument('--output-dir', default='/home/jberg/Raven-world/data/dem',
-                       help='Output directory for Upper Indus DEM (default: /home/jberg/Raven-world/data/dem)')
-    
+    parser = argparse.ArgumentParser(
+        description='Download SRTM DEM for one catchment or a whole region.'
+    )
+    parser.add_argument(
+        '--mode', choices=['catchment'] + sorted(REGION_BBOXES.keys()),
+        default='indus',
+        help="Download mode: 'catchment' (per-catchment from namelist) or "
+             "a region name ('indus', 'ganges') for one DEM over its bbox."
+    )
+    parser.add_argument(
+        '--output-dir', default='/home/jberg/Raven-world/data/dem',
+        help='Output directory for region DEM '
+             '(default: /home/jberg/Raven-world/data/dem)'
+    )
+
     args = parser.parse_args()
-    
-    if args.mode == 'indus':
-        # Download Upper Indus Basin DEM
-        download_upper_indus_dem(args.output_dir)
-        
+
+    if args.mode in REGION_BBOXES:
+        # Whole-region DEM
+        download_region_dem(args.mode, args.output_dir)
+
     else:
         # Original catchment-based download from namelist
         namelist_path = "/home/jberg/OneDrive/Raven-world/namelist.yaml"

@@ -488,35 +488,34 @@ def print_landuse_info(landuse_path):
     except Exception as e:
         print(f"Could not read landuse info: {e}")
 
-def download_upper_indus_landuse(output_dir):
+# Whole-region bounding boxes (West, South, East, North) for region-mode
+# downloads.  Keep aligned with REGIONS in
+# catchment_deliniation/catchment_delineation.py and download_SRTM_Indus.py.
+REGION_BBOXES = {
+    'indus':  (71.0, 30.5, 82.0, 37.5),   # Upper Indus Basin
+    'ganges': (80.0, 26.3, 92.5, 30.5),   # Ganges (Nepal + Bhutan)
+}
+
+
+def download_region_landuse(region, output_dir):
+    """Download ESA WorldCover for an entire region's bbox and aggregate to 30 m.
+
+    region : key into REGION_BBOXES ('indus', 'ganges', ...).
+    output_dir : where to write landuse_<Region>_30m.tif.
     """
-    Download ESA WorldCover for the entire Upper Indus Basin
-    
-    Parameters:
-    -----------
-    output_dir : str
-        Directory where to save the landuse raster
-    
-    Returns:
-    --------
-    str or None
-        Path to the downloaded landuse raster, or None if failed
-    """
-    # Upper Indus Basin bounding box
-    upper_indus_bbox = (
-        71.0,  # West
-        30.5,  # South
-        82.0,  # East
-        37.5   # North
-    )
-    
-    minx, miny, maxx, maxy = upper_indus_bbox
+    if region not in REGION_BBOXES:
+        raise ValueError(
+            f"Unknown region '{region}'. Available: {sorted(REGION_BBOXES)}"
+        )
+    bbox = REGION_BBOXES[region]
+    minx, miny, maxx, maxy = bbox
     width_deg = maxx - minx
     height_deg = maxy - miny
-    
-    print("\n" + "="*70)
-    print("DOWNLOADING UPPER INDUS BASIN ESA WORLDCOVER")
-    print("="*70)
+
+    region_title = region.capitalize()
+    print("\n" + "=" * 70)
+    print(f"DOWNLOADING {region_title.upper()} BASIN ESA WORLDCOVER")
+    print("=" * 70)
     print(f"\nBounding Box:")
     print(f"  West:  {minx}° (Longitude)")
     print(f"  South: {miny}° (Latitude)")
@@ -524,48 +523,39 @@ def download_upper_indus_landuse(output_dir):
     print(f"  North: {maxy}° (Latitude)")
     print(f"\nCoverage: {width_deg:.1f}° x {height_deg:.1f}°")
     print(f"Area: ~{width_deg*111 * height_deg*111:,.0f} km²")
-    
-    # Create output directory if it doesn't exist
+
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Output path
-    landuse_output = os.path.join(output_dir, "landuse_Indus_30m.tif")
-    
-    # Check if already exists
+    landuse_output = os.path.join(output_dir, f"landuse_{region_title}_30m.tif")
+
     if os.path.exists(landuse_output) and os.path.getsize(landuse_output) > 1000:
         print(f"\n✅ Landuse raster already exists: {landuse_output}")
         print_landuse_info(landuse_output)
         return landuse_output
-    
+
     print(f"\nOutput: {landuse_output}")
-    print("\n" + "-"*70)
-    
-    # Create temporary directory
-    temp_dir = tempfile.mkdtemp(prefix="esa_indus_")
-    
+    print("\n" + "-" * 70)
+
+    temp_dir = tempfile.mkdtemp(prefix=f"esa_{region}_")
     try:
-        # Step 1: Download ESA WorldCover tiles
-        temp_worldcover_path = os.path.join(temp_dir, "worldcover_full_indus.tif")
-        
+        temp_worldcover_path = os.path.join(temp_dir, f"worldcover_full_{region}.tif")
+
         print("\nStep 1/2: Downloading ESA WorldCover tiles...")
-        if not download_esa_worldcover_direct(upper_indus_bbox, temp_worldcover_path):
+        if not download_esa_worldcover_direct(bbox, temp_worldcover_path):
             print("❌ Failed to download ESA WorldCover")
             return None
-        
-        # Step 2: Aggregate to 30m (no clipping needed - we want the full extent)
+
         print("\nStep 2/2: Aggregating to 30m resolution...")
         if aggregate_to_30m_mode_parallel(temp_worldcover_path, landuse_output):
-            print("\n" + "="*70)
-            print("✅ SUCCESS - UPPER INDUS LANDUSE DOWNLOADED")
-            print("="*70)
+            print("\n" + "=" * 70)
+            print(f"✅ SUCCESS - {region_title.upper()} LANDUSE DOWNLOADED")
+            print("=" * 70)
             print_landuse_info(landuse_output)
             return landuse_output
         else:
             print("❌ Failed to aggregate to 30m")
             return None
-            
+
     finally:
-        # Clean up temporary directory
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
             print(f"\nCleaned up temporary directory")
@@ -573,19 +563,27 @@ def download_upper_indus_landuse(output_dir):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Download ESA WorldCover for catchments or Upper Indus Basin')
-    parser.add_argument('--mode', choices=['catchment', 'indus'], default='indus',
-                       help='Download mode: catchment (from namelist) or indus (Upper Indus Basin)')
-    parser.add_argument('--output-dir', 
-                       default='/home/jberg@giub.local/Raven_world/01_data/topo/catchment_landuse',
-                       help='Output directory for Upper Indus landuse')
-    
+    parser = argparse.ArgumentParser(
+        description='Download ESA WorldCover for one catchment or a whole region.'
+    )
+    parser.add_argument(
+        '--mode', choices=['catchment'] + sorted(REGION_BBOXES.keys()),
+        default='indus',
+        help="Download mode: 'catchment' (per-catchment from namelist) or a "
+             "region name ('indus', 'ganges') for one landuse over its bbox."
+    )
+    parser.add_argument(
+        '--output-dir',
+        default='/home/jberg@giub.local/Raven_world/01_data/topo/catchment_landuse',
+        help='Output directory for region landuse'
+    )
+
     args = parser.parse_args()
-    
-    if args.mode == 'indus':
-        # Download Upper Indus Basin landuse
-        download_upper_indus_landuse(args.output_dir)
-        
+
+    if args.mode in REGION_BBOXES:
+        # Whole-region landuse
+        download_region_landuse(args.mode, args.output_dir)
+
     else:
         # Original catchment-based download from namelist
         namelist_path = "/home/jberg/OneDrive/Raven-world/namelist.yaml"
