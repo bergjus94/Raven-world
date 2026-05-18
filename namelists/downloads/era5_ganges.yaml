@@ -1,0 +1,26 @@
+# =============================================================================
+# ERA5-Land download: Ganges (Nepal + Bhutan), 1970–2023 on the 0.1° native grid
+# =============================================================================
+# Matches the Indus baseline (era5_indus.yaml) — same date range, same
+# variable set, same buffer.  Bbox derived from the merged Ganges catchments
+# shapefile (Nepal 23 + Bhutan 1) produced by:
+#     python catchment_deliniation/catchment_delineation.py --region ganges
+#
+# Verify shape_path before launch — adjust to match where your merged
+# Ganges all_catchments file actually lives on the server.
+
+start_date: '1970-01-01'
+end_date:   '2023-12-31'
+
+shape_path: '/home/jberg@giub.local/Raven_world/01_data/topo/catchment_shapefile/Ganges_all_catchments.shp'
+buffer_degrees: 0.1
+
+output_dir: '/home/jberg@giub.local/Raven_world/01_data/meteo/Ganges-Era5-native'
+
+variables:
+  - geopotential            # time-invariant surface elevation (one-shot)
+  - 2m_temperature
+  - total_precipitation
+  - potential_evaporation
+
+max_workers: 4
