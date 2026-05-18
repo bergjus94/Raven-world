@@ -1256,18 +1256,11 @@ REGIONS = {
         "stations": None,
         "constraint": None,
     },
-    "nepal": {
-        "label": "Nepal Himalaya",
-        "bbox": (80.0, 26.3, 88.2, 30.5),
-        "country": "Nepal",
-        "stations": "Nepal_stations.shp",
-        "constraint": None,
-    },
-    "bhutan": {
-        "label": "Bhutan Himalaya",
-        "bbox": (88.5, 26.5, 92.5, 28.5),
-        "country": "Bhutan",
-        "stations": "Bhutan_stations.shp",
+    "ganges": {
+        "label": "Ganges Basin (Nepal + Bhutan)",
+        "bbox": (80.0, 26.3, 92.5, 30.5),
+        "country": "Ganges",
+        "stations": "Ganges_stations.shp",
         "constraint": None,
     },
 }
