@@ -1,13 +1,14 @@
 """
-HBV Model Preprocessing Module for Raven Hydrological Modeling Framework
+SPHY Model Preprocessing Module for Raven Hydrological Modeling Framework
 
-This module provides a comprehensive preprocessing class for setting up HBV model
-runs in the Raven hydrological modeling framework. It handles the creation of
-all necessary Raven input files (.rvh, .rvt, .rvp, .rvi, .rvc) with HBV-specific
-configurations.
+SPHY is an HMA-tuned base model whose process choices are locked in
+docs/model_structure_decisions.md (RavenHydroFramework repo). It runs alongside
+the existing HBV/HYMOD/HMETS/MOHYSE processors. Structural variant within the
+model: `perc_option` (1: HBV-Light PERC_CONSTANT; 2: SPHY-faithful
+PERC_POWER_LAW + PERC_LINEAR).
 
 Author: Justine Berg
-Date: August 2025
+Date: 2026-05
 """
 
 #--------------------------------------------------------------------------------
@@ -30,14 +31,19 @@ from paths import get_paths, get_relative_data_obs, get_relative_topo
 from preprocess_lapse_rate import load_lapse_rates
 
 #--------------------------------------------------------------------------------
-############################ HBV Preprocessor Class ############################
+############################ SPHY Preprocessor Class ###########################
 #--------------------------------------------------------------------------------
 
-class HBVProcessor:
+class SPHYProcessor:
     """
-    A comprehensive preprocessor for HBV model setup in Raven.
-    
-    This class handles all aspects of HBV model preprocessing including:
+    A comprehensive preprocessor for the SPHY-style HMA base model in Raven.
+
+    Built per docs/model_structure_decisions.md in the RavenHydroFramework
+    repo. Process choices are locked (see decisions doc); the only intra-model
+    structural variable is `perc_option` (1: HBV-Light single PERC_CONSTANT;
+    2: SPHY-faithful PERC_POWER_LAW + PERC_LINEAR).
+
+    This class handles all aspects of SPHY model preprocessing including:
     - Creation of Raven input files (.rvh, .rvt, .rvp, .rvi, .rvc)
     - HRU management and elevation band grouping
     - Parameter handling for both template and initialized files
@@ -46,7 +52,7 @@ class HBVProcessor:
     
     def __init__(self, namelist_path: Union[str, Path]):
         """        
-        Initialize the HBV preprocessor with namelist file.
+        Initialize the SPHY preprocessor with namelist file.
         
         Args:
             namelist_path: Path to the YAML namelist file
@@ -74,6 +80,19 @@ class HBVProcessor:
         self.end_date = namelist['end_date']
         self.cali_end_date = namelist['cali_end_date']
         self.coupled = namelist.get('coupled', False)
+        # SPHY requires external GloGEM glacier-mass-balance forcing — the .rvi
+        # emits no Raven-side glacier melt process (decisions doc § Glacier
+        # melt: "No Raven glacier melt process is used. Glacier melt water
+        # arrives in PONDED_WATER on MASKED_GLACIER HRUs each timestep via the
+        # forcing file"). Running with coupled=False silently zeros out the
+        # glacier contribution — fail loud instead.
+        if not self.coupled:
+            raise ValueError(
+                f"SPHY requires coupled=True (decisions doc § Glacier melt). "
+                f"Combine model='SPHY' with a glogem-* configuration (e.g. "
+                f"'glogem', 'glogem_subdaily', 'glacier_gw_glogem'), or set "
+                f"coupled: true explicitly. Got coupled={self.coupled!r}."
+            )
         self._irrigation_variable = namelist.get('irrigation_variable', 'discharge').lower()
         self._pet_method = namelist.get('pet_method', None)
         self.author = namelist.get('author', 'Justine Berg')
@@ -87,23 +106,31 @@ class HBVProcessor:
             )
         print(f"Meteorological data source: {self.meteo_source}")
 
-        # Subsurface structure
-        self.subsurface_structure = namelist.get('subsurface_structure', 'gw_2_layer')
-        valid_structures = ['gw_1_layer', 'gw_2_layer', 'gw_3_layer']
-        if self.subsurface_structure not in valid_structures:
-            raise ValueError(f"Invalid subsurface_structure: {self.subsurface_structure}. Must be one of {valid_structures}")
-        # glacier_routing: enum controlling how glacier meltwater enters the subsurface.
-        #   'none'          — meltwater stays on MASKED_GLACIER (baseline)
-        #   'through_soil'  — MASKED_GLACIER gets a soil profile and melt infiltrates (Structure 3)
-        #   'split_to_slow' — SPHY-style :Split routes melt to GlacROF*SURFACE + (1-GlacROF)*SLOW_RES (Structure 5)
-        # Accept legacy bool (True -> 'through_soil', False -> 'none') for backward compat.
+        # Subsurface structure — SPHY Phase 1 locks Config B (3-layer linear:
+        # TOPSOIL + FAST_RES + SLOW_RES). Configs A/C/D will be added as a
+        # config-key axis later (see model_structure_decisions.md). The
+        # attribute is kept for forward-compat with the rest of the processor
+        # (.rvp, .rvc, .rvh all branch on it).
+        self.subsurface_structure = 'gw_2_layer'  # = 3-layer Config B in SPHY terms
+        nml_subsurf = namelist.get('subsurface_structure')
+        if nml_subsurf and nml_subsurf != 'gw_2_layer':
+            print(
+                f"⚠️  SPHY ignores subsurface_structure={nml_subsurf!r} — "
+                f"Phase 1 only supports Config B (gw_2_layer = 3-layer linear). "
+                f"Configs A/C/D not yet wired."
+            )
+        # glacier_routing: 'none' for Configs A/B/C (baseline; no :Split),
+        # 'split_to_slow' for Config D (SPHY GlacF equivalent — :Split routes
+        # MASKED_GLACIER PONDED_WATER to GlacROF·SURFACE + (1-GlacROF)·SLOW_RES).
+        # Normalize legacy bool from defaults.yaml: False/True → 'none'/'none'
+        # ('through_soil' was an HBV-specific variant; SPHY rejects it).
         raw_gr = namelist.get('glacier_routing', 'none')
         if isinstance(raw_gr, bool):
-            raw_gr = 'through_soil' if raw_gr else 'none'
+            raw_gr = 'none'  # SPHY ignores HBV's legacy True→'through_soil' mapping
         self.glacier_routing = raw_gr
-        valid_routings = ['none', 'through_soil', 'split_to_slow']
+        valid_routings = ['none', 'split_to_slow']
         if self.glacier_routing not in valid_routings:
-            raise ValueError(f"Invalid glacier_routing: {self.glacier_routing}. Must be one of {valid_routings}")
+            raise ValueError(f"Invalid glacier_routing: {self.glacier_routing}. Must be one of {valid_routings} for SPHY.")
         # split_to_slow needs a SLOW_RESERVOIR as :Split target, so it's valid for
         # gw_2_layer (FAST+SLOW) and gw_3_layer (FAST+SLOW+DEEP). It's NOT valid for
         # gw_1_layer (SINGLE_RES only, no SLOW_RESERVOIR).
@@ -142,7 +169,7 @@ class HBVProcessor:
         # Centralized path construction
         paths = get_paths(namelist)
         self.catchment_dir = paths['catchment_dir']
-        self.hbv_dir = paths['model_dir']
+        self.model_dir = paths['model_dir']
         self.templates_dir = paths['template_dir']
         self.topo_files_dir = paths['topo_dir']
         self.shared_data_dir = paths['data_obs_dir']
@@ -155,7 +182,7 @@ class HBVProcessor:
         
     def _create_directories(self):
         """Create necessary directories if they don't exist."""
-        for directory in [self.hbv_dir, self.templates_dir, self.shared_data_dir]:
+        for directory in [self.model_dir, self.templates_dir, self.shared_data_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -288,7 +315,7 @@ class HBVProcessor:
         creation_date_line = f":CreationDate      {creation_date}"
         description = [
             "#",
-            f"# Emulation of HBV simulation of {self.gauge_id}",
+            f"# SPHY-style HMA base model simulation of {self.gauge_id}",
             "#------------------------------------------------------------------------ \n"
         ]
         return [header_line, file_type, author_line, creation_date_line, *description]
@@ -306,12 +333,12 @@ class HBVProcessor:
         """
         if template:
             param_or_name = "names"
-            file_name = f"{self.gauge_id}_HBV.{file_type}.tpl"
+            file_name = f"{self.gauge_id}_SPHY.{file_type}.tpl"
             file_path = self.templates_dir / file_name
         else:
             param_or_name = "init"
-            file_name = f"{self.gauge_id}_HBV.{file_type}"
-            file_path = self.hbv_dir / file_name
+            file_name = f"{self.gauge_id}_SPHY.{file_type}"
+            file_path = self.model_dir / file_name
         
         return file_path, param_or_name
     
@@ -399,7 +426,7 @@ class HBVProcessor:
 
     def create_rvh_file(self, template: bool = False):
         """
-        Write Raven .rvh file for HBV model.
+        Write Raven .rvh file for SPHY model.
         
         Args:
             template: Whether to create a template file
@@ -407,7 +434,7 @@ class HBVProcessor:
         file_path, param_or_name = self._get_file_path('rvh', template)
         # DEBUG: Print what param_or_name actually is
         print(f"DEBUG: template={template}, param_or_name={param_or_name}")
-        print(f"DEBUG: Available keys in self.params['HBV']['{param_or_name}']: {list(self.params['HBV'][param_or_name].keys())[:5]}...")
+        print(f"DEBUG: Available keys in self.params['SPHY']['{param_or_name}']: {list(self.params['SPHY'][param_or_name].keys())[:5]}...")
             
         # Read HRU table from CSV file
         hru_table_path = self.topo_files_dir / 'HRU_table.csv'
@@ -486,14 +513,13 @@ class HBVProcessor:
             sp_rows = []
             for sb in subbasins_config:
                 sp_rows.append(
-                    f"  {sb['id']:10d},  {self.params['HBV'][param_or_name]['X11']},"
-                    f"  {self.params['HBV'][param_or_name]['HBV_Time_To_Peak']},"
+                    f"  {sb['id']:10d},  {self.params['SPHY'][param_or_name]['X09']},"
+                    f"  {self.params['SPHY'][param_or_name]['Sphy_Time_To_Peak']},"
                 )
 
             subbasin_properties = [
                 ":SubBasinProperties",
-                "#                       HBV_T_CONC_MAX_BAS, DERIVED FROM HBV_T_CONC_MAX_BAS,",
-                "#                            MAXBAS,                 MAXBAS/2,",
+                "# TIME_TO_PEAK derived as TIME_CONC/2 (HBV MAXBAS/2 convention).",
                 "   :Parameters,           TIME_CONC,             TIME_TO_PEAK,",
                 "   :Units,                        d,                        d,",
                 *sp_rows,
@@ -512,11 +538,10 @@ class HBVProcessor:
 
             subbasin_properties = [
                 ":SubBasinProperties",
-                "#                       HBV_T_CONC_MAX_BAS, DERIVED FROM HBV_T_CONC_MAX_BAS,",
-                "#                            MAXBAS,                 MAXBAS/2,",
+                "# TIME_TO_PEAK derived as TIME_CONC/2 (HBV MAXBAS/2 convention).",
                 "   :Parameters,           TIME_CONC,             TIME_TO_PEAK,",
                 "   :Units,                        d,                        d,",
-                f"              1,          {self.params['HBV'][param_or_name]['X11']},                  {self.params['HBV'][param_or_name]['HBV_Time_To_Peak']},",
+                f"              1,          {self.params['SPHY'][param_or_name]['X09']},                  {self.params['SPHY'][param_or_name]['Sphy_Time_To_Peak']},",
                 ":EndSubBasinProperties",
             ]
 
@@ -530,7 +555,7 @@ class HBVProcessor:
             ff.write("\n# HRU Groups\n")
             ff.writelines(f"{line}\n" for line in hru_groups)
                 
-        print(f"Successfully wrote HBV RVH file to {file_path}")
+        print(f"Successfully wrote SPHY RVH file to {file_path}")
 
     def _create_hru_groups(self, hru_df: pd.DataFrame) -> List[str]:
         """
@@ -698,7 +723,7 @@ class HBVProcessor:
 
     def create_rvt_file(self, template: bool = False):
         """
-        Write Raven .rvt file for HBV model.
+        Write Raven .rvt file for SPHY model.
         ✅ UPDATED: Supports multi-subbasin mode (one :Gauge block per subbasin).
         """
         if self.config.get('subbasins'):
@@ -724,7 +749,7 @@ class HBVProcessor:
             ff.writelines(gauge_info)
             ff.write(f":RedirectToFile {self._rel_data_obs}/Q_daily.rvt\n")
 
-        print(f"✅ Successfully wrote HBV RVT file to {file_path}")
+        print(f"✅ Successfully wrote SPHY RVT file to {file_path}")
         print(f"   Meteo source: {self.meteo_source}")
 
     def _create_rvt_file_multi_subbasin(self, template: bool = False):
@@ -762,7 +787,7 @@ class HBVProcessor:
                     ff.write(f":RedirectToFile {self._rel_data_obs}/Q_daily_{sb_gid}.rvt\n\n")
                     print(f"  → Streamflow redirect: {self._rel_data_obs}/Q_daily_{sb_gid}.rvt")
 
-        print(f"✅ Successfully wrote multi-subbasin HBV RVT file to {file_path}")
+        print(f"✅ Successfully wrote multi-subbasin SPHY RVT file to {file_path}")
         print(f"   Meteo source: {self.meteo_source}")
 
     def _create_gauge_info(self, gauge_lat: float, gauge_lon: float,
@@ -1093,8 +1118,8 @@ class HBVProcessor:
             print(f"📊 Overriding precipitation source: TPHiPr")
 
         # Get optional parameters with default values
-        rain_corr = self.params['HBV'][param_or_name].get('X20', 1.0)
-        snow_corr = self.params['HBV'][param_or_name].get('X21', 1.0)
+        rain_corr = self.params['SPHY'][param_or_name].get('X20', 1.0)
+        snow_corr = self.params['SPHY'][param_or_name].get('X21', 1.0)
         use_precip_corr = self.config.get('precip_correction', False)
         comment = "" if use_precip_corr else "#"
 
@@ -1236,43 +1261,41 @@ class HBVProcessor:
 
     def create_rvp_file(self, template: bool = False):
         """
-        Write Raven .rvp file for HBV model.
-        
+        Write Raven .rvp file for the SPHY base model.
+
         Args:
             template: Whether to create template file
         """
         file_path, param_or_name = self._get_file_path('rvp', template)
-        
-        # Define land use and vegetation classes
+
         land_use_classes = [
             ":LandUseClasses",
-            "   :Attributes, IMPERM, FOREST_COV",
-            "   :Units, frac, frac",
-            "   FOREST,    0.05, 1.0",
-            "   OPEN,      0.0,  0.0",
-            "   GLACIER,   0.0,  0.0",
-            "   LAKE,      0.0,  0.0",
-            "   ROCK,      0.15, 0.0",
-            "   BUILT,     0.5,  0.0",
-            "   DEFAULT_L  0.0,  0.0",
-            "   MASKED_GLACIER, 1.0, 0.0",
-            ":EndLandUseClasses"
+            "   :Attributes,    IMPERM, FOREST_COV",
+            "   :Units,           frac,       frac",
+            "   FOREST,           0.05,        1.0",
+            "   OPEN,              0.0,        0.0",
+            "   GLACIER,           0.0,        0.0",
+            "   LAKE,              0.0,        0.0",
+            "   ROCK,             0.15,        0.0",
+            "   BUILT,             0.5,        0.0",
+            "   DEFAULT_L,         0.0,        0.0",
+            "   MASKED_GLACIER,    1.0,        0.0",
+            ":EndLandUseClasses",
         ]
-        
+
         vegetation_classes = [
             ":VegetationClasses",
             "   :Attributes, MAX_HT, MAX_LAI, MAX_LEAF_COND",
-            "   :Units, m, none, mm_per_s",
-            "   DEFAULT_V, 0.0, 0.0, 0.0",
-            "   FOREST,  20,  4.5, 3.5",
-            "   GRAS,    0.6, 1.5, 2.5",
-            "   CROP,    2.0, 3.0, 4.0",
-            ":EndVegetationClasses"
+            "   :Units,           m,    none,      mm_per_s",
+            "   DEFAULT_V,      0.0,     0.0,           0.0",
+            "   FOREST,          20,     4.5,           3.5",
+            "   GRAS,           0.6,     1.5,           2.5",
+            "   CROP,           2.0,     3.0,           4.0",
+            ":EndVegetationClasses",
         ]
 
-        # Create HBV-specific parameter structure
-        rvp_sections = self._create_rvp_sections(param_or_name, 
-                                                land_use_classes, vegetation_classes)
+        rvp_sections = self._create_rvp_sections(param_or_name,
+                                                 land_use_classes, vegetation_classes)
         
         # Write the file
         with open(file_path, 'w') as ff:
@@ -1285,10 +1308,10 @@ class HBVProcessor:
     def _build_global_params(self, param_or_name: str) -> List[str]:
         """Build the :GlobalParameter lines, including AVG_ANNUAL_RUNOFF."""
         lines = [
-            f":GlobalParameter RAINSNOW_TEMP       {self.params['HBV'][param_or_name]['X01']}",
-            ":GlobalParameter RAINSNOW_DELTA      1.0 #constant",
-            f":GlobalParameter ADIABATIC_LAPSE    6.0 # ADIABATIC_LAPSE",
-            f":GlobalParameter SNOW_SWI  {self.params['HBV'][param_or_name]['X04']} #SNOW_SWI",
+            ":GlobalParameter ADIABATIC_LAPSE    6.0",
+            f":GlobalParameter RAINSNOW_TEMP      {self.params['SPHY'][param_or_name]['X01']}",
+            ":GlobalParameter RAINSNOW_DELTA     2.0 # fixed per decisions doc",
+            f":GlobalParameter SNOW_SWI           {self.params['SPHY'][param_or_name]['X04']}",
         ]
         # Precipitation lapse: data-derived HBVEC_LAPSE_* (segmented regression
         # of gridded precip vs DEM elevation). PRECIP_LAPSE is silently
@@ -1311,9 +1334,6 @@ class HBVProcessor:
                 f"(rate=0.08, upper=0.0, elev=5000). "
                 f"Run preprocess_lapse_rate.py to derive from data."
             )
-        # DeltaH glacier method requires SNOW_TO_ICE_DATE (day of year for annual snow-to-ice conversion)
-        if not self.coupled and self.config.get('glacier_method') == 'DeltaH':
-            lines.append(":GlobalParameter SNOW_TO_ICE_DATE    274   # Oct 1 (day of year)")
         avg_runoff = self._compute_avg_annual_runoff()
         if avg_runoff is not None:
             lines.append(
@@ -1327,121 +1347,123 @@ class HBVProcessor:
             )
         return lines
 
-    def _create_rvp_sections(self, param_or_name: str, 
+    def _create_rvp_sections(self, param_or_name: str,
                         land_use_classes: List[str], vegetation_classes: List[str]) -> Dict[str, List[str]]:
-        """Create all sections for RVP file."""
-        
-        # Get optional glacier parameter with default
-        glac_storage_coeff = self.params['HBV'][param_or_name].get('X19', 0.05)
-        
+        """Create all sections for the SPHY .rvp file.
+
+        Config B baseline (3-layer linear: TOPSOIL + FAST_RES + SLOW_RES).
+        The .rvp parameter table branches on ``perc_option``:
+
+        - opt 1 (HBV-Light): columns end at BASEFLOW_COEFF. MAX_PERC_RATE on
+          FAST_RES drives PERC_CONSTANT (FAST→SLOW).
+        - opt 2 (SPHY-faithful): adds PERC_N and PERC_COEFF columns. TOPSOIL
+          gets MAX_PERC_RATE + PERC_N for PERC_POWER_LAW (TOPSOIL→FAST);
+          FAST_RES gets PERC_COEFF for PERC_LINEAR (FAST→SLOW).
+        """
+        p = self.params['SPHY'][param_or_name]
+        perc_option = int(self.config.get('perc_option', 1))
+
+        # Snow-melt land-use param row.
+        # MELT_FACTOR (X02) and CFR (X03) drive the calibrated melt+refreeze.
+        # MIN_MELT_FACTOR and REFREEZE_FACTOR are derived tied params (see
+        # spotpy_optimize._get_tied_parameters); for non-calibrated runs we
+        # fall back to literature defaults.
+        melt_factor   = p['X02']
+        cfr           = p['X03']
+        min_melt      = p.get('Sphy_Min_Melt_Factor') or (0.4 * float(melt_factor) if not isinstance(melt_factor, str) else melt_factor)
+        refreeze      = p.get('Sphy_Refreeze_Factor') or (float(cfr) * float(melt_factor) if not isinstance(melt_factor, str) else cfr)
+
+        # Topsoil thickness (X10) — also drives DEFAULT_P profile.
+        topsoil_thickness = p['X10']
+
+        # Soil-parameter rows depend on perc_option.
+        # opt1: X11 = FAST_RES MAX_PERC_RATE (drives PERC_CONSTANT FAST→SLOW)
+        # opt2: X12 = TOPSOIL MAX_PERC_RATE + X13 = PERC_N (drive PERC_POWER_LAW TOPSOIL→FAST)
+        #       X14 = FAST_RES PERC_COEFF (drives PERC_LINEAR FAST→SLOW)
+        if perc_option == 1:
+            soil_param_block = [
+                "  :Parameters, POROSITY, FIELD_CAPACITY, SAT_WILT, HBV_BETA, MAX_CAP_RISE_RATE, MAX_PERC_RATE, BASEFLOW_COEFF",
+                "  :Units,          none,           none,     none,     none,              mm/d,          mm/d,            1/d",
+                f"   [DEFAULT],       1.0,       {p['X06']},      0.0,  {p['X05']},          {p['X15']},           0.0,            0.0",
+                f"   FAST_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      {p['X11']},      {p['X07']}",
+                f"   SLOW_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X08']}",
+            ]
+        else:  # perc_option == 2 (SPHY-faithful)
+            soil_param_block = [
+                "  :Parameters, POROSITY, FIELD_CAPACITY, SAT_WILT, HBV_BETA, MAX_CAP_RISE_RATE, MAX_PERC_RATE, BASEFLOW_COEFF, PERC_N, PERC_COEFF",
+                "  :Units,          none,           none,     none,     none,              mm/d,          mm/d,            1/d,   none,        1/d",
+                f"   [DEFAULT],       1.0,       {p['X06']},      0.0,  {p['X05']},          {p['X15']},     {p['X12']},            0.0, {p['X13']},         0.0",
+                f"   FAST_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X07']}, _DEFAULT,    {p['X14']}",
+                f"   SLOW_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X08']}, _DEFAULT,   _DEFAULT",
+            ]
+
         return {
             "#Soil Classes": [
                 ":SoilClasses",
                 "   :Attributes,",
                 "   :Units,",
-                "       TOPSOIL,      1.0,    0.0,       0",
-                *(  [
-                    "       SINGLE_RES,   1.0,    0.0,       0",
-                    ] if self.subsurface_structure == 'gw_1_layer' else
-                    [
-                    "       FAST_RES,     1.0,    0.0,       0",
-                    "       SLOW_RES,     1.0,    0.0,       0",
-                    ] if self.subsurface_structure == 'gw_2_layer' else
-                    [
-                    "       FAST_RES,     1.0,    0.0,       0",
-                    "       SLOW_RES,     1.0,    0.0,       0",
-                    "       DEEP_GW,      1.0,    0.0,       0",
-                    ]
-                ),
-                ":EndSoilClasses"
+                "       TOPSOIL,",
+                "       FAST_RES,",
+                "       SLOW_RES",
+                ":EndSoilClasses",
             ],
             "#Soil Profiles": [
-                "#     name,#horizons,{soiltype,thickness}x{#horizons}",
-                "# ",
+                "#     name, #horizons, {soiltype, thickness}*N",
                 ":SoilProfiles",
-                "    GLACIER, 0",
-                "    LAKE, 0",
-                "    ROCK, 0",
-                *(  # MASKED_GLACIER: needs a soil profile for both 'through_soil' (melt infiltrates)
-                    # and 'split_to_slow' (needs SLOW_RES/DEEP_GW layers for :Split target and DEEP percolation chain).
-                    [f"    MASKED_GLACIER, {2 if self.subsurface_structure == 'gw_1_layer' else 4 if self.subsurface_structure == 'gw_3_layer' else 3},"
-                     f"    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},"
-                     + ("   SINGLE_RES,  100.0" if self.subsurface_structure == 'gw_1_layer'
-                        else "   FAST_RES,    100.0, SLOW_RES,    100.0" if self.subsurface_structure == 'gw_2_layer'
-                        else "   FAST_RES,    100.0, SLOW_RES,    100.0, DEEP_GW,    100.0")]
-                    if self.glacier_routing != 'none' else
+                "    GLACIER,        0",
+                "    LAKE,           0",
+                "    ROCK,           0",
+                # MASKED_GLACIER carries the GloGEM forcing on its (zero-depth) profile.
+                # Config D (glacier_routing='split_to_slow') gives it a real profile so
+                # the :Split target SLOW_RES exists on those HRUs.
+                *(
+                    [f"    MASKED_GLACIER, 3, TOPSOIL, {topsoil_thickness}, FAST_RES, 100.0, SLOW_RES, 100.0"]
+                    if self.glacier_routing == 'split_to_slow' else
                     ["    MASKED_GLACIER, 0"]
                 ),
-                *(  [f"   DEFAULT_P,      2,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   SINGLE_RES,  100.0"]
-                    if self.subsurface_structure == 'gw_1_layer' else
-                    [f"   DEFAULT_P,      3,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0"]
-                    if self.subsurface_structure == 'gw_2_layer' else
-                    [f"   DEFAULT_P,      4,    TOPSOIL,            {self.params['HBV'][param_or_name]['X17']},   FAST_RES,    100.0, SLOW_RES,    100.0, DEEP_GW,    100.0"]
-                ),
-                ":EndSoilProfiles"
+                f"    DEFAULT_P,      3, TOPSOIL, {topsoil_thickness}, FAST_RES, 100.0, SLOW_RES, 100.0",
+                ":EndSoilProfiles",
             ],
             "#Vegetation Classes": vegetation_classes,
             "#Vegetation Parameters": [
+                # Canonical RAIN_ICEPT_PCT / SNOW_ICEPT_PCT names (= 1 - TFRAIN/TFSNOW).
+                # Writing the canonical names silences Raven's false-positive
+                # "TFRAIN not used" advisory (decisions doc § Precipitation).
                 ":VegetationParameterList",
-                "   :Parameters,  MAX_CAPACITY, MAX_SNOW_CAPACITY,  TFRAIN,  TFSNOW,",
-                "   :Units,                 mm,                mm,    frac,    frac,",
-                "       [DEFAULT],             10000,             10000,    0.88,    0.88,",
-                ":EndVegetationParameterList"
+                "   :Parameters, MAX_CAPACITY, MAX_SNOW_CAPACITY, RAIN_ICEPT_PCT, SNOW_ICEPT_PCT, RELATIVE_LAI",
+                "   :Units,                mm,                mm,           frac,           frac,         none",
+                "   [DEFAULT],          10000,             10000,           0.12,           0.12,          1.0",
+                ":EndVegetationParameterList",
             ],
             "#Land Use Classes": land_use_classes,
             "#Global Parameters": self._build_global_params(param_or_name),
-            "#Land Use Parameters": [
+            "#Land Use Parameters — snow melt and refreeze": [
+                # HBV_MELT_ASP_CORR fixed at 0.4 (Hamilton 2000); HBV_MELT_FOR_CORR fixed
+                # at 0.5 (HMA mostly treeless — see decisions doc § Snow melt).
                 ":LandUseParameterList",
-                "  :Parameters,   MELT_FACTOR, MIN_MELT_FACTOR,   HBV_MELT_FOR_CORR, REFREEZE_FACTOR, HBV_MELT_ASP_CORR",
-                "  :Units     ,        mm/d/K,          mm/d/K,                none,          mm/d/K,              none",
-                "  #              MELT_FACTOR,        CONSTANT,         HBV_MELT_FOR_CORR,     REFREEZE_FACTOR,          CONSTANT",
-                f"    [DEFAULT],  {self.params['HBV'][param_or_name]['X02']},             2.2,        {self.params['HBV'][param_or_name]['X18']},    {self.params['HBV'][param_or_name]['X03']},              0.48",
+                "   :Parameters, MELT_FACTOR, MIN_MELT_FACTOR, HBV_MELT_ASP_CORR, HBV_MELT_FOR_CORR, REFREEZE_FACTOR",
+                "   :Units,           mm/d/K,          mm/d/K,              none,              none,          mm/d/K",
+                f"   [DEFAULT],   {melt_factor},      {min_melt},               0.4,               0.5,       {refreeze}",
                 ":EndLandUseParameterList",
-                "",
-                # Glacier land use parameters: active when NOT coupled (Raven handles glacier melt),
-                # commented when coupled (GloGEM handles glacier melt externally)
-                (":LandUseParameterList" if not self.coupled else "#:LandUseParameterList"),
-                ("  :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG" if not self.coupled else
-                 "# :Parameters, HBV_MELT_GLACIER_CORR,   HBV_GLACIER_KMIN, GLAC_STORAGE_COEFF, HBV_GLACIER_AG"),
-                ("  :Units     ,                  none,                1/d,                1/d,           1/mm" if not self.coupled else
-                 "# :Units     ,                  none,                1/d,                1/d,           1/mm"),
-                ("  #                        CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT," if not self.coupled else
-                 "#   #                       CONSTANT,           CONSTANT,        GLAC_STORAGE_COEFF,       CONSTANT,"),
-                (f"    [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05" if not self.coupled else
-                 f"#   [DEFAULT],                  1.64,               0.05,       {glac_storage_coeff},           0.05"),
-                (":EndLandUseParameterList" if not self.coupled else "#:EndLandUseParameterList")
+            ],
+            "#Land Use Parameters — lake open-water evap and linear release": [
+                ":LandUseParameterList",
+                "   :Parameters, LAKE_PET_CORR, LAKE_REL_COEFF",
+                "   :Units,               none,            1/d",
+                "   [DEFAULT],             1.0,           0.30",
+                "   LAKE,                  1.2,           0.30",
+                ":EndLandUseParameterList",
             ],
             "#Soil Parameters": [
-                f"#For Ostrich:HBV_Alpha= {self.params['HBV'][param_or_name]['X15']}",
                 ":SoilParameterList",
-                "  :Parameters,                POROSITY,FIELD_CAPACITY,     SAT_WILT,     HBV_BETA, MAX_CAP_RISE_RATE,  MAX_PERC_RATE,  BASEFLOW_COEFF,            BASEFLOW_N",
-                "  :Units     ,                    none,          none,         none,         none,              mm/d,           mm/d,             1/d,                  none",
-                *(  # --- gw_1_layer: TOPSOIL + SINGLE_RES ---
-                    [
-                    f"    [DEFAULT],                     1.0,  {self.params['HBV'][param_or_name]['X06']},          0.0, {self.params['HBV'][param_or_name]['X07']},           0.0,            0.0,             0.0,                   0.0",
-                    f"     SINGLE_RES,                   1.0,           0.0,          0.0,     _DEFAULT,      _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
-                    ] if self.subsurface_structure == 'gw_1_layer' else
-                    # --- gw_2_layer: TOPSOIL + FAST_RES + SLOW_RES ---
-                    [
-                    f"    [DEFAULT],                     1.0,  {self.params['HBV'][param_or_name]['X06']},          0.0, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
-                    f"     FAST_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
-                    f"     SLOW_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X10']},                   1.0",
-                    ] if self.subsurface_structure == 'gw_2_layer' else
-                    # --- gw_3_layer: TOPSOIL + FAST_RES + SLOW_RES + DEEP_GW ---
-                    [
-                    f"    [DEFAULT],                     1.0,  {self.params['HBV'][param_or_name]['X06']},          0.0, {self.params['HBV'][param_or_name]['X07']},      {self.params['HBV'][param_or_name]['X16']},            0.0,             0.0,                   0.0",
-                    f"     FAST_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X08']},    {self.params['HBV'][param_or_name]['X09']},              {self.params['HBV'][param_or_name]['X15']}",
-                    f"     SLOW_RES,                     1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,   {self.params['HBV'][param_or_name]['X22']},    {self.params['HBV'][param_or_name]['X10']},                   1.0",
-                    f"     DEEP_GW,                      1.0,      _DEFAULT,          0.0,     _DEFAULT,          _DEFAULT,       _DEFAULT,    {self.params['HBV'][param_or_name]['X23']},                   1.0",
-                    ]
-                ),
-                ":EndSoilParameterList"
-            ]
+                *soil_param_block,
+                ":EndSoilParameterList",
+            ],
         }
 
     def create_rvi_file(self, template: bool = False):
         """
-        Write Raven .rvi file for HBV model.
+        Write Raven .rvi file for SPHY model.
         
         Args:
             template: Whether to create template file
@@ -1481,225 +1503,190 @@ class HBVProcessor:
     def _create_rvi_sections(self, start_date: str, end_date: str, cali_end_date: str,
                         hru_groups_definition: str,
                         param_or_name: str = 'init') -> Dict[str, List[str]]:
-        """Create all sections for RVI file.
+        """Create all sections for the SPHY .rvi file.
 
-        param_or_name selects how calibratable rvi-resident parameters (currently
-        only GlacROF for Structure 5) are rendered: 'names' writes the template
-        placeholder text (e.g. 'HBV_GlacROF'), 'init' writes the numeric initial
-        value. Matches the dict layout in config/default_params.yaml.
+        Process choices are locked per docs/model_structure_decisions.md
+        (RavenHydroFramework repo). The only intra-model structural variant is
+        ``perc_option`` (1 = HBV-Light single PERC_CONSTANT; 2 = SPHY-faithful
+        PERC_POWER_LAW + PERC_LINEAR). Config A/B/C/D variants are not yet
+        wired in — Phase 1 implements Config B (3-layer linear baseline).
+
+        ``param_or_name`` selects how rvi-resident calibratable parameters
+        (currently only GlacROF for Config-D split routing) are rendered:
+        'names' writes a placeholder, 'init' writes the numeric initial value.
         """
-        
-        # ✅ DETERMINE ACTUAL START DATE (warm-up or simulation)
         if hasattr(self, 'warm_up_date') and self.warm_up_date is not None:
             actual_start_date = self.warm_up_date
             print(f"RVI will use warm-up start date: {actual_start_date}")
         else:
             actual_start_date = start_date
             print(f"RVI will use simulation start date: {actual_start_date}")
-        
-        # ✅ CALCULATE DURATION (from actual start to end)
+
         from datetime import datetime
         start_dt = datetime.strptime(actual_start_date, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date, '%Y-%m-%d')
         duration_days = (end_dt - start_dt).days
-        
+
+        # Percolation option: 1 = PERC_CONSTANT FAST→SLOW (HBV-Light, 1 param);
+        # 2 = PERC_POWER_LAW TOPSOIL→FAST + PERC_LINEAR FAST→SLOW (SPHY, 3 params).
+        perc_option = int(self.config.get('perc_option', 1))
+        if perc_option not in (1, 2):
+            raise ValueError(f"Invalid perc_option={perc_option}. Must be 1 or 2.")
+
+        if perc_option == 1:
+            percolation_block = [
+                "   # Percolation — Option 1 (HBV-Light): single PERC_CONSTANT FAST→SLOW",
+                "   :Percolation       PERC_CONSTANT      FAST_RESERVOIR  SLOW_RESERVOIR",
+            ]
+        else:
+            percolation_block = [
+                "   # Percolation — Option 2 (SPHY-faithful): two-step chain",
+                "   :Percolation       PERC_POWER_LAW     TOPSOIL         FAST_RESERVOIR",
+                "   :Percolation       PERC_LINEAR        FAST_RESERVOIR  SLOW_RESERVOIR",
+            ]
+
+        # Config D (glacier_routing='split_to_slow') uses :Split BEFORE :Infiltration
+        # to route MASKED_GLACIER melt to GlacROF·SURFACE + (1-GlacROF)·SLOW_RES.
+        glacier_split_block = []
+        if self.glacier_routing == 'split_to_slow':
+            glac_rof = self.params['SPHY'][param_or_name].get('X16', 0.7)
+            glacier_split_block = [
+                "   # Config-D glacier→GW split (SPHY GlacF equivalent)",
+                f"   :Split             RAVEN_DEFAULT      PONDED_WATER    SURFACE_WATER   SLOW_RESERVOIR   {glac_rof}",
+                "       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
+            ]
+
         return {
             "#Model Organisation": [
-                f":StartDate             {actual_start_date} 00:00:00",  # ✅ Use warm-up date
+                f":StartDate             {actual_start_date} 00:00:00",
                 f":EndDate               {end_date} 00:00:00",
                 ":TimeStep              1.0",
-                f":RunName               {self.gauge_id}_HBV",
-                f"# Duration: {duration_days} days (includes warm-up)" if self.warm_up_date else f"# Duration: {duration_days} days"
+                f":RunName               {self.gauge_id}_SPHY",
+                f"# Duration: {duration_days} days (includes warm-up)" if self.warm_up_date else f"# Duration: {duration_days} days",
+                f"# Percolation: option {perc_option}",
             ],
             "#Model Options": [
-                ":Routing             	    ROUTE_NONE",
-                ":CatchmentRoute      	    TRIANGULAR_UH",
-                f":Evaporation         	    {'PET_OUDIN' if self._pet_method and self._pet_method.upper() == 'OUDIN' else 'PET_FROMMONTHLY'}",
-                f":OW_Evaporation      	    {'PET_OUDIN' if self._pet_method and self._pet_method.upper() == 'OUDIN' else 'PET_FROMMONTHLY'}",
-                ":SWRadiationMethod   	    SW_RAD_DEFAULT",
-                ":SWCloudCorrect      	    SW_CLOUD_CORR_NONE",
-                ":SWCanopyCorrect     	    SW_CANOPY_CORR_NONE",
-                ":LWRadiationMethod   	    LW_RAD_DEFAULT",
-                ":RainSnowFraction    	    RAINSNOW_HBV",
-                ":PotentialMeltMethod 	    POTMELT_HBV",
-                ":OroTempCorrect      	    OROCORR_HBV",
-                ":OroPrecipCorrect    	    OROCORR_HBV",
-                ":OroPETCorrect       	    OROCORR_HBV",
-                ":CloudCoverMethod    	    CLOUDCOV_NONE",
-                ":PrecipIceptFract    	    PRECIP_ICEPT_USER",
+                ":Routing                    ROUTE_NONE",
+                ":CatchmentRoute             TRIANGULAR_UH",
+                ":Evaporation                PET_HARGREAVES_1985",
+                ":OW_Evaporation             PET_HARGREAVES_1985",
+                ":RainSnowFraction           RAINSNOW_UBCWM",
+                ":PotentialMeltMethod        POTMELT_HBV",
+                ":SubdailyMethod             SUBDAILY_HOURLY_MELT",
+                ":OroTempCorrect             OROCORR_HBV",
+                ":OroPrecipCorrect           OROCORR_HBV",
+                ":OroPETCorrect              OROCORR_HBV",
+                ":PrecipIceptFract           PRECIP_ICEPT_USER",
                 ":MonthlyInterpolationMethod MONTHINT_LINEAR_21",
-                *([f":SubdailyMethod          {self.config.get('subdaily_method')}"] if self.config.get('subdaily_method') else []),
-                f":SoilModel                  SOIL_MULTILAYER {2 if self.subsurface_structure == 'gw_1_layer' else 4 if self.subsurface_structure == 'gw_3_layer' else 3}",
+                ":SWRadiationMethod          SW_RAD_DEFAULT",
+                ":SWCloudCorrect             SW_CLOUD_CORR_NONE",
+                ":SWCanopyCorrect            SW_CANOPY_CORR_NONE",
+                ":LWRadiationMethod          LW_RAD_DEFAULT",
+                ":CloudCoverMethod           CLOUDCOV_NONE",
+                ":SoilModel                  SOIL_MULTILAYER 3",
                 f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",
-                f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}"
+                f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}",
+                ":LakeStorage                LAKE_STORAGE",
             ],
-            "#Soil Alias Layer Definitions": (
-                [
-                    ":Alias       SINGLE_RESERVOIR SOIL[1]",
-                ] if self.subsurface_structure == 'gw_1_layer' else
-                [
-                    ":Alias       FAST_RESERVOIR SOIL[1]",
-                    ":Alias       SLOW_RESERVOIR SOIL[2]",
-                    ":LakeStorage SLOW_RESERVOIR",
-                ] if self.subsurface_structure == 'gw_2_layer' else
-                [
-                    ":Alias       FAST_RESERVOIR SOIL[1]",
-                    ":Alias       SLOW_RESERVOIR SOIL[2]",
-                    ":Alias       DEEP_RESERVOIR SOIL[3]",
-                    ":LakeStorage SLOW_RESERVOIR",
-                ]
-            ),
+            "#Soil Alias Layer Definitions": [
+                ":Alias       TOPSOIL          SOIL[0]",
+                ":Alias       FAST_RESERVOIR   SOIL[1]",
+                ":Alias       SLOW_RESERVOIR   SOIL[2]",
+            ],
             "#HRU Groups Definition": [
                 hru_groups_definition
             ] if hru_groups_definition else [],
             "#Hydrologic Process Order": [
                 ":HydrologicProcesses",
+                "",
+                "   # Snow on MASKED_GLACIER is flushed (handled externally via GloGEM forcing)",
                 "   :Flush             RAVEN_DEFAULT      SNOW            ATMOSPHERE",
                 "       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
+                "",
+                "   # Snow water balance — 3-process stack (refreeze + simple melt + overflow)",
                 "   :SnowRefreeze      FREEZE_DEGREE_DAY  SNOW_LIQ        SNOW",
+                "   :SnowBalance       SNOBAL_SIMPLE_MELT SNOW            SNOW_LIQ",
+                "       :-->Overflow   RAVEN_DEFAULT      SNOW_LIQ        PONDED_WATER",
+                "",
+                "   # Precipitation",
                 "   :Precipitation     PRECIP_RAVEN       ATMOS_PRECIP    MULTIPLE",
+                "",
+                "   # Canopy evaporation / snow sublimation",
                 "   :CanopyEvaporation CANEVP_ALL         CANOPY          ATMOSPHERE",
                 "   :CanopySnowEvap    CANEVP_ALL         CANOPY_SNOW     ATMOSPHERE",
-                "   :SnowBalance       SNOBAL_SIMPLE_MELT SNOW            SNOW_LIQ",
-                "       :-->Overflow     RAVEN_DEFAULT      SNOW_LIQ        PONDED_WATER",
-                # Glacier processes: active when NOT coupled (Raven handles glacier melt),
-                # commented when coupled (GloGEM handles glacier melt externally)
-                ("   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER" if not self.coupled else
-                 "#   :Flush             RAVEN_DEFAULT      PONDED_WATER    GLACIER"),
-                ("       :-->Conditional HRU_TYPE IS GLACIER" if not self.coupled else
-                 "#       :-->Conditional HRU_TYPE IS GLACIER"),
-                ("   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER" if not self.coupled else
-                 "#   :GlacierMelt       GMELT_HBV          GLACIER_ICE     GLACIER"),
-                ("   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER" if not self.coupled else
-                 "#   :GlacierRelease    GRELEASE_HBV_EC    GLACIER         SURFACE_WATER"),
-                # DeltaH glacier geometry update (only when glacier_method: 'DeltaH' and not coupled)
-                *(["   :SnowToIce         ANNUAL             SNOW            GLACIER_ICE",
-                   "   :GlacierDeltaH     HUSS               GLACIER_ICE     GLACIER_ICE"]
-                  if not self.coupled and self.config.get('glacier_method') == 'DeltaH' else []),
-                # SPHY-style glacier-GW split (Structure 5): route MASKED_GLACIER PONDED_WATER
-                # to GlacROF*SURFACE_WATER + (1-GlacROF)*SLOW_RESERVOIR BEFORE :Infiltration so
-                # no melt enters TOPSOIL (MASKED_GLACIER keeps IMPERM=1).
-                *([f"   :Split             RAVEN_DEFAULT      PONDED_WATER    SURFACE_WATER   SLOW_RESERVOIR   {self.params['HBV'][param_or_name]['X24']}",
-                   "       :-->Conditional HRU_TYPE IS MASKED_GLACIER"]
-                  if self.glacier_routing == 'split_to_slow' else []),
+                "",
+                "   # Lake evap + linear release (dedicated LAKE_STORAGE compartment)",
+                "   :LakeEvaporation   LAKE_EVAP_BASIC    LAKE_STORAGE    ATMOSPHERE",
+                "   :LakeRelease       LAKEREL_LINEAR     LAKE_STORAGE    SURFACE_WATER",
+                "",
+                *(glacier_split_block + [""] if glacier_split_block else []),
+                "   # Infiltration — HBV beta-power saturation excess",
                 "   :Infiltration      INF_HBV            PONDED_WATER    MULTIPLE",
-                *(  # --- gw_1_layer: single reservoir ---
-                    [
-                    "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   SINGLE_RESERVOIR",
-                    "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if self.glacier_routing != 'through_soil' else []),
-                    "       :-->Conditional HRU_TYPE IS_NOT ROCK",
-                    "       :-->Conditional HRU_TYPE IS_NOT LAKE",
-                    "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
-                    "   :Baseflow          BASE_POWER_LAW     SINGLE_RESERVOIR  SURFACE_WATER",
-                    "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SINGLE_RESERVOIR 1.0",
-                    ] if self.subsurface_structure == 'gw_1_layer' else
-                    # --- gw_2_layer: standard fast + slow ---
-                    [
-                    "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
-                    "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if self.glacier_routing != 'through_soil' else []),
-                    "       :-->Conditional HRU_TYPE IS_NOT ROCK",
-                    "       :-->Conditional HRU_TYPE IS_NOT LAKE",
-                    "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
-                    "   :CapillaryRise     RISE_HBV           FAST_RESERVOIR 	SOIL[0]",
-                    "   :LakeEvaporation   LAKE_EVAP_BASIC    SLOW_RESERVOIR  ATMOSPHERE",
-                    "   :Percolation       PERC_CONSTANT      FAST_RESERVOIR 	SLOW_RESERVOIR",
-                    "   :Baseflow          BASE_POWER_LAW     FAST_RESERVOIR  SURFACE_WATER",
-                    "   :Baseflow          BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER",
-                    "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs FAST_RESERVOIR 1.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SLOW_RESERVOIR 1.0",
-                    ] if self.subsurface_structure == 'gw_2_layer' else
-                    # --- gw_3_layer: fast + slow + deep ---
-                    [
-                    "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
-                    "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                    *(["       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER"] if self.glacier_routing != 'through_soil' else []),
-                    "       :-->Conditional HRU_TYPE IS_NOT ROCK",
-                    "       :-->Conditional HRU_TYPE IS_NOT LAKE",
-                    "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
-                    "   :CapillaryRise     RISE_HBV           FAST_RESERVOIR 	SOIL[0]",
-                    "   :LakeEvaporation   LAKE_EVAP_BASIC    SLOW_RESERVOIR  ATMOSPHERE",
-                    "   :Percolation       PERC_CONSTANT      FAST_RESERVOIR 	SLOW_RESERVOIR",
-                    "   :Percolation       PERC_CONSTANT      SLOW_RESERVOIR 	DEEP_RESERVOIR",
-                    "   :Baseflow          BASE_POWER_LAW     FAST_RESERVOIR  SURFACE_WATER",
-                    "   :Baseflow          BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER",
-                    "   :Baseflow          BASE_LINEAR        DEEP_RESERVOIR  SURFACE_WATER",
-                    "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs FAST_RESERVOIR 1.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SLOW_RESERVOIR 1.0",
-                    "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs DEEP_RESERVOIR 1.0",
-                    ]
-                ),
+                "",
+                "   # Surface water routing on land HRUs (skip glacier/masked-glacier/rock/lake)",
+                "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
+                "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
+                "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
+                "       :-->Conditional HRU_TYPE IS_NOT ROCK",
+                "       :-->Conditional HRU_TYPE IS_NOT LAKE",
+                "",
+                "   # Soil evaporation — HBV scheme",
+                "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
+                "",
+                "   # Capillary rise",
+                "   :CapillaryRise     RISE_HBV           FAST_RESERVOIR  SOIL[0]",
+                "",
+                *percolation_block,
+                "",
+                "   # Linear baseflow on both subsurface reservoirs",
+                "   :Baseflow          BASE_LINEAR        FAST_RESERVOIR  SURFACE_WATER",
+                "   :Baseflow          BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER",
+                "",
+                "   # Snow redistribution (Bernhardt-Schulz / FSM2)",
+                "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
+                "",
                 ":EndHydrologicProcesses"
             ],
-            "#Output Options": (
-                # Daily baseflow + interflow fluxes for validation against
-                # filter-separated observed baseflow.  Branches by subsurface
-                # structure since each variant aliases SOIL layers differently.
-                [
-                    "# Subsurface flux outputs for baseflow validation",
-                    ":CustomOutput DAILY AVERAGE Between:SINGLE_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
-                ] if self.subsurface_structure == 'gw_1_layer' else
-                [
-                    "# Subsurface flux outputs for baseflow validation",
-                    "# - Slow baseflow (BASE_LINEAR, SLOW_RESERVOIR -> SURFACE_WATER)",
-                    ":CustomOutput DAILY AVERAGE Between:SLOW_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
-                    "# - Interflow (BASE_POWER_LAW, FAST_RESERVOIR -> SURFACE_WATER)",
-                    ":CustomOutput DAILY AVERAGE Between:FAST_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
-                ]
-            ),
+            "#Output Options": [
+                "# Subsurface flux outputs for baseflow validation",
+                "# - Slow baseflow (BASE_LINEAR, SLOW_RESERVOIR -> SURFACE_WATER)",
+                ":CustomOutput DAILY AVERAGE Between:SLOW_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
+                "# - Interflow (BASE_LINEAR, FAST_RESERVOIR -> SURFACE_WATER)",
+                ":CustomOutput DAILY AVERAGE Between:FAST_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
+            ],
         }
 
     def create_rvc_file(self, template: bool = False):
         """
-        Write Raven .rvc file for HBV model.
+        Write Raven .rvc file for SPHY model.
         
         Args:
             template: Whether to create template file
         """
         file_path, param_or_name = self._get_file_path('rvc', template)
 
-        # Define RVC configuration
+        # Minimal initial conditions per the decisions doc and the reference
+        # hma_configB_opt1 test config in the RavenHydroFramework repo: only a
+        # basin Q seed. Subsurface compartments fall back to Raven defaults
+        # (zero) without an explicit :InitialConditions block — same behaviour
+        # we had before, but skips the legacy block that triggered two warnings
+        # under Raven 4.1 (deprecation + per-HRU count mismatch).
         rvc_sections = {
             "#Basin": [
                 ":BasinInitialConditions",
-                ":Attributes, ID,              Q",
-                ":Units,      none,         m3/s",
-                "#                  HBV_PARA_???",
-                "1,             1.0",
-                ":EndBasinInitialConditions"
+                "  :Attributes, ID,    Q",
+                "  :Units,      none,  m3/s",
+                "             1,     1.0",
+                ":EndBasinInitialConditions",
             ],
-            # Initial groundwater storage: start all subsurface reservoirs at 0.
-            # A real warm-up period (namelist `warm_up_date` -> `start_date`) fills
-            # them from the forcing — a non-zero IC previously created a spin-up
-            # artifact that biased HRU 1 especially once MASKED_GLACIER received a
-            # real soil profile (Structure 3 / Structure 5).
-            "#Subsurface Storage Initial Conditions": [
-                f":InitialConditions {'SOIL[1]' if self.subsurface_structure == 'gw_1_layer' else 'SOIL[2]'}",
-                "0.0",
-                ":EndInitialConditions",
-                *([
-                    ":InitialConditions SOIL[3]",
-                    "0.0",
-                    ":EndInitialConditions",
-                ] if self.subsurface_structure == 'gw_3_layer' else []),
-            ]
         }
 
-        # Write the file
         with open(file_path, 'w') as ff:
             ff.writelines(f"{line}\n" for line in self._create_header("rvc"))
             for section, lines in rvc_sections.items():
                 ff.write(f"{section}\n")
                 ff.writelines(line + '\n' for line in lines)
                 ff.write('\n')
-
-            # DeltaH glacier initial ice volumes
-            if not self.coupled and self.config.get('glacier_method') == 'DeltaH':
-                self._write_glacier_ice_initial_conditions(ff)
 
     def _write_glacier_ice_initial_conditions(self, ff):
         """Write :HRUStateVariableTable with GLACIER_ICE column (mm w.e.)."""
@@ -1728,7 +1715,7 @@ class HBVProcessor:
 
     def create_all_files(self, template: bool = False):
         """
-        Create all Raven input files for HBV model using namelist configuration.
+        Create all Raven input files for SPHY model using namelist configuration.
         
         Args:
             template: Whether to create template files

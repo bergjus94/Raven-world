@@ -1,0 +1,10 @@
+# SPHY percolation Option 1 — HBV-Light convention.
+# Single PERC_CONSTANT process FAST_RESERVOIR → SLOW_RESERVOIR. No explicit
+# TOPSOIL → FAST_RES percolation; recharge happens at the INF_HBV step via the
+# HBV-β power law. Calibrates 1 percolation parameter (MAX_PERC_RATE on FAST).
+# See docs/model_structure_decisions.md § Percolation in the RavenHydroFramework
+# repo for the full rationale and the opt-1-vs-opt-2 sub-experiment design.
+_config_key: 'perc_option_1'
+display_name: 'SPHY perc opt1 (HBV-Light)'
+color: '#1f77b4'
+perc_option: 1

@@ -1,0 +1,10 @@
+# SPHY percolation Option 2 — SPHY-faithful two-step chain.
+# PERC_POWER_LAW (TOPSOIL → FAST_RES) with MAX_PERC_RATE, PERC_N on TOPSOIL;
+# PERC_LINEAR (FAST_RES → SLOW_RES) with PERC_COEFF on FAST_RES. Calibrates 3
+# percolation parameters (vs 1 for opt 1). Maps directly to SPHY's
+# root→sub→GW percolation structure (Terink et al. 2015 eqs. 22, 25).
+# See docs/model_structure_decisions.md § Percolation.
+_config_key: 'perc_option_2'
+display_name: 'SPHY perc opt2 (SPHY-faithful)'
+color: '#ff7f0e'
+perc_option: 2

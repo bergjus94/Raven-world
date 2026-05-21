@@ -161,6 +161,109 @@ HBV:
       X19: 'not_coupled'
       X20: 'precip_correction'           # Single bulk Cx; X21 is tied to X20 (see spotpy_optimize._get_tied_parameters)
 
+SPHY:
+  # SPHY-style HMA base model — process choices locked in
+  # RavenHydroFramework/docs/model_structure_decisions.md (see also
+  # src/preprocess_SPHY.py for how each X-number lands in the .rvp/.rvh).
+  # Two intra-model variants currently:
+  #   perc_option=1 (HBV-Light)    — calibrates X11 only (FAST_RES MAX_PERC_RATE)
+  #   perc_option=2 (SPHY-faithful) — calibrates X12, X13, X14 (TOPSOIL MAX_PERC_RATE,
+  #                                   PERC_N, PERC_COEFF). X11 is silent under opt2.
+  # X11 and X12 are physically different (FAST→SLOW peak vs TOPSOIL→FAST peak) so
+  # they get separate X-numbers and bounds.
+  names:
+    X01: Sphy_RainSnow_Temp             # Rain/snow transition centre [°C]
+    X02: Sphy_Melt_Factor               # Snow melt factor [mm/d/°C]
+    X03: Sphy_CFR                       # Refreeze coupling ratio [-] — drives REFREEZE_FACTOR
+    X04: Sphy_Snow_SWI                  # Snow water-holding fraction [-]
+    X05: Sphy_HBV_Beta                  # HBV-β infiltration exponent [-]
+    X06: Sphy_Field_Capacity            # Field capacity [-]
+    X07: Sphy_Baseflow_Coeff_Fast       # Fast reservoir baseflow [1/d]
+    X08: Sphy_Baseflow_Coeff_Slow       # Slow reservoir baseflow [1/d]
+    X09: Sphy_T_Conc                    # Time of concentration [d]
+    X10: Sphy_Thickness_Topsoil         # Topsoil thickness [m]
+    X11: Sphy_Max_Perc_Rate_Fast        # PERC_CONSTANT FAST→SLOW peak rate [mm/d] (opt1 only)
+    X12: Sphy_Max_Perc_Rate_Topsoil     # PERC_POWER_LAW TOPSOIL→FAST peak rate [mm/d] (opt2 only)
+    X13: Sphy_Perc_N                    # PERC_POWER_LAW exponent on TOPSOIL [-] (opt2 only)
+    X14: Sphy_Perc_Coeff                # PERC_LINEAR coefficient on FAST_RES [1/d] (opt2 only)
+    X15: Sphy_Max_Cap_Rise_Rate         # Capillary rise rate [mm/d]
+    X16: Sphy_GlacROF                   # Glacier fast-runoff fraction (SPHY GlacF, Config D only) [-]
+    # Tied parameters use a Sphy_ prefix so the placeholder name never
+    # collides with Raven's literal column names in :Parameters headers
+    # (the substitution does a naive str.replace, see _write_parameters_to_file
+    # in spotpy_optimize.py).
+    Sphy_Time_To_Peak: Sphy_Time_To_Peak   # Derived: X09 / 2
+    Sphy_Min_Melt_Factor: Sphy_Min_Melt_Factor   # Derived: 0.4 × X02
+    Sphy_Refreeze_Factor: Sphy_Refreeze_Factor   # Derived: X03 × X02
+
+  init:
+    X01: 0.571782              # Rain/snow temp (0122 prior)
+    X02: 5.0                   # Melt factor
+    X03: 0.07                  # CFR (HBV-Light typical, Bergstrom 1976)
+    X04: 0.05                  # SNOW_SWI (SPHY default)
+    X05: 1.13565               # HBV_BETA (0122 prior)
+    X06: 0.409336              # Field capacity (0122 prior)
+    X07: 0.49104               # FAST baseflow (0122 prior)
+    X08: 0.00211034            # SLOW baseflow (0122 prior)
+    X09: 2.277781              # TIME_CONC (0122 prior)
+    X10: 0.38655               # Topsoil thickness (0122 prior)
+    X11: 8.37112               # FAST_RES MAX_PERC_RATE — opt1 prior (0122 opt1 reference)
+    X12: 6.0                   # TOPSOIL MAX_PERC_RATE — opt2 prior (0122 opt2 reference)
+    X13: 2.0                   # PERC_N (opt2 only; FUSE / Clark 2008 mid-range)
+    X14: 0.15                  # PERC_COEFF (opt2 only; gives ~7.5 mm/d at 50 mm storage)
+    X15: 1.88647               # MAX_CAP_RISE_RATE (0122 prior)
+    X16: 0.7                   # GlacROF (SPHY default, Lutz 2014)
+    Sphy_Time_To_Peak: 1.1388905   # Derived: X09 / 2
+    Sphy_Min_Melt_Factor: 2.0      # Derived: 0.4 × 5.0
+    Sphy_Refreeze_Factor: 0.35     # Derived: 0.07 × 5.0
+
+  lower:
+      X01: -3.0
+      X02: 3.0          # MELT_FACTOR ≥ 3 (HMA literature lower bound)
+      X03: 0.03         # CFR ≥ 0.03 (HBV-Light min, Seibert & Vis 2012)
+      X04: 0.02         # SNOW_SWI: dense aged firn
+      X05: 1.0          # HBV_BETA ≥ 1 (HBV convention)
+      X06: 0.3
+      X07: 0.05         # Fast baseflow: ~20-day residence time upper
+      X08: 0.001        # Slow baseflow: ~1000-day upper residence
+      X09: 0.01
+      X10: 0.05
+      X11: 0.0          # FAST MAX_PERC_RATE: zero means no FAST→SLOW perc
+      X12: 0.0          # TOPSOIL MAX_PERC_RATE: zero degenerates opt2 to no recharge
+      X13: 1.0          # PERC_N ≥ 1 (degenerates to linear at 1)
+      X14: 0.01         # PERC_COEFF: ~100-day residence upper
+      X15: 0.0
+      X16: 0.5          # GlacROF: SPHY/Lutz lower bound
+  upper:
+      X01: 3.0
+      X02: 8.0          # MELT_FACTOR ≤ 8 (HMA literature upper)
+      X03: 0.20         # CFR ≤ 0.20 (cold dry continental, Anderson SNOW17)
+      X04: 0.10         # SNOW_SWI: fresh fluffy snow
+      X05: 5.0          # HBV_BETA ≤ 5 (HBV convention)
+      X06: 1.0
+      X07: 0.5
+      X08: 0.1
+      X09: 6.0
+      X10: 1.5          # Topsoil thickness upper bound — matches SPHY HMA (Khanal 2022 Bhagirathi); was 0.5 (HBV lit)
+      X11: 10.0         # FAST MAX_PERC_RATE cap (Konz & Seibert 2010, glacierized HMA)
+      X12: 20.0         # TOPSOIL MAX_PERC_RATE: wider — opt2 has PERC_N as shape control
+      X13: 5.0          # PERC_N upper (FUSE range)
+      X14: 1.0          # PERC_COEFF: ~1-day residence lower
+      X15: 2.0
+      X16: 0.9          # GlacROF: SPHY/Lutz upper bound
+
+  # Optional parameters: only included in calibration when the condition is met.
+  # Conditions:
+  #   'perc_option_1'    → only when perc_option == 1
+  #   'perc_option_2'    → only when perc_option == 2
+  #   'has_glacier_split' → only when glacier_routing == 'split_to_slow' (Config D)
+  optional:
+      X11: 'perc_option_1'           # FAST MAX_PERC_RATE — opt 1 only
+      X12: 'perc_option_2'           # TOPSOIL MAX_PERC_RATE — opt 2 only
+      X13: 'perc_option_2'           # PERC_N — opt 2 only
+      X14: 'perc_option_2'           # PERC_COEFF — opt 2 only
+      X16: 'has_glacier_split'       # GlacROF — only when glacier_routing='split_to_slow'
+
 HMETS:
   # HMETS (Hydrological Model - École de Technologie Supérieure) parameters
   names:

@@ -42,6 +42,7 @@ from preprocess_HBV import HBVProcessor
 from preprocess_HYMOD import HYMODPreprocessor
 from preprocess_MOHYSE import MOHYSEPreprocessor
 from preprocess_HMETS import HMETSPreprocessor
+from preprocess_SPHY import SPHYProcessor
 
 
 #--------------------------------------------------------------------------------
@@ -69,6 +70,7 @@ def get_model_processor(model_type: str, namelist_path: str):
         'HYMOD': HYMODPreprocessor,
         'MOHYSE': MOHYSEPreprocessor,
         'HMETS': HMETSPreprocessor,
+        'SPHY': SPHYProcessor,
     }
     
     model_type_upper = model_type.upper()
@@ -341,8 +343,14 @@ def main(namelist_path: str, force_reprocess: bool = False):
         traceback.print_exc()
         return False
 
-    # Optional: TPHiPr precipitation override
-    if nml.get('precip_source', '').upper() == 'TPHIPR':
+    # Optional: TPHiPr precipitation. Triggered when TPhiPr is either the
+    # active meteo precip (precip_source) or the dedicated lapse-rate input
+    # (lapse_rate_precip_source) — the regression needs the same .nc file.
+    needs_tphipr = (
+        nml.get('precip_source', '').upper() == 'TPHIPR'
+        or nml.get('lapse_rate_precip_source', '').upper() == 'TPHIPR'
+    )
+    if needs_tphipr:
         print("\n🌧️ STEP 5b: Processing TPHiPr precipitation data...")
         try:
             process_tphipr_precipitation(namelist_path)
@@ -350,6 +358,18 @@ def main(namelist_path: str, force_reprocess: bool = False):
             print(f"   ❌ Error processing TPHiPr data: {e}")
             traceback.print_exc()
             return False
+
+    # Derive HBVEC_LAPSE_* parameters from gridded precip + DEM. Idempotent
+    # (skips if lapse_rate.yaml exists). When no gridded source is configured,
+    # writes Raven defaults so the .rvp still gets explicit values.
+    print("\n📐 STEP 5c: Deriving precipitation lapse rates...")
+    try:
+        from preprocess_lapse_rate import derive_lapse_rates
+        derive_lapse_rates(namelist_path, force_reprocess=force_reprocess)
+    except Exception as e:
+        print(f"   ❌ Error deriving lapse rates: {e}")
+        traceback.print_exc()
+        return False
 
     # Optional: CORDEX climate projection downscaling (future=True)
     if nml.get('future', False) and nml.get('cordex_models'):

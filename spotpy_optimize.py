@@ -175,6 +175,12 @@ class RavenSCEUA(object):
                 if isinstance(routing, bool):
                     routing = 'through_soil' if routing else 'none'
                 include = routing == 'split_to_slow'
+            elif condition == 'perc_option_1':
+                # SPHY: FAST_RES MAX_PERC_RATE (X11) only meaningful under opt 1
+                include = int(self.namelist.get('perc_option', 1)) == 1
+            elif condition == 'perc_option_2':
+                # SPHY: TOPSOIL MAX_PERC_RATE / PERC_N / PERC_COEFF only meaningful under opt 2
+                include = int(self.namelist.get('perc_option', 1)) == 2
 
             if not include:
                 skip_params.add(param_key)
@@ -254,7 +260,21 @@ class RavenSCEUA(object):
                 else:
                     print(f"Warning: MOHYSE_Gamma_Scale_Aux = {params_dict['MOHYSE_Gamma_Scale_Aux']} is not positive.")
                     tied_params['Mohyse_Gamma_Scale'] = 1.0
-        
+
+        elif self.model_type == 'SPHY':
+            # SPHY derived parameters (per docs/model_structure_decisions.md):
+            #   Sphy_Min_Melt_Factor = 0.4 × MELT_FACTOR   (HBV-Light convention)
+            #   Sphy_Refreeze_Factor = CFR  × MELT_FACTOR  (CFR coupling, Bergstrom 1976)
+            #   Sphy_Time_To_Peak    = 0.5 × TIME_CONC     (HBV MAXBAS/2 convention)
+            if 'Sphy_Melt_Factor' in params_dict:
+                mf = params_dict['Sphy_Melt_Factor']
+                tied_params['Sphy_Min_Melt_Factor'] = 0.4 * mf
+                if 'Sphy_CFR' in params_dict:
+                    tied_params['Sphy_Refreeze_Factor'] = params_dict['Sphy_CFR'] * mf
+
+            if 'Sphy_T_Conc' in params_dict:
+                tied_params['Sphy_Time_To_Peak'] = params_dict['Sphy_T_Conc'] / 2.0
+
         return tied_params
         
 
@@ -1319,6 +1339,16 @@ class RavenSCEUA(object):
             with open(rvi_file, 'r') as f:
                 lines = f.readlines()
             
+            # GLACIER_ICE state exists only for HBV with internal glacier melt
+            # (uncoupled GMELT_HBV). Coupled HBV uses external GloGEM forcing
+            # and SPHY has no Raven-side glacier process at all.
+            has_glacier_ice = (self.model_type == 'HBV' and not self.coupled)
+
+            # SOIL[3] exists only in 4-layer setups (HBV subsurface_structure='gw_3_layer').
+            # HBV gw_1_layer / gw_2_layer and SPHY (3-layer Config B) don't have it.
+            subsurf = (self.namelist or {}).get('subsurface_structure', 'gw_2_layer')
+            has_soil_3 = (self.model_type == 'HBV' and subsurf == 'gw_3_layer')
+
             # Define the extended output options
             extended_output_options = [
                 "  :EvaluationMetrics RMSE KLING_GUPTA NASH_SUTCLIFFE\n",
@@ -1331,11 +1361,12 @@ class RavenSCEUA(object):
                 "  :CustomOutput DAILY AVERAGE ATMOSPHERE BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE SOIL[0] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SOIL[1] BY_HRU\n",
-                *(["  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n"] if self.model_type == 'HBV' else []),
+                *(["  :CustomOutput DAILY AVERAGE SOIL[2] BY_HRU\n"] if self.model_type in ('HBV', 'SPHY') else []),
                 "  :CustomOutput DAILY AVERAGE AET BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE AET BY_HRU_GROUP\n",
-                "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_BASIN\n",
-                "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_HRU\n",
+                *([  "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_BASIN\n",
+                     "  :CustomOutput DAILY AVERAGE From:GLACIER_ICE BY_HRU\n"]
+                  if has_glacier_ice else []),
                 "  :CustomOutput DAILY AVERAGE TEMP_AVE  BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE TEMP_AVE  BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE POTENTIAL_MELT BY_HRU\n",
@@ -1355,20 +1386,20 @@ class RavenSCEUA(object):
                 "  :CustomOutput DAILY AVERAGE From:SOIL[1] BY_BASIN\n",
                 "  :CustomOutput DAILY AVERAGE From:SOIL[2] BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE From:SOIL[2] BY_BASIN\n",
-                # SOIL[3] is only present in the 3-layer deep-GW structure (gw_3_layer_*);
-                # Raven emits a harmless warning when the compartment is absent.
-                "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_BASIN\n",
-                # Directional subsurface fluxes — separate baseflow from deep percolation.
-                # From:SOIL[2] lumps both destinations; these split it into
-                #   baseflow (SOIL[2] -> SURFACE_WATER) vs recharge (SOIL[2] -> SOIL[3]),
-                # and the deep baseflow (SOIL[3] -> SURFACE_WATER) for 3-layer runs.
+                # SOIL[3] only exists for HBV gw_3_layer (deep-GW structure).
+                # Directional subsurface fluxes — separate baseflow from deep
+                # percolation. From:SOIL[2] lumps both destinations; these split it
+                # into baseflow (SOIL[2]->SURFACE_WATER) vs recharge (SOIL[2]->SOIL[3]),
+                # and the deep baseflow (SOIL[3]->SURFACE_WATER).
                 "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_BASIN\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SOIL[3] BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SOIL[3] BY_BASIN\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[3].And.SURFACE_WATER BY_HRU\n",
-                "  :CustomOutput DAILY AVERAGE Between:SOIL[3].And.SURFACE_WATER BY_BASIN\n",
+                *([  "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_HRU\n",
+                     "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_BASIN\n",
+                     "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SOIL[3] BY_HRU\n",
+                     "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SOIL[3] BY_BASIN\n",
+                     "  :CustomOutput DAILY AVERAGE Between:SOIL[3].And.SURFACE_WATER BY_HRU\n",
+                     "  :CustomOutput DAILY AVERAGE Between:SOIL[3].And.SURFACE_WATER BY_BASIN\n"]
+                  if has_soil_3 else []),
                 "  :WriteMassLoadings\n",
             ]
             

@@ -37,6 +37,8 @@ COUPLED_FIELDS = [
 # Optional fields (may or may not be present)
 OPTIONAL_FIELDS = [
     'precip_source', 'pet_method',
+    'lapse_rate_precip_source',  # decoupled lapse-rate gridded precip override
+    'perc_option',               # SPHY percolation variant: 1 (HBV-Light) or 2 (SPHY-faithful)
 ]
 
 # Map from generate_namelists config names to our config layer names
