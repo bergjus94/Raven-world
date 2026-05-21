@@ -1,0 +1,42 @@
+# =============================================================================
+# Catchment 2269 - Lonza @ Blatten (Switzerland) — SPHY model_type test
+# =============================================================================
+# Server production run testing the SPHY model_type on a Swiss alpine
+# catchment with MeteoSwiss forcing (via region: switzerland). Two-axis
+# matrix: {opt1 HBV-Light, opt2 SPHY-faithful} percolation. No TPHiPr —
+# Swiss catchments use MeteoSwiss precip from the region layer override.
+# Note: this is the first SPHY/HBV setup for 2269 — no companion HBV namelist
+# (yet); see src/config/layers/catchments/2269.yaml for catchment-level config.
+# =============================================================================
+
+catchment: '2269'
+display_name: 'Lonza @ Blatten'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+# Use real pre-simulation data for warm-up (CAMELS-CH covers 1981+).
+warmup:
+  method: 'real'
+
+# MeteoSwiss is gauge-adjusted, so expect Cx close to 1.0; calibrate anyway
+# for consistency with the Indus SPHY runs.
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1   # MeteoSwiss (via region) + perc opt 1 (HBV-Light)
+  - glogem_subdaily_opt2   # MeteoSwiss (via region) + perc opt 2 (SPHY-faithful)
+
+calibration:
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
+  ngs: 15
+
+future:
+  enabled: false

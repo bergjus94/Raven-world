@@ -1,0 +1,21 @@
+gauge_id: '2269'
+display_name: 'Lonza @ Blatten'
+region: 'switzerland'
+
+# Lonza-Blatten is a high-elevation glacierized headwater catchment in the
+# Valais (Lötschental, tributary of the Rhône). CAMELS-CH covers 1981-2020.
+# (BAFU gauge destroyed in May 2025 rockfall event — only historical data
+# available going forward.)
+#
+# 10-yr real warm-up (1990-1999) + 11-yr calibration (2000-2010) + 10-yr
+# validation (2011-2020) — same scheme as 2256.
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+validation_start: '2011-01-01'
+validation_end: '2020-12-31'
+
+calibration:
+  cali_end_date: '2010-12-31'
+  vali_end_date: '2020-12-31'
