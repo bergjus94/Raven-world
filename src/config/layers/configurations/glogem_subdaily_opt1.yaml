@@ -1,0 +1,14 @@
+# SPHY: Coupled GloGEM TSLA + ERA5-Land forcing, subdaily melt, percolation Option 1
+# (HBV-Light: single PERC_CONSTANT FAST→SLOW).
+# Mirrors glogem_subdaily.yaml fields but pins perc_option and restricts to SPHY.
+_config_key: 'glogem_subdaily_opt1'
+display_name: 'SPHY GloGEM ERA5 opt1'
+color: '#1f77b4'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 1
+compatible_models: ['SPHY']

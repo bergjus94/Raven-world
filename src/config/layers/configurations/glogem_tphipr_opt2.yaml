@@ -1,0 +1,19 @@
+# SPHY: Coupled GloGEM TSLA + ERA5-Land for temp, TPHiPr precip override,
+# percolation Option 2 (SPHY-faithful: PERC_POWER_LAW TOPSOIL→FAST + PERC_LINEAR FAST→SLOW).
+# Mirrors glogem_tphipr.yaml fields but pins perc_option and restricts to SPHY.
+# Note: subdaily_method: null preserves the daily-melt override that
+# glogem_tphipr.yaml carries (vs the project-wide SUBDAILY_HOURLY_MELT default).
+_config_key: 'glogem_tphipr_opt2'
+display_name: 'SPHY GloGEM TPHiPr opt2'
+color: '#ffbb78'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+precip_source: 'TPHiPr'
+lapse_rate_precip_source: 'TPHiPr'
+subdaily_method: null
+perc_option: 2
+compatible_models: ['SPHY']

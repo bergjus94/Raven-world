@@ -1,0 +1,44 @@
+# =============================================================================
+# Catchment 0102 - Hunza @ Dainyor — SPHY model_type test
+# =============================================================================
+# Server production run testing the SPHY model_type with a 2×2 forcing × perc
+# matrix: {ERA5-Land only, ERA5-Land + TPHiPr precip override} × {opt1, opt2}.
+# Companion to namelists/catchment_0102.yaml (HBV runs). Same dates / warm-up
+# / calibration settings; only the model + configurations differ.
+# =============================================================================
+
+catchment: '0102'
+display_name: 'Hunza @ Dainyor'
+
+start_date: '1980-01-01'
+end_date: '2014-12-31'
+cali_end_date: '1999-12-31'
+warm_up_date: '1970-01-01'
+
+# 10-yr warm-up cycled from the first 10 yrs of simulation data (1980-1989),
+# each year used exactly once (no repetition) to equilibrate deep GW storage
+# while preserving inter-annual variability.
+warmup:
+  method: 'cycle'
+  cycle_years: 10
+
+# ERA5-Land bulk precipitation correction on; snow_corr tied to rain_corr.
+# (For TPHiPr-override runs, Cx still calibrated — TPHiPr can also have bias.)
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1   # ERA5-Land precip, perc opt 1 (HBV-Light)
+  - glogem_subdaily_opt2   # ERA5-Land precip, perc opt 2 (SPHY-faithful)
+  - glogem_tphipr_opt1     # TPHiPr precip override, perc opt 1
+  - glogem_tphipr_opt2     # TPHiPr precip override, perc opt 2
+
+calibration:
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
+  ngs: 15
+
+future:
+  enabled: false
