@@ -25,8 +25,10 @@ forcing_files:
   - '01_data/meteo/Switzerland/TminD_v2.0_swiss.lv95_198101010000_202012310000_elev.nc'
 
 # --- Topography (SRTM already in WGS84; DHM25 alternative is in EPSG:21781) ---
-raster_dir: '01_data/topo/Switzerland/SRTM_dem.tif'
-landuse_dir: '01_data/topo/Switzerland/landuse_50m.tif'
+# Files moved into the Indus-style catchment_dem/ + catchment_landuse/
+# layout for consistency across regions.
+raster_dir: '01_data/topo/catchment_dem/dem_Switzerland.tif'
+landuse_dir: '01_data/topo/catchment_landuse/landuse_Switzerland_50m.tif'
 
 # --- Glacier outlines (RGI region 11: Central Europe) ---
 glacier_dir: '01_data/topo/glacier_outlines/nsdic0770_11.rgi60.CentralEurope/11_rgi60_CentralEurope.shp'
