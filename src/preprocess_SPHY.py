@@ -1587,6 +1587,13 @@ class SPHYProcessor:
                 f":EvaluationPeriod   CALIBRATION   {start_date}   {cali_end_date}",
                 f":EvaluationPeriod   VALIDATION    {cali_end_date}   {end_date}",
                 ":LakeStorage                LAKE_STORAGE",
+                # Skip writing WatershedStorage.csv on every Raven invocation.
+                # During SCEUA calibration that's thousands of redundant writes
+                # for a diagnostic file we don't read back; for the final best
+                # run the per-HRU SOIL[*]/SNOW/AET outputs from
+                # spotpy._add_extended_output_options carry the same info at
+                # higher resolution.
+                ":DontWriteWatershedStorage",
             ],
             "#Soil Alias Layer Definitions": [
                 ":Alias       TOPSOIL          SOIL[0]",
