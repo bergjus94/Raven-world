@@ -1635,22 +1635,11 @@ class HBVProcessor:
                 ),
                 ":EndHydrologicProcesses"
             ],
-            "#Output Options": (
-                # Daily baseflow + interflow fluxes for validation against
-                # filter-separated observed baseflow.  Branches by subsurface
-                # structure since each variant aliases SOIL layers differently.
-                [
-                    "# Subsurface flux outputs for baseflow validation",
-                    ":CustomOutput DAILY AVERAGE Between:SINGLE_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
-                ] if self.subsurface_structure == 'gw_1_layer' else
-                [
-                    "# Subsurface flux outputs for baseflow validation",
-                    "# - Slow baseflow (BASE_LINEAR, SLOW_RESERVOIR -> SURFACE_WATER)",
-                    ":CustomOutput DAILY AVERAGE Between:SLOW_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
-                    "# - Interflow (BASE_POWER_LAW, FAST_RESERVOIR -> SURFACE_WATER)",
-                    ":CustomOutput DAILY AVERAGE Between:FAST_RESERVOIR.And.SURFACE_WATER ENTIRE_WATERSHED",
-                ]
-            ),
+            # Output Options: intentionally empty. The base .rvi only writes
+            # the hydrograph; the full set of :CustomOutput directives is
+            # appended by spotpy_optimize._add_extended_output_options for the
+            # final best run only, so calibration iterations stay lean.
+            "#Output Options": [],
         }
 
     def create_rvc_file(self, template: bool = False):

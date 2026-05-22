@@ -1391,6 +1391,11 @@ class RavenSCEUA(object):
                 # percolation. From:SOIL[2] lumps both destinations; these split it
                 # into baseflow (SOIL[2]->SURFACE_WATER) vs recharge (SOIL[2]->SOIL[3]),
                 # and the deep baseflow (SOIL[3]->SURFACE_WATER).
+                # Interflow flux (FAST_RES = SOIL[1] -> SURFACE_WATER) used to live
+                # in the base .rvi for baseflow validation; moved here so it only
+                # writes during the final best run, not every calibration iter.
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[1].And.SURFACE_WATER BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE Between:SOIL[1].And.SURFACE_WATER BY_BASIN\n",
                 "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE Between:SOIL[2].And.SURFACE_WATER BY_BASIN\n",
                 *([  "  :CustomOutput DAILY AVERAGE From:SOIL[3] BY_HRU\n",
