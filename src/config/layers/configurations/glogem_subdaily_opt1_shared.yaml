@@ -1,0 +1,19 @@
+# SPHY: same as glogem_subdaily_opt1 (ERA5-Land/MeteoSwiss + SUBDAILY_HOURLY_MELT
+# + perc opt 1) BUT with shared subsurface storage (lateral_equilibrate=True).
+# Storage in FAST_RESERVOIR and SLOW_RESERVOIR is area-weighted across all HRUs
+# every timestep — the classical HBV-EC convention, deliberately dropped from
+# the SPHY base per docs/model_structure_decisions.md § Lateral subsurface
+# exchange. This variant exists to A/B test against the per-HRU storage default.
+_config_key: 'glogem_subdaily_opt1_shared'
+display_name: 'SPHY GloGEM opt1 shared'
+color: '#9467bd'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+lapse_rate_precip_source: 'TPHiPr'
+perc_option: 1
+lateral_equilibrate: true
+compatible_models: ['SPHY']

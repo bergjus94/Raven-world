@@ -136,7 +136,22 @@ class SPHYProcessor:
         # gw_1_layer (SINGLE_RES only, no SLOW_RESERVOIR).
         if self.glacier_routing == 'split_to_slow' and self.subsurface_structure not in ('gw_2_layer', 'gw_3_layer'):
             raise ValueError(f"glacier_routing='split_to_slow' requires subsurface_structure in ('gw_2_layer', 'gw_3_layer'), got '{self.subsurface_structure}'")
-        print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}")
+        # lateral_equilibrate: when true, append two :LateralEquilibrate lines
+        # (FAST_RESERVOIR, SLOW_RESERVOIR) to .rvi HydrologicProcesses. Forces
+        # area-weighted equilibration of subsurface storage across all HRUs
+        # every timestep (shared UZ/LZ — classical HBV-EC convention). Default
+        # false keeps per-HRU storage local (SPHY/UBCWM convention) per
+        # docs/model_structure_decisions.md § Lateral subsurface exchange.
+        self.lateral_equilibrate = bool(namelist.get('lateral_equilibrate', False))
+        if self.lateral_equilibrate and self.glacier_routing == 'split_to_slow':
+            print(
+                "⚠️  lateral_equilibrate=True combined with glacier_routing="
+                "'split_to_slow' (Config D) erases the targeted glacier→GW "
+                "routing (decisions doc § Lateral subsurface exchange). The "
+                "(1-GlacROF) fraction routed to SLOW_RES on MASKED_GLACIER HRUs "
+                "will be immediately spread across all HRUs each timestep."
+            )
+        print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}, lateral_equilibrate: {self.lateral_equilibrate}")
 
         # ✅ ADD ONLY THIS - warm_up_date
         if 'warm_up_date' in namelist:
@@ -1652,6 +1667,15 @@ class SPHYProcessor:
                 "   # Snow redistribution (Bernhardt-Schulz / FSM2)",
                 "   :SnowRedistribute  THRESHOLD          SNOW            35000.0",
                 "",
+                # Optional lateral equilibration of subsurface storage (classical
+                # HBV-EC shared UZ/LZ convention). When lateral_equilibrate=true,
+                # storage is area-weighted across all HRUs every timestep. Default
+                # is false (SPHY/UBCWM cell-local storage per decisions doc).
+                *(["   # Shared subsurface storage (lateral_equilibrate=True)",
+                   "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs FAST_RESERVOIR 1.0",
+                   "   :LateralEquilibrate RAVEN_DEFAULT AllHRUs SLOW_RESERVOIR 1.0",
+                   ""]
+                  if self.lateral_equilibrate else []),
                 ":EndHydrologicProcesses"
             ],
             # Output Options: intentionally empty. The base .rvi only writes

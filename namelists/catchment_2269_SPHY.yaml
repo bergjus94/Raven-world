@@ -30,8 +30,10 @@ models:
   - SPHY
 
 configurations:
-  - glogem_subdaily_opt1   # MeteoSwiss (via region) + perc opt 1 (HBV-Light)
-  - glogem_subdaily_opt2   # MeteoSwiss (via region) + perc opt 2 (SPHY-faithful)
+  - glogem_subdaily_opt1          # MeteoSwiss (via region) + perc opt 1 (HBV-Light)
+  - glogem_subdaily_opt2          # MeteoSwiss (via region) + perc opt 2 (SPHY-faithful)
+  - glogem_subdaily_opt1_shared   # opt 1 + shared subsurface (HBV-EC-style)
+  - glogem_subdaily_opt2_shared   # opt 2 + shared subsurface
 
 calibration:
   metrics: [KGE, KGE_WB]

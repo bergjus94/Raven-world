@@ -39,6 +39,7 @@ OPTIONAL_FIELDS = [
     'precip_source', 'pet_method',
     'lapse_rate_precip_source',  # decoupled lapse-rate gridded precip override
     'perc_option',               # SPHY percolation variant: 1 (HBV-Light) or 2 (SPHY-faithful)
+    'lateral_equilibrate',       # SPHY shared (HBV-EC) vs per-HRU (SPHY/UBCWM) subsurface storage
 ]
 
 # Map from generate_namelists config names to our config layer names
