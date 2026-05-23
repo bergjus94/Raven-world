@@ -1,0 +1,17 @@
+gauge_id: '2299'
+display_name: 'Alpbach @ Erstfeld, Bodenberg'
+region: 'switzerland'
+
+# Uri (Reuss/Aare system). Small alpine catchment.
+# 10-yr real warm-up (1990-1999) + 11-yr calibration (2000-2010) + 10-yr
+# validation (2011-2020) — same scheme as 2256/2268/2269.
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+validation_start: '2011-01-01'
+validation_end: '2020-12-31'
+
+calibration:
+  cali_end_date: '2010-12-31'
+  vali_end_date: '2020-12-31'
