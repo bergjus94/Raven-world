@@ -31,10 +31,7 @@ raster_dir: '01_data/topo/catchment_dem/dem_Switzerland.tif'
 landuse_dir: '01_data/topo/catchment_landuse/landuse_Switzerland_50m.tif'
 
 # --- Lapse-rate gridded precip source ---
-# Defensive override: SPHY's glogem_subdaily_opt{1,2} configs set
-# lapse_rate_precip_source: TPHiPr (since that's the HMA default), but
-# TPhiPr has no Swiss coverage. Force MeteoSwiss here for region: switzerland
-# so Swiss runs fit the P-vs-z regression on MeteoSwiss precip instead.
+# TPHiPr (the defaults.yaml value) has no Swiss coverage — use MeteoSwiss.
 lapse_rate_precip_source: 'MeteoSwiss'
 
 # --- Glacier outlines (RGI region 11: Central Europe) ---

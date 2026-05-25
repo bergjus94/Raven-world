@@ -10,10 +10,5 @@ glogem_model: 'gfdl-esm4'
 glogem_scenario: 'ssp126'
 basin_name: 'Indus'
 irrigation_variable: 'discharge'
-# Use TPhiPr for the lapse-rate regression even though ERA5 is the active
-# meteo precip. Per decisions doc, TPhiPr is the right HMA gridded product
-# for P-vs-z fitting. The switzerland region layer overrides this back to
-# MeteoSwiss for Swiss catchments.
-lapse_rate_precip_source: 'TPHiPr'
 perc_option: 2
 compatible_models: ['SPHY']

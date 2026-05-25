@@ -27,6 +27,11 @@ glacier_routing: false
 # --- Meteorological forcing default ---
 meteo_source: 'ERA5'
 
+# --- Lapse-rate gridded precip source ---
+# HMA default. The switzerland region layer overrides to 'MeteoSwiss' since
+# TPHiPr has no Swiss coverage.
+lapse_rate_precip_source: 'TPHiPr'
+
 # --- Warm-up strategy (shared by meteo + GloGEM preprocessors) ---
 # method:
 #   'cycle' — tile the first `cycle_years` years of simulation data forward

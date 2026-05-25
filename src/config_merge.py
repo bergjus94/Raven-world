@@ -93,8 +93,14 @@ def _list_available(subdir: str, layers_dir: Path = None) -> list:
 def _apply_fixups(merged: dict) -> dict:
     """Apply post-merge fixups to ensure consistency."""
 
-    # Auto-set tphipr_dir if precip_source is TPHiPr and not already set
-    if merged.get('precip_source') == 'TPHiPr' and 'tphipr_dir' not in merged:
+    # Auto-set tphipr_dir if TPHiPr is the active precip OR the lapse-rate
+    # input, and not already set. Must match create_input_files.py's
+    # `needs_tphipr` check, which is case-insensitive across both fields.
+    needs_tphipr = (
+        str(merged.get('precip_source', '')).upper() == 'TPHIPR'
+        or str(merged.get('lapse_rate_precip_source', '')).upper() == 'TPHIPR'
+    )
+    if needs_tphipr and 'tphipr_dir' not in merged:
         main_dir = merged.get('main_dir', '')
         merged['tphipr_dir'] = f"{main_dir}/01_data/meteo/TPHiPr"
 

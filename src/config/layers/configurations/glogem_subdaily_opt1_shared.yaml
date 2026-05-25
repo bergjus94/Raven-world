@@ -13,7 +13,6 @@ glogem_model: 'gfdl-esm4'
 glogem_scenario: 'ssp126'
 basin_name: 'Indus'
 irrigation_variable: 'discharge'
-lapse_rate_precip_source: 'TPHiPr'
 perc_option: 1
 lateral_equilibrate: true
 compatible_models: ['SPHY']
