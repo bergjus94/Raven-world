@@ -577,7 +577,15 @@ def plot_cross_catchment_heatmap(perf: pd.DataFrame, out_path: Path) -> None:
 # ── Winners table ───────────────────────────────────────────────────────────
 
 def winners_table(perf: pd.DataFrame) -> pd.DataFrame:
-    """For each (gauge_id, cali_metric, eval_metric) find the best config."""
+    """For each (gauge_id, cali_metric, eval_metric) find the best config.
+
+    Drops NaN values before idxmax — some (catchment, eval_metric) groups
+    can be all-NaN (e.g. KGE_nonwinter when a catchment has too few non-winter
+    valid days), and idxmax returns NaN there, which then trips perf.loc.
+    """
+    if perf.empty:
+        return pd.DataFrame()
+    perf = perf.dropna(subset=['value'])
     if perf.empty:
         return pd.DataFrame()
     idx = perf.groupby(['gauge_id', 'cali_metric', 'eval_metric'])['value'].idxmax()
