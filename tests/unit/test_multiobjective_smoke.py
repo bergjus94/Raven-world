@@ -271,27 +271,43 @@ class TestResolveModisFscaPath:
         out = co.resolve_modis_fsca_path('0102', explicit_path=explicit)
         assert out == explicit
 
-    def test_default_smb_pattern(self):
+    def test_legacy_smb_pattern(self):
+        """Back-compat: when smb_root is supplied, build
+        <smb_root>/basins/<display>_<gauge>/<csv>."""
         out = co.resolve_modis_fsca_path('0102', display_name='Hunza',
                                          product='MOD10A2',
                                          smb_root='/fake/MODIS')
         assert out == Path('/fake/MODIS/basins/Hunza_0102/fsca_MOD10A2_0102.csv')
 
-    def test_missing_display_name_falls_back_to_gauge_id(self):
+    def test_smb_missing_display_name_falls_back_to_gauge_id(self):
         out = co.resolve_modis_fsca_path('0102', smb_root='/fake/MODIS')
         assert str(out).endswith('basins/0102/fsca_MOD10A2_0102.csv')
 
-    def test_swiss_display_name_with_space_and_at(self):
-        """When called from spotpy_optimize, the display_name is pre-trimmed
-        to the first word. But if a caller passes the full name with '@' /
-        spaces, the resolver currently leaves them in — possibly surprising.
+    def test_main_dir_canonical_layout(self):
+        """New canonical layout written by scripts/derive_basin_fsca.py:
+        <main_dir>/01_data/snow/MODIS/basins/<gauge>/<csv> — no display_name
+        in the path."""
+        out = co.resolve_modis_fsca_path('2268',
+                                         display_name='Rhone',  # ignored
+                                         main_dir='/data/raven')
+        assert out == Path('/data/raven/01_data/snow/MODIS/basins/2268/'
+                           'fsca_MOD10A2_2268.csv')
 
-        This test documents the *current* behaviour; if we ever auto-trim in
-        the resolver, update or remove."""
+    def test_no_args_raises(self):
+        """Without explicit_path, smb_root, or main_dir the call is
+        ambiguous — fail loudly."""
+        with pytest.raises(ValueError, match='at least one of'):
+            co.resolve_modis_fsca_path('0102')
+
+    def test_swiss_display_name_via_legacy_smb(self):
+        """Legacy SMB branch leaves the display_name as-is, including spaces
+        and '@'. spotpy_optimize._setup_objectives pre-trims for that branch.
+
+        Canonical (main_dir) layout doesn't care about display_name at all.
+        """
         out = co.resolve_modis_fsca_path('2268',
                                          display_name='Rhone @ Gletsch',
                                          smb_root='/fake/MODIS')
-        # Currently the resolver does NOT strip — caller is responsible.
         assert 'Rhone @ Gletsch_2268' in str(out)
 
 

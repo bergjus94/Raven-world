@@ -646,6 +646,7 @@ class RavenSCEUA(object):
                 display_name=s.get('display_name') or None,
                 explicit_path=s.get('fsca_csv'),
                 product=s.get('product', 'MOD10A2'),
+                main_dir=(self.namelist or {}).get('main_dir'),
             )
             if not Path(fsca_csv).exists():
                 print(f"  ⚠️ MODIS fSCA CSV not found at {fsca_csv}; snow=NaN")

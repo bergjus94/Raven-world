@@ -288,23 +288,37 @@ def resolve_modis_fsca_path(
     explicit_path: Optional[Union[str, Path]] = None,
     product: str = 'MOD10A2',
     smb_root: Optional[Union[str, Path]] = None,
+    main_dir: Optional[Union[str, Path]] = None,
 ) -> Path:
     """Resolve the MODIS fSCA CSV for a catchment.
 
-    Precedence: explicit_path > smb_root/basins/<name>_<gauge>/<csv>.
+    Precedence:
+      1. `explicit_path`             — caller wins absolutely.
+      2. `smb_root` if given         — legacy SMB layout with display_name prefix.
+      3. `main_dir`                  — local layout produced by
+         scripts/derive_basin_fsca.py at
+         <main_dir>/01_data/snow/MODIS/basins/<gauge>/fsca_<product>_<gauge>.csv.
 
-    `display_name` is the basin name used as the folder prefix (e.g. 'Hunza').
-    If omitted, falls back to just the gauge_id.
+    The local-main_dir branch is the canonical one for new runs; the SMB
+    branch is kept for back-compat with the older
+    `<smb_root>/basins/<display>_<gauge>/` directory layout.
     """
     if explicit_path is not None:
         return Path(explicit_path)
 
-    if smb_root is None:
-        smb_root = (f"/run/user/{os.getuid()}/gvfs/"
-                    f"smb-share:server=hydroshare.giub.unibe.ch,share=data"
-                    f"/Meteorology/Global/MODIS")
-    smb_root = Path(smb_root)
+    if smb_root is not None:
+        # Legacy SMB layout: basins are named "<display_name>_<gauge>/".
+        smb_root = Path(smb_root)
+        folder_name = (f"{display_name}_{gauge_id}" if display_name
+                       else str(gauge_id))
+        return smb_root / "basins" / folder_name / f"fsca_{product}_{gauge_id}.csv"
 
-    folder_name = (f"{display_name}_{gauge_id}" if display_name
-                   else str(gauge_id))
-    return smb_root / "basins" / folder_name / f"fsca_{product}_{gauge_id}.csv"
+    if main_dir is not None:
+        return (Path(main_dir) / '01_data' / 'snow' / 'MODIS' / 'basins'
+                / str(gauge_id) / f"fsca_{product}_{gauge_id}.csv")
+
+    raise ValueError(
+        "resolve_modis_fsca_path needs at least one of: explicit_path, "
+        "smb_root (legacy), or main_dir (canonical). Pass main_dir from the "
+        "catchment namelist or set snow.fsca_csv explicitly in the namelist."
+    )
