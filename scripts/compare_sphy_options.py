@@ -579,40 +579,52 @@ def plot_catchment_storage(storage: pd.DataFrame, out_path: Path) -> None:
 
 
 def plot_cross_catchment_heatmap(perf: pd.DataFrame, out_path: Path) -> None:
-    """Heatmap: rows = catchments, cols = configs, value = validation eval_metric.
+    """2×2 grid of heatmaps: rows = catchments × cols = configs.
 
-    Two-panel: KGE and KGE_WB validation scores for each cali_metric × config.
-    Cells annotated with the value; values are evaluated on the validation
-    period, taken from the run calibrated on the same metric (KGE-calibrated
-    → KGE row, KGE_WB-calibrated → KGE_WB row).
+    Rows of the grid:    calibrated on {KGE, KGE_WB}
+    Cols of the grid:    evaluation metric {KGE (full year), KGE_winter (baseflow)}
+
+    Shows the trade-off: calibrating on KGE_WB sacrifices some full-year KGE
+    in exchange for better KGE_winter (baseflow fit).
     """
     if perf.empty:
         return
-    # Use each metric's diagonal: cali_metric == eval_metric (the natural read).
-    pairs = [('KGE', 'KGE'), ('KGE_WB', 'KGE_WB')]
-    fig, axes = plt.subplots(1, len(pairs), figsize=(6 * len(pairs), 0.4 * perf['gauge_id'].nunique() + 2.5),
-                             squeeze=False)
-    for ax, (cm, em) in zip(axes[0], pairs):
-        sub = perf[(perf['cali_metric'] == cm) & (perf['eval_metric'] == em)]
-        if sub.empty:
-            ax.set_visible(False)
-            continue
-        pivot = sub.pivot_table(index='gauge_id', columns='config', values='value')
-        im = ax.imshow(pivot.values, vmin=0, vmax=1, cmap='RdYlGn', aspect='auto')
-        ax.set_xticks(range(len(pivot.columns)))
-        ax.set_xticklabels([c.replace('glogem_subdaily_', '') for c in pivot.columns],
-                           rotation=25, ha='right')
-        ax.set_yticks(range(len(pivot.index)))
-        ax.set_yticklabels(pivot.index)
-        ax.set_title(f'{em} (calibrated on {cm})')
-        for i in range(pivot.shape[0]):
-            for j in range(pivot.shape[1]):
-                v = pivot.values[i, j]
-                if not np.isnan(v):
-                    ax.text(j, i, f'{v:.2f}', ha='center', va='center',
-                            color='black' if v > 0.4 else 'white', fontsize=8)
-        fig.colorbar(im, ax=ax, shrink=0.7)
-    fig.suptitle('SPHY options — validation scores across catchments', y=1.02)
+
+    cali_metrics = ['KGE', 'KGE_WB']
+    eval_metrics = ['KGE', 'KGE_winter']
+    n_catch = perf['gauge_id'].nunique()
+
+    fig, axes = plt.subplots(
+        len(cali_metrics), len(eval_metrics),
+        figsize=(6 * len(eval_metrics), 0.4 * n_catch * len(cali_metrics) + 2),
+        squeeze=False,
+    )
+
+    for r, cm in enumerate(cali_metrics):
+        for c, em in enumerate(eval_metrics):
+            ax = axes[r, c]
+            sub = perf[(perf['cali_metric'] == cm) & (perf['eval_metric'] == em)]
+            if sub.empty:
+                ax.set_visible(False)
+                continue
+            pivot = sub.pivot_table(index='gauge_id', columns='config', values='value')
+            im = ax.imshow(pivot.values, vmin=0, vmax=1, cmap='RdYlGn', aspect='auto')
+            ax.set_xticks(range(len(pivot.columns)))
+            ax.set_xticklabels([col.replace('glogem_', '') for col in pivot.columns],
+                               rotation=25, ha='right', fontsize=8)
+            ax.set_yticks(range(len(pivot.index)))
+            ax.set_yticklabels(pivot.index)
+            ax.set_title(f'{em}  (calibrated on {cm})')
+            for i in range(pivot.shape[0]):
+                for j in range(pivot.shape[1]):
+                    v = pivot.values[i, j]
+                    if not np.isnan(v):
+                        ax.text(j, i, f'{v:.2f}', ha='center', va='center',
+                                color='black' if v > 0.4 else 'white', fontsize=8)
+            fig.colorbar(im, ax=ax, shrink=0.7)
+
+    fig.suptitle('SPHY options — validation scores: full-year KGE vs winter '
+                 'baseflow (KGE_winter)', y=1.00)
     fig.tight_layout()
     fig.savefig(out_path, dpi=130, bbox_inches='tight')
     plt.close(fig)
