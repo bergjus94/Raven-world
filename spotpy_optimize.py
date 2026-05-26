@@ -240,11 +240,17 @@ class RavenSCEUA(object):
         # Strip any '@'/spaces — folder names use the leading word
         folder_name = display_name.split('@')[0].strip().split()[0] if display_name else ''
         self.obj_settings['snow'] = {
-            'metric':          snow_cfg.get('metric', 'KGE'),
-            'fsca_csv':        snow_cfg.get('fsca_csv'),  # explicit override
-            'cloud_threshold': float(snow_cfg.get('cloud_threshold', 0.5)),
-            'product':         snow_cfg.get('product', 'MOD10A2'),
-            'display_name':    folder_name,
+            'metric':              snow_cfg.get('metric', 'KGE'),
+            'fsca_csv':            snow_cfg.get('fsca_csv'),  # explicit override
+            'cloud_threshold':     float(snow_cfg.get('cloud_threshold', 0.5)),
+            'product':             snow_cfg.get('product', 'MOD10A2'),
+            'display_name':        folder_name,
+            'aggregation':         snow_cfg.get('aggregation', 'basin_mean'),
+            'band_width_m':        int(snow_cfg.get('band_width_m', 100)),
+            'min_pixels_per_band': int(snow_cfg.get('min_pixels_per_band', 30)),
+            'band_aggregation':    snow_cfg.get('band_aggregation',
+                                                 'area_weighted_mean'),
+            'diagnostic_log':      snow_cfg.get('diagnostic_log'),
         }
 
         # Baseflow
@@ -293,11 +299,13 @@ class RavenSCEUA(object):
         print(f"📝 Injected SNOW_FRAC CustomOutput into {rvi.name}")
 
     def _load_hru_info(self):
-        """Parse the .rvh once to learn each HRU's area (km²) and land-use
-        class.  Populates self.hru_areas and self.glacier_hrus.
+        """Parse the .rvh once to learn each HRU's area (km²), elevation (m),
+        and land-use class.  Populates self.hru_areas, self.hru_elevations,
+        and self.glacier_hrus.
         """
         rvh = self.model_dir / f'{self.gauge_id}_{self.model_type}.rvh'
         self.hru_areas = {}
+        self.hru_elevations = {}
         self.glacier_hrus = set()
         if not rvh.exists():
             print(f"⚠️ RVH not found at {rvh}; snow objective will use uniform HRU weighting")
@@ -320,9 +328,11 @@ class RavenSCEUA(object):
             try:
                 hru_id = int(parts[0])
                 area   = float(parts[1])
+                elev   = float(parts[2])
             except ValueError:
                 continue
             self.hru_areas[hru_id] = area
+            self.hru_elevations[hru_id] = elev
             # land-use class is typically column index 5 (0-based) in Raven's
             # :HRUs block: ID, AREA, ELEV, LAT, LON, BASIN_ID, LAND_USE_CLASS, ...
             lu = parts[6].upper() if len(parts) > 6 else ''
@@ -655,10 +665,17 @@ class RavenSCEUA(object):
                 obs_fsca_csv=fsca_csv,
                 sim_output_dir=self.output_path,
                 hru_areas=self.hru_areas,
+                hru_elevations=getattr(self, 'hru_elevations', None),
                 glacier_hrus=self.glacier_hrus,
                 metric=s['metric'],
                 cloud_threshold=s['cloud_threshold'],
                 date_range=(None, self.cali_end_date),
+                aggregation=s.get('aggregation', 'basin_mean'),
+                band_width_m=s.get('band_width_m', 100),
+                min_pixels_per_band=s.get('min_pixels_per_band', 30),
+                band_aggregation=s.get('band_aggregation',
+                                        'area_weighted_mean'),
+                diagnostic_log=s.get('diagnostic_log'),
             )
         except Exception as e:
             print(f"  ⚠️ Snow objective failed: {e}")

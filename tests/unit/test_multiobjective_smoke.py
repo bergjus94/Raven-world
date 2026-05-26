@@ -387,6 +387,334 @@ class TestCombineWeighted:
         assert v == -999.0
 
 
+# ───────────────────────── new metrics (RMSE / MAE / PBIAS / CSI) ─────────────────────────
+
+
+class TestNewMetrics:
+    def test_all_metrics_registered(self):
+        assert set(co.METRICS) == {'KGE', 'NSE', 'LogKGE',
+                                    'RMSE', 'MAE', 'PBIAS', 'CSI'}
+
+    def test_perfect_match_scores_one(self):
+        """For identical obs/sim on a bounded [0,1] variable, every metric
+        should report a near-perfect score (1.0)."""
+        q = _make_q_series(n=200)
+        # Normalise to [0, 1] so RMSE/MAE are bounded — mimics fSCA
+        q = (q - q.min()) / (q.max() - q.min())
+        for m in ('KGE', 'NSE', 'LogKGE', 'RMSE', 'MAE', 'PBIAS', 'CSI'):
+            v = co._apply_metric(m, q, q)
+            assert v == pytest.approx(1.0, abs=1e-3), f"{m} failed: {v}"
+
+    def test_rmse_score_decreases_with_noise(self):
+        rng = np.random.default_rng(7)
+        n = 200
+        obs = pd.Series(np.clip(0.5 + 0.3 * np.sin(np.linspace(0, 6, n)), 0, 1))
+        sim_low_noise  = pd.Series(np.clip(obs + 0.02 * rng.standard_normal(n), 0, 1))
+        sim_high_noise = pd.Series(np.clip(obs + 0.20 * rng.standard_normal(n), 0, 1))
+        v_low  = co._apply_metric('RMSE', obs, sim_low_noise)
+        v_high = co._apply_metric('RMSE', obs, sim_high_noise)
+        assert v_low > v_high
+        assert 0.0 <= v_high <= v_low <= 1.0
+
+    def test_pbias_score_drops_with_bias(self):
+        obs = pd.Series([0.5] * 100)
+        sim = pd.Series([0.6] * 100)   # +20% bias
+        v = co._apply_metric('PBIAS', obs, sim)
+        # PBIAS = 20%, score = 1 - 20/100 = 0.8
+        assert v == pytest.approx(0.8, abs=1e-3)
+
+    def test_csi_perfect_when_all_above_threshold(self):
+        obs = pd.Series([0.9] * 100)
+        sim = pd.Series([0.95] * 100)
+        # threshold 0.5: both all 'snow present', hits=100, misses=0, fa=0
+        v = co._apply_metric('CSI', obs, sim)
+        assert v == pytest.approx(1.0)
+
+
+class TestRawDiagnostics:
+    def test_keys_present(self):
+        q = _make_q_series(n=100)
+        d = co.raw_diagnostics(q, q)
+        assert set(d.keys()) >= {'r', 'rmse', 'mae', 'pbias', 'n'}
+        assert d['rmse'] == pytest.approx(0.0, abs=1e-6)
+        assert d['mae'] == pytest.approx(0.0, abs=1e-6)
+        assert d['r'] == pytest.approx(1.0, abs=1e-6)
+        assert d['n'] == 100
+
+    def test_too_few_points_returns_nans(self):
+        q = _make_q_series(n=10)
+        d = co.raw_diagnostics(q, q)
+        assert np.isnan(d['rmse'])
+        assert np.isnan(d['r'])
+        assert d['n'] == 10
+
+
+# ───────────────────────── long-format / per-band fSCA loaders ─────────────────────────
+
+
+def _write_fake_band_fsca(out_path: Path, n_dates: int = 50,
+                          bands: tuple = (2500, 2600, 2700, 2800)) -> Path:
+    """Write a long-format per-band fSCA CSV mimicking preprocess_modis_fsca output."""
+    dates = pd.date_range('2010-01-01', periods=n_dates, freq='8D')
+    rows = []
+    rng = np.random.default_rng(0)
+    for d in dates:
+        for band in bands:
+            # Higher elevation = more snow on average
+            base = (band - 2500) / 500.0
+            fsca = float(np.clip(base + 0.1 * rng.standard_normal(), 0, 1))
+            rows.append({
+                'date':    d.strftime('%Y-%m-%d'),
+                'band_m':  band,
+                'fsca':    fsca,
+                'n_valid': 100,
+                'n_cloud': 5,
+                'n_total': 110,
+            })
+    df = pd.DataFrame(rows)
+    df.to_csv(out_path, index=False, float_format='%.6f')
+    return out_path
+
+
+class TestLoadModisFscaLongFormat:
+    def test_load_modis_fsca_collapses_multi_band(self, tmp_path):
+        """When given a multi-band CSV, load_modis_fsca returns a basin-mean
+        Series weighted by n_total."""
+        csv = _write_fake_band_fsca(tmp_path / 'fsca_multi.csv')
+        s = co.load_modis_fsca(csv, cloud_threshold=0.5)
+        assert isinstance(s, pd.Series)
+        # One value per date (50 dates in the fixture)
+        assert len(s) == 50
+        assert s.notna().any()
+
+    def test_load_modis_fsca_bands_pivots_to_wide(self, tmp_path):
+        csv = _write_fake_band_fsca(tmp_path / 'fsca_multi.csv')
+        df = co.load_modis_fsca_bands(csv, cloud_threshold=0.5,
+                                       min_pixels_per_band=10)
+        assert list(df.columns) == [2500, 2600, 2700, 2800]
+        assert len(df) == 50
+        # Higher bands should have higher mean fSCA (per the fixture)
+        assert df[2800].mean() > df[2500].mean()
+
+    def test_load_modis_fsca_bands_rejects_single_band(self, tmp_path):
+        """The single-band 'basin' CSV should be rejected by the per-band loader."""
+        csv = tmp_path / 'fsca_basin.csv'
+        pd.DataFrame({
+            'date': pd.date_range('2010-01-01', periods=10, freq='8D'),
+            'band_m': 'basin',
+            'fsca': [0.5] * 10,
+            'n_valid': [100] * 10,
+            'n_cloud': [0] * 10,
+            'n_total': [100] * 10,
+        }).to_csv(csv, index=False)
+        with pytest.raises(ValueError, match='only one band|no `band_m`'):
+            co.load_modis_fsca_bands(csv)
+
+    def test_min_pixels_filter_drops_low_count_cells(self, tmp_path):
+        """Cells with n_valid < min_pixels_per_band become NaN."""
+        csv = tmp_path / 'fsca_sparse.csv'
+        pd.DataFrame({
+            'date':    ['2010-01-01', '2010-01-01', '2010-01-09', '2010-01-09'],
+            'band_m':  [2500, 2600, 2500, 2600],
+            'fsca':    [0.3, 0.7, 0.4, 0.8],
+            'n_valid': [100, 5, 90, 60],   # row index 1 has too few pixels
+            'n_cloud': [0, 0, 0, 0],
+            'n_total': [110, 10, 100, 70],
+        }).to_csv(csv, index=False)
+        df = co.load_modis_fsca_bands(csv, cloud_threshold=0.5,
+                                       min_pixels_per_band=30)
+        assert np.isnan(df.loc[pd.Timestamp('2010-01-01'), 2600])
+        assert not np.isnan(df.loc[pd.Timestamp('2010-01-01'), 2500])
+        assert not np.isnan(df.loc[pd.Timestamp('2010-01-09'), 2600])
+
+
+# ───────────────────────── band-area helper + per-band sim ─────────────────────────
+
+
+class TestComputeBandAreas:
+    def test_groups_hrus_by_floor_of_elevation(self):
+        hru_areas = {1: 10.0, 2: 20.0, 3: 30.0, 4: 40.0}
+        hru_elev  = {1: 2543, 2: 2587, 3: 2612, 4: 3950}
+        # band_width=100 → bands 2500 (1+2 → 30), 2600 (3 → 30), 3900 (4 → 40)
+        out = co._compute_band_areas(hru_areas, hru_elev, band_width_m=100)
+        assert out == {2500: 30.0, 2600: 30.0, 3900: 40.0}
+
+    def test_glacier_hrus_excluded(self):
+        hru_areas = {1: 10.0, 2: 20.0, 3: 30.0}
+        hru_elev  = {1: 2543, 2: 2587, 3: 2612}
+        out = co._compute_band_areas(hru_areas, hru_elev, band_width_m=100,
+                                      glacier_hrus={3})
+        assert out == {2500: 30.0}  # HRU 3 excluded
+
+    def test_skips_hrus_without_elevation(self):
+        hru_areas = {1: 10.0, 2: 20.0, 3: 30.0}
+        hru_elev  = {1: 2543, 2: 2587}  # 3 missing
+        out = co._compute_band_areas(hru_areas, hru_elev, band_width_m=100)
+        assert out == {2500: 30.0}
+
+
+class TestLoadRavenSnowFracPerBand:
+    def test_aggregates_by_band(self, tmp_path):
+        # 4 HRUs across 2 bands (2500-2599 → band 2500, 2700-2799 → band 2700)
+        n_days = 30
+        dates = pd.date_range('2010-01-01', periods=n_days, freq='D')
+        df = pd.DataFrame({
+            'time': range(n_days),
+            'date': [d.strftime('%Y-%m-%d') for d in dates],
+            'hour': ['00:00:00'] * n_days,
+            '1': [0.5] * n_days,
+            '2': [0.6] * n_days,   # band 2500: 1 & 2
+            '3': [0.9] * n_days,
+            '4': [1.0] * n_days,   # band 2700: 3 & 4
+        })
+        out = tmp_path / 'fake_SNOW_FRAC_Daily_Average_ByHRU.csv'
+        df.to_csv(out, index=False)
+
+        per_band = co.load_raven_snow_frac_per_band(
+            output_dir=tmp_path,
+            hru_areas={1: 10.0, 2: 10.0, 3: 10.0, 4: 10.0},
+            hru_elevations={1: 2550, 2: 2590, 3: 2750, 4: 2790},
+            band_width_m=100,
+        )
+        assert list(per_band.columns) == [2500, 2700]
+        # band 2500: equal-area weighted mean of 0.5 and 0.6 = 0.55
+        assert per_band[2500].iloc[0] == pytest.approx(0.55)
+        assert per_band[2700].iloc[0] == pytest.approx(0.95)
+
+    def test_excludes_glacier_hrus(self, tmp_path):
+        n_days = 30
+        dates = pd.date_range('2010-01-01', periods=n_days, freq='D')
+        df = pd.DataFrame({
+            'time': range(n_days),
+            'date': [d.strftime('%Y-%m-%d') for d in dates],
+            'hour': ['00:00:00'] * n_days,
+            '1': [0.5] * n_days, '2': [0.6] * n_days,
+            '3': [0.0] * n_days,  # glacier HRU, should be excluded
+        })
+        out = tmp_path / 'fake_SNOW_FRAC_Daily_Average_ByHRU.csv'
+        df.to_csv(out, index=False)
+
+        per_band = co.load_raven_snow_frac_per_band(
+            output_dir=tmp_path,
+            hru_areas={1: 10.0, 2: 10.0, 3: 10.0},
+            hru_elevations={1: 2550, 2: 2590, 3: 3050},
+            glacier_hrus={3},
+            band_width_m=100,
+        )
+        assert 3050 not in per_band.columns
+        assert 2500 in per_band.columns
+
+
+# ───────────────────────── snow_objective elevation-band end-to-end ─────────────────────────
+
+
+class TestSnowObjectiveElevationBand:
+    @pytest.fixture
+    def per_band_setup(self, tmp_path):
+        """Build a minimal per-band obs CSV + matching Raven-format sim file."""
+        # Obs: 30 dates × 2 bands, sim values = obs values exactly
+        dates = pd.date_range('2010-02-01', periods=30, freq='8D')
+        bands = (2500, 2700)
+        obs_rows = []
+        # Per-band time-varying fSCA so KGE has signal
+        for i, d in enumerate(dates):
+            obs_rows.append({'date': d.strftime('%Y-%m-%d'), 'band_m': 2500,
+                             'fsca': 0.3 + 0.01 * i, 'n_valid': 100,
+                             'n_cloud': 0, 'n_total': 100})
+            obs_rows.append({'date': d.strftime('%Y-%m-%d'), 'band_m': 2700,
+                             'fsca': 0.7 + 0.01 * i, 'n_valid': 100,
+                             'n_cloud': 0, 'n_total': 100})
+        obs_csv = tmp_path / 'fsca_obs.csv'
+        pd.DataFrame(obs_rows).to_csv(obs_csv, index=False)
+
+        # Sim: 1 year of daily Raven SNOW_FRAC ByHRU, 4 HRUs across 2 bands
+        # Construct so per-band mean matches obs values at each MODIS date
+        sim_dates = pd.date_range('2010-01-01', periods=365, freq='D')
+        sim_df = pd.DataFrame({
+            'time': range(365),
+            'date': [d.strftime('%Y-%m-%d') for d in sim_dates],
+            'hour': ['00:00:00'] * 365,
+        })
+        # For each sim date, find nearest MODIS date and copy its obs value
+        obs_per_band_lookup = {b: dict(zip(dates, [r['fsca']
+                                                    for r in obs_rows
+                                                    if r['band_m'] == b]))
+                                for b in bands}
+        # Use the nearest MODIS date's value for each daily timestep
+        for hru, band in [('1', 2500), ('2', 2500), ('3', 2700), ('4', 2700)]:
+            col = []
+            for d in sim_dates:
+                # Find nearest MODIS date
+                nearest_idx = (dates - d).map(abs).argmin()
+                col.append(obs_per_band_lookup[band][dates[nearest_idx]])
+            sim_df[hru] = col
+
+        sim_dir = tmp_path / 'sim'
+        sim_dir.mkdir()
+        sim_df.to_csv(sim_dir / 'fake_SNOW_FRAC_Daily_Average_ByHRU.csv',
+                       index=False)
+
+        return {
+            'obs_csv': obs_csv,
+            'sim_dir': sim_dir,
+            'hru_areas': {1: 10.0, 2: 10.0, 3: 10.0, 4: 10.0},
+            'hru_elevations': {1: 2550, 2: 2590, 3: 2750, 4: 2790},
+        }
+
+    def test_elevation_band_perfect_match(self, per_band_setup):
+        """With obs and sim constructed to match exactly, KGE per band should
+        be ~1.0 → area-weighted mean ~1.0."""
+        v = co.snow_objective(
+            obs_fsca_csv=per_band_setup['obs_csv'],
+            sim_output_dir=per_band_setup['sim_dir'],
+            hru_areas=per_band_setup['hru_areas'],
+            hru_elevations=per_band_setup['hru_elevations'],
+            metric='KGE',
+            aggregation='elevation_band',
+            band_width_m=100,
+            min_pixels_per_band=10,
+        )
+        assert v == pytest.approx(1.0, abs=0.05)
+
+    def test_missing_hru_elevations_raises(self, per_band_setup):
+        with pytest.raises(ValueError, match='hru_elevations is required'):
+            co.snow_objective(
+                obs_fsca_csv=per_band_setup['obs_csv'],
+                sim_output_dir=per_band_setup['sim_dir'],
+                hru_areas=per_band_setup['hru_areas'],
+                hru_elevations=None,        # omitted
+                aggregation='elevation_band',
+            )
+
+    def test_unknown_aggregation_raises(self, per_band_setup):
+        with pytest.raises(ValueError, match='aggregation must be'):
+            co.snow_objective(
+                obs_fsca_csv=per_band_setup['obs_csv'],
+                sim_output_dir=per_band_setup['sim_dir'],
+                hru_areas=per_band_setup['hru_areas'],
+                aggregation='not_a_mode',
+            )
+
+    def test_diagnostic_log_writes_rows(self, per_band_setup, tmp_path):
+        log = tmp_path / 'snow_diag.csv'
+        co.snow_objective(
+            obs_fsca_csv=per_band_setup['obs_csv'],
+            sim_output_dir=per_band_setup['sim_dir'],
+            hru_areas=per_band_setup['hru_areas'],
+            hru_elevations=per_band_setup['hru_elevations'],
+            metric='KGE',
+            aggregation='elevation_band',
+            band_width_m=100,
+            min_pixels_per_band=10,
+            diagnostic_log=log,
+        )
+        assert log.exists()
+        df = pd.read_csv(log)
+        # one row per band exercised (2 bands)
+        assert len(df) == 2
+        assert {'r', 'rmse', 'mae', 'pbias', 'metric', 'band'}.issubset(df.columns)
+
+
 if __name__ == '__main__':
     import sys
     sys.exit(pytest.main([__file__, '-v']))

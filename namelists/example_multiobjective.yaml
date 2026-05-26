@@ -55,11 +55,36 @@ calibration:
     metric: KGE_WB              # KGE | KGE_WB | NSE | LogKGE | ...
 
   snow:
-    metric: KGE                 # KGE | NSE | LogKGE
-    # fsca_csv: '...'           # explicit path override; otherwise auto-resolved:
-                                #   /run/user/<uid>/gvfs/...basins/<display_name>_<gauge>/fsca_MOD10A2_<gauge>.csv
-    cloud_threshold: 0.5        # drop MODIS dates with cloud_frac > this
-    product: MOD10A2            # which MODIS product folder to look under
+    # ---- Metric (higher-is-better, target 1.0) ----
+    metric: RMSE                # KGE | NSE | LogKGE | RMSE | MAE | PBIAS | CSI
+                                # RMSE recommended for bounded fSCA (Tahir et al. 2011 Hunza style)
+                                # KGE works but is unstable for tail bands with near-zero variance
+
+    # ---- Aggregation across the catchment ----
+    aggregation: elevation_band # basin_mean | elevation_band
+                                # basin_mean: one scalar per date (Tahir 2011)
+                                # elevation_band: per-band scalar per date (Finger 2015 WRR)
+    band_width_m: 100           # elevation bin width; matches your HRU
+                                # discretization key from preprocess_catchment_hru.
+                                # Himalaya catchments: still 100 m, with the
+                                # min_pixels filter killing noisy tail bands.
+    min_pixels_per_band: 30     # drop (date, band) cells with fewer valid pixels
+    band_aggregation: area_weighted_mean
+                                # area_weighted_mean | mean | median | min
+                                # area_weighted_mean: bigger bands count more (recommended)
+                                # min: worst-fit band drives calibration (conservative)
+
+    # ---- MODIS source data ----
+    cloud_threshold: 0.5        # drop dates where n_cloud/n_total > this
+    product: MOD10A2            # MOD10A2 (8-day max snow), MOD10A1 (daily NDSI), ...
+    # fsca_csv: '...'           # optional explicit path; otherwise resolved via
+                                # <main_dir>/01_data/snow/MODIS/basins/<gauge>/
+                                # fsca_<product>_<gauge>.csv (auto-derived by the
+                                # preprocessing pipeline when this snow block exists).
+    # diagnostic_log: '...'     # optional CSV path; appends raw r/RMSE/MAE/PBIAS
+                                # per iteration (per band when aggregation=elevation_band).
+                                # Useful when the chosen metric is good but you
+                                # want to see *why* — e.g. high KGE with bad bias.
 
   baseflow:
     metric: KGE

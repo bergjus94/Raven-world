@@ -371,6 +371,35 @@ def main(namelist_path: str, force_reprocess: bool = False):
         traceback.print_exc()
         return False
 
+    # Optional: derive per-catchment MODIS basin/band fSCA — gated on the
+    # snow objective being active in the calibration block. Fast-fails with
+    # a helpful error if the region NetCDF isn't built yet, before any
+    # downstream calibration burns iterations.
+    snow_in_objectives = 'snow' in (
+        nml.get('calibration', {}).get('objectives') or []
+    )
+    if snow_in_objectives:
+        snow_cfg = nml.get('calibration', {}).get('snow', {}) or {}
+        # Skip if user supplied an explicit path — they've handled derivation.
+        if not snow_cfg.get('fsca_csv'):
+            print("\n❄️ STEP 5d: Deriving per-catchment MODIS fSCA...")
+            try:
+                from preprocess_modis_fsca import derive_for_catchment
+                derive_for_catchment(
+                    nml,
+                    aggregation=snow_cfg.get('aggregation', 'basin_mean'),
+                    band_width_m=int(snow_cfg.get('band_width_m', 100)),
+                    glacier_mask=snow_cfg.get('glacier_mask', True),
+                    product=snow_cfg.get('product', 'MOD10A2'),
+                )
+            except FileNotFoundError as e:
+                print(f"   ❌ MODIS fSCA derivation failed:\n      {e}")
+                return False
+            except Exception as e:
+                print(f"   ❌ Error in MODIS fSCA derivation: {e}")
+                traceback.print_exc()
+                return False
+
     # Optional: CORDEX climate projection downscaling (future=True)
     if nml.get('future', False) and nml.get('cordex_models'):
         print("\n🌍 STEP 5c: Downscaling CORDEX climate projections (QDM)...")
