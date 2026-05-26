@@ -30,7 +30,7 @@ import os
 import shutil
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -237,22 +237,30 @@ def build_year_netcdf(
 
     time_index = pd.to_datetime(dates)
     stacked = xr.concat(aligned, dim=pd.Index(time_index, name='time'))
+    # Replace reproject-introduced NaN (curvilinear corners outside the
+    # native MODIS tile coverage) with the MOD10A2 fill byte 255 so we keep
+    # uint8 storage but can recover NaN semantics on read via _FillValue.
+    stacked = stacked.fillna(255).astype('uint8')
+
     stacked.name = 'snow_extent'
     stacked.attrs.update({
         'long_name':   'MOD10A2 maximum snow extent (raw byte values)',
         'description': ('Categorical snow extent: 25=land, 37=lake, 39=ocean, '
-                        '50=cloud, 100=lake ice, 200=snow. Other = invalid.'),
+                        '50=cloud, 100=lake ice, 200=snow. 255=fill/no-data. '
+                        'Other = invalid.'),
         'units':       '1',
         'source':      'MOD10A2 v061',
         'region':      region,
-        'build_date':  datetime.utcnow().strftime('%Y-%m-%d'),
+        'build_date':  datetime.now(timezone.utc).strftime('%Y-%m-%d'),
     })
 
     ds = stacked.to_dataset()
 
-    # Compress everything except coords; uint8 stays uint8.
+    # uint8 with 255 → NaN on read. Saves ~4× space vs float, lossless for
+    # the categorical MODIS values we care about.
     encoding = {
-        'snow_extent': {'zlib': True, 'complevel': 4, 'dtype': 'uint8'},
+        'snow_extent': {'zlib': True, 'complevel': 4,
+                        'dtype': 'uint8', '_FillValue': 255},
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ds.to_netcdf(out_path, encoding=encoding)
