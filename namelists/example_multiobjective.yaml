@@ -1,0 +1,98 @@
+# =============================================================================
+# Example: multi-objective calibration namelist
+# =============================================================================
+# Documents every option in the new calibration block.  Copy + edit the
+# `calibration:` section into a real catchment namelist (e.g. catchment_0102.yaml)
+# to switch on snow/baseflow objectives or non-SCEUA algorithms.
+#
+# Single-objective algorithms (SCEUA, DDS, DREAM) consume a weighted-sum
+# scalar built from the listed objectives.  Multi-objective algorithms
+# (NSGAII, PA-DDS) explore the Pareto front and ignore `weights`.
+# =============================================================================
+
+catchment: '0102'
+display_name: 'Hunza @ Dainyor'    # first word is used as MODIS folder prefix
+start_date: '1980-01-01'
+end_date: '2014-12-31'
+cali_end_date: '1999-12-31'
+warm_up_date: '1970-01-01'
+
+precip_correction: true
+models: [HBV]
+configurations: [glogem]
+
+calibration:
+  # ---------------------------------------------------------------------------
+  # Algorithm   (default: SCEUA — preserves legacy behaviour)
+  #   SCEUA  | DDS  | DREAM         single-objective (weighted-sum)
+  #   NSGAII | PADDS                multi-objective (Pareto front)
+  # ---------------------------------------------------------------------------
+  algorithm: SCEUA
+
+  iterations: 3000        # budget (generations*pop for NSGAII)
+  ngs: 15                 # SCEUA-only: number of complexes
+  n_pop: 50               # NSGAII/PADDS: population size
+
+  # ---------------------------------------------------------------------------
+  # Active objectives — subset of {Q, snow, baseflow}.  'Q' is required.
+  # ---------------------------------------------------------------------------
+  objectives: [Q]                       # Q only (legacy)
+  # objectives: [Q, snow]                # Q + MODIS fSCA
+  # objectives: [Q, snow, baseflow]      # Q + fSCA + winter baseflow
+
+  # ---------------------------------------------------------------------------
+  # Weighted-sum weights (single-objective algos only).  Auto-normalised.
+  # ---------------------------------------------------------------------------
+  weights:
+    Q:        0.7
+    snow:     0.3
+    baseflow: 0.0
+
+  # ---------------------------------------------------------------------------
+  # Per-objective settings
+  # ---------------------------------------------------------------------------
+  Q:
+    metric: KGE_WB              # KGE | KGE_WB | NSE | LogKGE | ...
+
+  snow:
+    metric: KGE                 # KGE | NSE | LogKGE
+    # fsca_csv: '...'           # explicit path override; otherwise auto-resolved:
+                                #   /run/user/<uid>/gvfs/...basins/<display_name>_<gauge>/fsca_MOD10A2_<gauge>.csv
+    cloud_threshold: 0.5        # drop MODIS dates with cloud_frac > this
+    product: MOD10A2            # which MODIS product folder to look under
+
+  baseflow:
+    metric: KGE
+    method: eckhardt            # eckhardt | lyne_hollick | sliding_min | raw_winter
+    window: winter              # winter (Nov-Mar) | all
+
+future:
+  enabled: false
+
+# =============================================================================
+# Example modes (copy `calibration:` into your real namelist):
+# =============================================================================
+#
+# 1. Single-obj Q-only with SCEUA — current default, legacy behaviour:
+#      algorithm: SCEUA
+#      objectives: [Q]
+#
+# 2. Single-obj Q + snow with DDS:
+#      algorithm: DDS
+#      objectives: [Q, snow]
+#      weights: {Q: 0.7, snow: 0.3}
+#
+# 3. Single-obj Q + snow + baseflow with DREAM (uncertainty bands):
+#      algorithm: DREAM
+#      objectives: [Q, snow, baseflow]
+#      weights: {Q: 0.6, snow: 0.3, baseflow: 0.1}
+#
+# 4. Multi-obj Q + snow with NSGA-II (Pareto):
+#      algorithm: NSGAII
+#      objectives: [Q, snow]
+#      iterations: 10000        # ~200 generations × 50 pop
+#
+# 5. Multi-obj Q + snow + baseflow with PA-DDS:
+#      algorithm: PADDS
+#      objectives: [Q, snow, baseflow]
+#      iterations: 2000

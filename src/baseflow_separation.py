@@ -594,6 +594,11 @@ class BaseflowValidator:
         elif method in ('sliding_min', 'sliding_minimum'):
             obs_bf = self.obs_separator.sliding_minimum()
             sim_bf = self.sim_separator.sliding_minimum()
+        elif method == 'raw_winter':
+            # No filter — Q_winter is taken to be 100% baseflow by mass balance.
+            # Only valid for catchments where winter inputs (rain + melt) ≈ 0.
+            obs_bf = self.Q_obs.copy()
+            sim_bf = self.Q_sim.copy()
         else:
             raise ValueError(f"Unknown separation method '{method}'")
 
@@ -607,11 +612,15 @@ class BaseflowValidator:
 
     #---------------------------------------------------------------------------------
 
-    # Winter months used for metrics — Nov through March in northern hemisphere.
-    # Restricting to winter avoids contamination of the filter by snowmelt and
-    # glacier-melt, both of which produce smooth daily Q signals that filters
-    # misclassify as baseflow (see Stahl et al. 2008, Klaus & McDonnell 2013).
+    # Winter months for filter-based metrics — Nov through March.  Restricting
+    # to winter avoids melt-water being misclassified as baseflow by the filter.
     WINTER_MONTHS = (11, 12, 1, 2, 3)
+
+    # Pure-baseflow window for raw_winter mode — Dec through March.  Skip Nov
+    # to let autumn channel-storage and fast-reservoir residuals fully drain
+    # before assuming Q == baseflow.  For high-altitude truly-frozen catchments
+    # only — assumes no liquid inputs (rain or melt) reach the catchment.
+    RAW_WINTER_MONTHS = (12, 1, 2, 3)
 
     def metrics(
         self,
@@ -626,8 +635,11 @@ class BaseflowValidator:
         avoid melt-water being misclassified as baseflow.
         """
         df = self.aligned(method=method, eckhardt_kwargs=eckhardt_kwargs)
-        # Restrict to winter for the metric aggregation
-        df = df[df.index.month.isin(self.WINTER_MONTHS)]
+        # Restrict to the right winter window. raw_winter uses a tighter
+        # Dec-Mar window to avoid autumn-drainage residuals; the filter-based
+        # methods use the wider Nov-Mar window.
+        win = self.RAW_WINTER_MONTHS if method == 'raw_winter' else self.WINTER_MONTHS
+        df = df[df.index.month.isin(win)]
         o = df['baseflow_obs'].values
         s = df['baseflow_sim'].values
         Q = df['Q_obs'].values
@@ -661,7 +673,8 @@ class BaseflowValidator:
 
         return {
             'sep_method': method,
-            'window':     'winter (Nov-Mar)',
+            'window':     ('winter Dec-Mar (Q ≡ baseflow assumption)'
+                           if method == 'raw_winter' else 'winter Nov-Mar'),
             'n':         int(len(o)),
             'BFI_obs':   bfi_obs,
             'BFI_sim':   bfi_sim,
@@ -697,12 +710,21 @@ class BaseflowValidator:
         # 1. Timeseries: Q + obs baseflow + sim baseflow (winter shaded)
         axes[0, 0].fill_between(df.index, 0, df['Q_obs'],
                                 color='#cccccc', alpha=0.5, label='Q obs')
+        # raw_winter mode: baseflow_obs == Q_obs and sim == Q_sim, so the
+        # filter overlay would just duplicate the Q line — relabel for clarity.
+        if method == 'raw_winter':
+            obs_label = 'Q obs winter (≡ baseflow)'
+            sim_label = 'Q sim winter (≡ baseflow)'
+        else:
+            obs_label = f'Baseflow obs ({method})'
+            sim_label = f'Baseflow sim ({method})'
         axes[0, 0].plot(df.index, df['baseflow_obs'], color='#1f77b4',
-                        linewidth=1.2, label=f'Baseflow obs ({method})')
+                        linewidth=1.2, label=obs_label)
         axes[0, 0].plot(df.index, df['baseflow_sim'], color='#d62728',
-                        linewidth=1.2, label=f'Baseflow sim ({method})')
-        # Shade winter months (where the metrics are computed)
-        winter_mask = pd.Series(df.index.month.isin(self.WINTER_MONTHS), index=df.index)
+                        linewidth=1.2, label=sim_label)
+        # Shade the metric window (Dec-Mar for raw_winter, Nov-Mar otherwise)
+        win = self.RAW_WINTER_MONTHS if method == 'raw_winter' else self.WINTER_MONTHS
+        winter_mask = pd.Series(df.index.month.isin(win), index=df.index)
         # Find contiguous winter runs and shade them
         in_winter = False
         start = None
@@ -726,8 +748,8 @@ class BaseflowValidator:
                            s=3, alpha=0.3, color='#444444')
         mx = max(df['baseflow_obs'].max(), df['baseflow_sim'].max())
         axes[0, 1].plot([0, mx], [0, mx], 'k--', linewidth=0.8, label='1:1')
-        axes[0, 1].set_xlabel(f'Baseflow obs ({method})')
-        axes[0, 1].set_ylabel(f'Baseflow sim ({method})')
+        axes[0, 1].set_xlabel(obs_label.replace(' winter (≡ baseflow)', '') if method == 'raw_winter' else f'Baseflow obs ({method})')
+        axes[0, 1].set_ylabel(sim_label.replace(' winter (≡ baseflow)', '') if method == 'raw_winter' else f'Baseflow sim ({method})')
         axes[0, 1].set_title('Scatter')
         axes[0, 1].legend(fontsize=8)
         axes[0, 1].grid(alpha=0.3)
@@ -741,8 +763,9 @@ class BaseflowValidator:
                         color='#1f77b4', label='obs')
         axes[1, 0].plot(range(1, 13), month_bfi_sim.values, 's-',
                         color='#d62728', label='sim')
-        # Shade winter months in this panel too
-        for wm in self.WINTER_MONTHS:
+        # Shade the metric window in this panel too
+        win_for_shading = self.RAW_WINTER_MONTHS if method == 'raw_winter' else self.WINTER_MONTHS
+        for wm in win_for_shading:
             axes[1, 0].axvspan(wm - 0.5, wm + 0.5, color='#9ecae1', alpha=0.15, zorder=0)
         axes[1, 0].set_xticks(range(1, 13))
         axes[1, 0].set_xticklabels(['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])
@@ -773,7 +796,8 @@ class BaseflowValidator:
         ytable.auto_set_font_size(False)
         ytable.set_fontsize(10)
         ytable.scale(1, 1.4)
-        axes[1, 1].set_title(f'Metrics  ({method}, winter Nov-Mar)')
+        win_label = 'Dec-Mar, Q ≡ baseflow' if method == 'raw_winter' else 'Nov-Mar'
+        axes[1, 1].set_title(f'Metrics  ({method}, {win_label})')
 
         suptitle = f'Baseflow validation — {self.name}' if self.name else 'Baseflow validation'
         fig.suptitle(suptitle, fontsize=13, fontweight='bold')

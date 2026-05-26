@@ -21,6 +21,14 @@ import matplotlib.dates as mdates
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 from paths import get_paths
+import calibration_objectives as co
+from baseflow_separation import load_raven_simulated_Q
+
+
+# Algorithms that support a single (scalar) objective via weighted-sum
+SINGLE_OBJ_ALGORITHMS = {'SCEUA', 'DDS', 'DREAM'}
+# Algorithms that expose a Pareto front (require a list of metric values)
+MULTI_OBJ_ALGORITHMS  = {'NSGAII', 'PADDS'}
 
 class RavenSCEUA(object):
     """SPOTPY setup for SCEUA algorithm with Raven hydrological model"""
@@ -82,9 +90,23 @@ class RavenSCEUA(object):
         self.best_obj = -999  # Initialize with very low value
         self.best_params = None
         
+        # Parse multi-objective configuration (objectives, weights, algorithm,
+        # per-objective sub-config).  Falls back to legacy Q-only mode when
+        # `calibration.objectives` is absent from the namelist.
+        self._setup_objectives()
+
+        # If snow is in the active objectives, make sure SNOW_FRAC BY_HRU is
+        # written for every calibration run, not just the final-best run.
+        if 'snow' in self.objectives:
+            self._inject_snow_output_in_rvi()
+            self._load_hru_info()
+        else:
+            self.hru_areas = {}
+            self.glacier_hrus = set()
+
         # Create parameter objects for the model
         self.params = self._setup_parameters()
-        
+
         # Logging
         print(f"SCEUA optimization setup for Gauge {gauge_id}, Model {model_type}")
         print(f"Loaded {len(self.params)} parameters for {model_type} model")
@@ -128,10 +150,186 @@ class RavenSCEUA(object):
     def _create_results_file(self):
         """Create the results CSV file with headers"""
         param_names = [p.name for p in self.params]
-        headers = param_names + ['objective', 'obj_function', 'timestamp', 'validation_obj']
-        
+        # In multi-objective mode add one column per active objective
+        if self.is_multiobj:
+            obj_cols = [f'obj_{o}' for o in self.objectives]
+            headers = param_names + obj_cols + ['timestamp']
+        else:
+            headers = param_names + ['objective', 'obj_function', 'timestamp', 'validation_obj']
+            # Also add per-objective columns for transparency when using
+            # weighted-sum multi-objective.
+            if len(self.objectives) > 1:
+                headers += [f'obj_{o}' for o in self.objectives]
         pd.DataFrame(columns=headers).to_csv(self.results_file, index=False)
         print(f"Created results file with headers: {self.results_file}")
+
+    # ----------------------------------------------------------------------
+    # Multi-objective configuration
+    # ----------------------------------------------------------------------
+
+    def _setup_objectives(self):
+        """Parse `calibration.objectives` / `calibration.weights` / `calibration.algorithm`
+        from the namelist.  Falls back to legacy Q-only behaviour when those
+        keys are absent.
+
+        Populates:
+            self.objectives    list[str]  subset of {'Q', 'snow', 'baseflow'}
+            self.weights       dict[str, float]
+            self.algorithm     str        SCEUA | DDS | DREAM | NSGAII | PADDS
+            self.is_multiobj   bool
+            self.obj_settings  dict       per-objective sub-config
+        """
+        cal_cfg = (self.namelist or {}).get('calibration', {})
+
+        # Algorithm — default to SCEUA to preserve legacy behaviour
+        self.algorithm = str(cal_cfg.get('algorithm', 'SCEUA')).upper()
+        if self.algorithm not in SINGLE_OBJ_ALGORITHMS | MULTI_OBJ_ALGORITHMS:
+            raise ValueError(
+                f"Unknown calibration.algorithm '{self.algorithm}'. "
+                f"Choose from: {sorted(SINGLE_OBJ_ALGORITHMS | MULTI_OBJ_ALGORITHMS)}"
+            )
+        self.is_multiobj = self.algorithm in MULTI_OBJ_ALGORITHMS
+
+        # Active objectives — default to ['Q']
+        objs = cal_cfg.get('objectives', ['Q'])
+        if isinstance(objs, str):
+            objs = [objs]
+        valid = {'Q', 'snow', 'baseflow'}
+        bad = [o for o in objs if o not in valid]
+        if bad:
+            raise ValueError(
+                f"calibration.objectives must be a subset of {sorted(valid)}; "
+                f"got {bad}"
+            )
+        if 'Q' not in objs:
+            raise ValueError("calibration.objectives must include 'Q'")
+        # Multi-objective algorithms need at least 2 objectives
+        if self.is_multiobj and len(objs) < 2:
+            raise ValueError(
+                f"Algorithm {self.algorithm} requires multiple objectives; "
+                f"got {objs}"
+            )
+        self.objectives = list(objs)
+
+        # Weights — used for weighted-sum single-objective combination.
+        # Default: equal among active objectives; Q gets the larger share.
+        defaults = {'Q': 0.7, 'snow': 0.3, 'baseflow': 0.0}
+        weights_cfg = cal_cfg.get('weights', {})
+        self.weights = {}
+        for o in self.objectives:
+            self.weights[o] = float(weights_cfg.get(o, defaults.get(o, 1.0)))
+        # Renormalise to sum to 1 across active objectives
+        wsum = sum(self.weights.values())
+        if wsum <= 0:
+            raise ValueError(f"calibration.weights sum to {wsum}; need >0")
+        self.weights = {o: w / wsum for o, w in self.weights.items()}
+
+        # Per-objective sub-config
+        self.obj_settings = {}
+        # Q — metric defaults to whatever obj_function was passed in (KGE_WB etc.)
+        q_cfg = cal_cfg.get('Q', {}) or {}
+        self.obj_settings['Q'] = {
+            'metric': q_cfg.get('metric', self.obj_function),
+        }
+        # Override self.obj_function so existing diagnostic path uses the right metric
+        self.obj_function = self.obj_settings['Q']['metric']
+
+        # Snow
+        snow_cfg = cal_cfg.get('snow', {}) or {}
+        display_name = (self.namelist or {}).get('display_name', '')
+        # Strip any '@'/spaces — folder names use the leading word
+        folder_name = display_name.split('@')[0].strip().split()[0] if display_name else ''
+        self.obj_settings['snow'] = {
+            'metric':          snow_cfg.get('metric', 'KGE'),
+            'fsca_csv':        snow_cfg.get('fsca_csv'),  # explicit override
+            'cloud_threshold': float(snow_cfg.get('cloud_threshold', 0.5)),
+            'product':         snow_cfg.get('product', 'MOD10A2'),
+            'display_name':    folder_name,
+        }
+
+        # Baseflow
+        bf_cfg = cal_cfg.get('baseflow', {}) or {}
+        self.obj_settings['baseflow'] = {
+            'metric': bf_cfg.get('metric', 'KGE'),
+            'method': bf_cfg.get('method', 'eckhardt'),
+            'window': bf_cfg.get('window', 'winter'),
+        }
+
+        # Algorithm-specific kwargs
+        self.alg_kwargs = {
+            'ngs':   int(cal_cfg.get('ngs', 8)),         # SCEUA
+            'n_pop': int(cal_cfg.get('n_pop', 50)),      # NSGAII / PADDS
+        }
+
+        print(f"Multi-objective setup:")
+        print(f"  algorithm:  {self.algorithm}")
+        print(f"  objectives: {self.objectives}")
+        if not self.is_multiobj and len(self.objectives) > 1:
+            print(f"  weights:    {self.weights}")
+
+    def _inject_snow_output_in_rvi(self):
+        """Ensure :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU is present in
+        the calibration .rvi so the snow objective can be computed each run.
+        Idempotent — only adds the line if missing."""
+        rvi = self.model_dir / f'{self.gauge_id}_{self.model_type}.rvi'
+        if not rvi.exists():
+            print(f"⚠️ RVI file not found at {rvi}; snow output injection skipped")
+            return
+        text = rvi.read_text()
+        needle = ':CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU'
+        if needle in text:
+            return
+        # Insert after :Routing or at the bottom — safest is just append before
+        # :EndRouting if present, else at EOF.
+        insertion = f"\n# Snow cover fraction for MODIS-based calibration objective\n  {needle}\n"
+        if ':EndHydrologicProcesses' in text:
+            text = text.replace(
+                ':EndHydrologicProcesses',
+                ':EndHydrologicProcesses' + insertion,
+            )
+        else:
+            text = text.rstrip() + insertion + "\n"
+        rvi.write_text(text)
+        print(f"📝 Injected SNOW_FRAC CustomOutput into {rvi.name}")
+
+    def _load_hru_info(self):
+        """Parse the .rvh once to learn each HRU's area (km²) and land-use
+        class.  Populates self.hru_areas and self.glacier_hrus.
+        """
+        rvh = self.model_dir / f'{self.gauge_id}_{self.model_type}.rvh'
+        self.hru_areas = {}
+        self.glacier_hrus = set()
+        if not rvh.exists():
+            print(f"⚠️ RVH not found at {rvh}; snow objective will use uniform HRU weighting")
+            return
+
+        in_block = False
+        for raw in rvh.read_text().splitlines():
+            line = raw.strip()
+            if line.startswith(':HRUs'):
+                in_block = True
+                continue
+            if line.startswith(':EndHRUs'):
+                in_block = False
+                continue
+            if not in_block or not line or line.startswith(':') or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            try:
+                hru_id = int(parts[0])
+                area   = float(parts[1])
+            except ValueError:
+                continue
+            self.hru_areas[hru_id] = area
+            # land-use class is typically column index 5 (0-based) in Raven's
+            # :HRUs block: ID, AREA, ELEV, LAT, LON, BASIN_ID, LAND_USE_CLASS, ...
+            lu = parts[6].upper() if len(parts) > 6 else ''
+            if 'GLACIER' in lu or 'ICE' in lu:
+                self.glacier_hrus.add(hru_id)
+        print(f"📐 Loaded {len(self.hru_areas)} HRUs, "
+              f"{len(self.glacier_hrus)} flagged as glacier")
     
     def _setup_parameters(self):
         """Setup parameters for optimization dynamically based on model type.
@@ -263,9 +461,9 @@ class RavenSCEUA(object):
 
         elif self.model_type == 'SPHY':
             # SPHY derived parameters (per docs/model_structure_decisions.md):
-            #   Sphy_Min_Melt_Factor = 0.4 × MELT_FACTOR   (HBV-Light convention)
-            #   Sphy_Refreeze_Factor = CFR  × MELT_FACTOR  (CFR coupling, Bergstrom 1976)
-            #   Sphy_Time_To_Peak    = 0.5 × TIME_CONC     (HBV MAXBAS/2 convention)
+            #   MIN_MELT_FACTOR = 0.4 × MELT_FACTOR   (HBV-Light convention)
+            #   REFREEZE_FACTOR = CFR  × MELT_FACTOR  (CFR coupling, Bergstrom 1976)
+            #   SPHY_Time_To_Peak = 0.5 × TIME_CONC   (HBV MAXBAS/2 convention)
             if 'Sphy_Melt_Factor' in params_dict:
                 mf = params_dict['Sphy_Melt_Factor']
                 tied_params['Sphy_Min_Melt_Factor'] = 0.4 * mf
@@ -355,30 +553,37 @@ class RavenSCEUA(object):
         return self.model_dir / f'{self.gauge_id}_{self.model_type}'
     
     def _run_model(self, parameters=None):
-        """Run the Raven model with given parameters"""
+        """Run the Raven model with given parameters and compute all active
+        per-objective metric values.
+
+        Returns
+        -------
+        (per_obj, vali_obj) : (dict[str, float], float)
+            per_obj maps each active objective name to its metric value
+            (higher is better).  vali_obj is the Q-objective on the validation
+            period for logging.
+        """
         if parameters is not None:
             self._write_parameters_to_file(parameters)
-        
+
         try:
             # Get model file path
             model_file = self.model_dir / f'{self.gauge_id}_{self.model_type}'
-            
+
             # Run Raven model
             cmd = [str(self.raven_exe), str(model_file), "-o", str(self.output_path)]
-            
+
             process = subprocess.run(
-                cmd, 
-                check=True, 
-                stdout=subprocess.PIPE, 
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
-            
-            # Run diagnostics to get objective function value
+
+            # --- Q objective (always active) — use existing diagnostic class ---
             sys.path.append(str(self.script_dir))
             from diagnostic import ModelDiagnostics
-            
-            # Create diagnostics object
             diagnostics = ModelDiagnostics(
                 gauge_id=self.gauge_id,
                 model_type=self.model_type,
@@ -388,37 +593,113 @@ class RavenSCEUA(object):
                 base_dir=self.main_dir,
                 model_dir=self.model_dir
             )
-            
-            # Get calibration and validation metrics
             metrics = diagnostics.calculate_streamflow_metrics()
-            
-            # Get primary objective function value for calibration period
-            cali_metrics = metrics['calibration']
-            obj_value = cali_metrics[self.obj_function]
-            
-            # Get validation period objective value for logging
-            vali_metrics = metrics['validation']
-            vali_obj = vali_metrics[self.obj_function]
-            
-            # Log both values to the results file
+            q_value  = metrics['calibration'][self.obj_function]
+            vali_obj = metrics['validation'][self.obj_function]
+
+            per_obj = {'Q': q_value}
+
+            # --- Snow objective ---
+            if 'snow' in self.objectives:
+                per_obj['snow'] = self._compute_snow_value()
+
+            # --- Baseflow objective ---
+            if 'baseflow' in self.objectives:
+                per_obj['baseflow'] = self._compute_baseflow_value(diagnostics)
+
+            # --- Logging ---
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             param_names = [p.name for p in self.params]
             results_dict = dict(zip(param_names, parameters))
-            results_dict.update({
-                'objective': obj_value,
-                'obj_function': self.obj_function,
-                'timestamp': timestamp,
-                'validation_obj': vali_obj
-            })
-            
-            # Append to results file
-            pd.DataFrame([results_dict]).to_csv(self.results_file, mode='a', header=False, index=False)
-            
-            return obj_value, vali_obj
-            
+            if self.is_multiobj:
+                results_dict.update({f'obj_{o}': per_obj[o] for o in self.objectives})
+                results_dict['timestamp'] = timestamp
+            else:
+                # Legacy + per-objective transparency columns
+                combined = self._combine_weighted(per_obj)
+                results_dict.update({
+                    'objective': combined,
+                    'obj_function': self.obj_function,
+                    'timestamp': timestamp,
+                    'validation_obj': vali_obj,
+                })
+                if len(self.objectives) > 1:
+                    results_dict.update({f'obj_{o}': per_obj[o] for o in self.objectives})
+
+            pd.DataFrame([results_dict]).to_csv(
+                self.results_file, mode='a', header=False, index=False
+            )
+
+            return per_obj, vali_obj
+
         except Exception as e:
             print(f"Error running model: {e}")
-            return -999, -999  # Return very low objective value on error
+            # Return -999 for each active objective on failure
+            return {o: -999.0 for o in self.objectives}, -999.0
+
+    def _compute_snow_value(self) -> float:
+        """Run the snow objective using the per-iteration Raven output."""
+        s = self.obj_settings['snow']
+        try:
+            fsca_csv = co.resolve_modis_fsca_path(
+                gauge_id=self.gauge_id,
+                display_name=s.get('display_name') or None,
+                explicit_path=s.get('fsca_csv'),
+                product=s.get('product', 'MOD10A2'),
+            )
+            if not Path(fsca_csv).exists():
+                print(f"  ⚠️ MODIS fSCA CSV not found at {fsca_csv}; snow=NaN")
+                return float('nan')
+            return co.snow_objective(
+                obs_fsca_csv=fsca_csv,
+                sim_output_dir=self.output_path,
+                hru_areas=self.hru_areas,
+                glacier_hrus=self.glacier_hrus,
+                metric=s['metric'],
+                cloud_threshold=s['cloud_threshold'],
+                date_range=(None, self.cali_end_date),
+            )
+        except Exception as e:
+            print(f"  ⚠️ Snow objective failed: {e}")
+            return float('nan')
+
+    def _compute_baseflow_value(self, diagnostics) -> float:
+        """Run the baseflow objective on obs vs sim discharge.
+
+        Re-uses the cal-period obs/sim series the diagnostic object already
+        loaded for the Q metric.
+        """
+        s = self.obj_settings['baseflow']
+        try:
+            sf = getattr(diagnostics, 'streamflow_data', None)
+            if not sf or 'calibration' not in sf:
+                return float('nan')
+            obs_Q = sf['calibration']['observations'].astype(float)
+            sim_Q = sf['calibration']['simulations'].astype(float)
+            return co.baseflow_objective(
+                obs_Q=obs_Q,
+                sim_Q=sim_Q,
+                method=s['method'],
+                window=s['window'],
+                metric=s['metric'],
+            )
+        except Exception as e:
+            print(f"  ⚠️ Baseflow objective failed: {e}")
+            return float('nan')
+
+    def _combine_weighted(self, per_obj: dict) -> float:
+        """Combine per-objective metric values via the configured weights.
+
+        NaN in any active objective drops it from the sum and re-normalises
+        the remaining weights, so a transient snow-CSV miss doesn't kill a
+        good Q-only step.
+        """
+        active = [(o, per_obj[o]) for o in self.objectives
+                  if o in per_obj and np.isfinite(per_obj[o])]
+        if not active:
+            return -999.0
+        wsum = sum(self.weights[o] for o, _ in active)
+        return sum(self.weights[o] * v for o, v in active) / wsum
     
     def _apply_constraints(self, params_dict):
         """Apply model-specific parameter constraints"""
@@ -457,57 +738,73 @@ class RavenSCEUA(object):
         return True
     
     def simulation(self, parameters):
-        """Run the model with parameters and return objective function value"""
-        # Convert parameters to dict for constraint checks
+        """Run the model and return per-objective metric values.
+
+        In single-objective mode (SCEUA / DDS / DREAM) the returned list still
+        has one entry per active objective; `objectivefunction` collapses them
+        to a scalar via the configured weights.  In multi-objective mode
+        (NSGAII / PA-DDS) the list is the Pareto-front vector.
+        """
+        # Constraint check
         param_names = [p.name for p in self.params]
         params_dict = dict(zip(param_names, parameters))
-
-        # Apply model-specific constraints
         if not self._apply_constraints(params_dict):
-            return [-9999]
+            return [-9999.0] * len(self.objectives)
 
-        # Run the model and get objective function value
-        obj_value, vali_obj = self._run_model(parameters)
-        
-        # Validate objective value (for KGE, should be <= 1.0)
-        if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
-            if obj_value > 1.0:
-                print(f"Warning: {self.obj_function} value {obj_value:.4f} exceeds theoretical maximum of 1.0.")
-                obj_value = min(obj_value, 1.0)
-        
-        # Track best parameters
-        if obj_value > self.best_obj:
-            self.best_obj = obj_value
-            self.best_params = parameters
-            print(f"New best {self.obj_function}: {obj_value:.4f}")
-    
-        # Return the objective value for SPOTPY
-        return [obj_value]
-    
+        per_obj, vali_obj = self._run_model(parameters)
+
+        # Clip values that exceed theoretical maximum (KGE-style ≤ 1)
+        for o, v in list(per_obj.items()):
+            if v is not None and v > 1.0 and np.isfinite(v):
+                per_obj[o] = min(v, 1.0)
+
+        # Track best (only meaningful for single-objective mode)
+        if not self.is_multiobj:
+            combined = self._combine_weighted(per_obj)
+            if combined > self.best_obj:
+                self.best_obj = combined
+                self.best_params = parameters
+                summary = ", ".join(f"{o}={per_obj.get(o, float('nan')):.3f}"
+                                    for o in self.objectives)
+                print(f"New best combined={combined:.4f}  [{summary}]")
+
+        # Always return a list in the order of self.objectives
+        return [per_obj.get(o, -9999.0) for o in self.objectives]
+
     def evaluation(self):
-        """Dummy evaluation method required by SPOTPY"""
-        return [0]
-    
+        """SPOTPY interface — observations are folded into the per-objective
+        metric computation inside `simulation`, so we return a placeholder."""
+        return [0.0] * len(self.objectives)
+
     def objectivefunction(self, simulation, evaluation):
-        """Return objective function value for SCEUA (which minimizes)"""
-        # Handle the case where simulation is a list
-        if isinstance(simulation, list):
-            obj_value = simulation[0]
-        else:
-            obj_value = simulation
-        
-        # Handle failed runs
-        if obj_value < -900:
-            return 999999  # Large positive value for minimization
-                
-        # For KGE and similar metrics, we need to convert maximization to minimization
-        if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
-            # Return -1 * KGE for minimization (smaller is better)
-            # This way, KGE=1 (perfect) becomes -1 (minimum)
-            return -1 * obj_value
-        # For metrics we want to minimize (RMSE, PBIAS_Cost, etc.), return directly
-        else:
-            return obj_value
+        """Return the value(s) SPOTPY will use to drive the search.
+
+        - Single-objective algorithms (SCEUA/DDS/DREAM): a scalar that they
+          MINIMIZE — we return `-combined` so the maximization of KGE-style
+          metrics becomes minimization.
+        - Multi-objective algorithms (NSGAII/PADDS): a list, one entry per
+          active objective.  Spotpy's Pareto search expects a list to
+          MINIMIZE — so again we return `-value` per entry.
+        """
+        if not isinstance(simulation, (list, tuple)):
+            simulation = [simulation]
+
+        # Detect failed runs (sentinel -9999)
+        if any((v is None) or (v < -900) for v in simulation):
+            if self.is_multiobj:
+                return [999999.0] * len(self.objectives)
+            return 999999.0
+
+        # Build per-objective dict in the active-objective order
+        per_obj = {o: float(v) for o, v in zip(self.objectives, simulation)}
+
+        if self.is_multiobj:
+            # Pareto: invert sign per objective for minimization
+            return [-per_obj[o] for o in self.objectives]
+
+        # Single-objective: weighted sum then invert
+        combined = self._combine_weighted(per_obj)
+        return -combined
     
     def save_best_parameters(self):
         """Save the best parameters to a file"""
@@ -1651,30 +1948,61 @@ if __name__ == "__main__":
         namelist=args.namelist
     )
     
-    # Run SCEUA algorithm
-    print(f"\nStarting SCEUA optimization with {args.ngs} complexes")
-    print(f"Objective function: {args.obj_function}")
-    print(f"Maximum iterations: {args.iterations}")
-    print(f"Model: {args.model_type}")
-    print(f"Number of parameters: {len(optimization.params)}")
-    
-    sampler = spotpy.algorithms.sceua(
-        optimization,
-        dbname=str(optimization.output_path / f"raven_sceua_{args.gauge_id}_{args.model_type}"),
+    # Dispatch to the configured algorithm.  Single-objective algorithms
+    # consume the weighted-sum scalar; multi-objective ones receive the list.
+    algo = optimization.algorithm
+    n_iter = args.iterations
+    dbname_base = str(
+        optimization.output_path
+        / f"raven_{algo.lower()}_{args.gauge_id}_{args.model_type}"
+    )
+
+    print(f"\nStarting {algo} optimization")
+    print(f"Objectives: {optimization.objectives}")
+    if not optimization.is_multiobj and len(optimization.objectives) > 1:
+        print(f"Weights:    {optimization.weights}")
+    print(f"Maximum iterations: {n_iter}")
+    print(f"Model:              {args.model_type}")
+    print(f"Number of params:   {len(optimization.params)}")
+
+    common = dict(
+        dbname=dbname_base,
         dbformat='csv',
         parallel='seq',
-        save_sim=False
+        save_sim=False,
     )
-    
-    sampler.sample(args.iterations, ngs=args.ngs)
-    
-    # Save best parameters
-    optimization.save_best_parameters()
-    
-    # Run final model with best parameters
-    optimization.run_best_parameters()
 
-    # Plot results
-    optimization.plot_results()
-    
+    if algo == 'SCEUA':
+        sampler = spotpy.algorithms.sceua(optimization, **common)
+        sampler.sample(n_iter, ngs=optimization.alg_kwargs['ngs'])
+    elif algo == 'DDS':
+        sampler = spotpy.algorithms.dds(optimization, **common)
+        sampler.sample(n_iter)
+    elif algo == 'DREAM':
+        sampler = spotpy.algorithms.dream(optimization, **common)
+        sampler.sample(n_iter)
+    elif algo == 'NSGAII':
+        # NSGAII expects population size; iterations becomes a generation budget
+        n_pop = optimization.alg_kwargs['n_pop']
+        n_gen = max(1, n_iter // n_pop)
+        sampler = spotpy.algorithms.NSGAII(optimization, **common)
+        sampler.sample(generations=n_gen, n_obj=len(optimization.objectives),
+                       n_pop=n_pop)
+    elif algo == 'PADDS':
+        sampler = spotpy.algorithms.padds(optimization, **common)
+        sampler.sample(n_iter, metric='ones')
+    else:
+        raise ValueError(f"Unsupported algorithm '{algo}'")
+
+    # Save best parameters (single-objective only — Pareto returns a front)
+    if not optimization.is_multiobj:
+        optimization.save_best_parameters()
+        optimization.run_best_parameters()
+        optimization.plot_results()
+    else:
+        print(f"\nPareto front written to {dbname_base}.csv")
+        print("Pick a representative parameter set from the front, then "
+              "re-run with --algorithm SCEUA/DDS or use run_best_parameters() "
+              "after loading the chosen row.")
+
     print("\nOptimization complete!")
