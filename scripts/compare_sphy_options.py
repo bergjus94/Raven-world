@@ -248,14 +248,19 @@ def load_hru_areas(topo_dir: Path) -> Optional[pd.Series]:
 # ── Per-catchment analysis ──────────────────────────────────────────────────
 
 def build_nml(catchment: str, config_key: str, metric: str, env: str) -> dict:
-    """Use the same merge order the pipeline uses, so paths line up."""
-    return load_config(
+    """Use the same merge order the pipeline uses, so paths line up.
+
+    `load_config` returns `(merged_dict, temp_yaml_path)` — we only need the
+    dict for plotting / paths, so drop the temp path.
+    """
+    merged, _tmp_path = load_config(
         catchment=catchment,
         configuration=config_key,
         model=MODEL_TYPE,
         env=env,
         overrides={'_calibration_metric': metric},
     )
+    return merged
 
 
 def analyze_catchment(

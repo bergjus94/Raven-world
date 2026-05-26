@@ -203,7 +203,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         cat_layer = yaml.safe_load(f) or {}
     config_key = args.configuration or 'glogem_subdaily_opt1'
 
-    nml = load_config(
+    # load_config returns (merged_dict, temp_yaml_path) — keep just the dict
+    nml, _tmp = load_config(
         catchment=args.gauge_id, configuration=config_key,
         model='SPHY', env=args.env,
     )
