@@ -43,12 +43,6 @@ sys.path.insert(0, str(ROOT / 'src'))
 from config_merge import load_config  # noqa: E402
 from paths import get_paths  # noqa: E402
 
-DEFAULT_CONFIGS = [
-    'glogem_subdaily_opt1',
-    'glogem_subdaily_opt2',
-    'glogem_subdaily_opt1_shared',
-    'glogem_subdaily_opt2_shared',
-]
 DEFAULT_METRICS = ['KGE', 'KGE_WB']
 MODEL_TYPE = 'SPHY'
 
@@ -57,7 +51,69 @@ CONFIG_COLORS = {
     'glogem_subdaily_opt2':         '#ff7f0e',
     'glogem_subdaily_opt1_shared':  '#2ca02c',
     'glogem_subdaily_opt2_shared':  '#d62728',
+    'glogem_tphipr_opt1':           '#9467bd',
+    'glogem_tphipr_opt2':           '#8c564b',
+    'glogem_tphipr_opt1_shared':    '#e377c2',
+    'glogem_tphipr_opt2_shared':    '#7f7f7f',
 }
+
+FORCING_COLORS = {
+    'ERA5-Land':  '#1f77b4',
+    'TPHiPr':     '#d62728',
+    'MeteoSwiss': '#2ca02c',
+}
+
+
+# ── Config classification ──────────────────────────────────────────────────
+
+def classify_config(config_key: str, region: Optional[str] = None) -> dict:
+    """Split a config key into its three orthogonal axes.
+
+    Returns dict with keys: forcing, perc_option, subsurface.
+      forcing     : 'ERA5-Land' | 'TPHiPr' | 'MeteoSwiss' | 'unknown'
+      perc_option : 'opt1' | 'opt2' | 'unknown'
+      subsurface  : 'shared' | 'per-HRU'
+    """
+    key = config_key.lower()
+    if 'tphipr' in key:
+        forcing = 'TPHiPr'
+    elif region and region.lower() == 'switzerland':
+        # `glogem_subdaily_*` uses MeteoSwiss for Swiss catchments
+        # via the region layer override (see src/config/layers/region/switzerland.yaml)
+        forcing = 'MeteoSwiss'
+    elif 'subdaily' in key:
+        forcing = 'ERA5-Land'
+    else:
+        forcing = 'unknown'
+
+    if '_opt1' in key:
+        perc = 'opt1'
+    elif '_opt2' in key:
+        perc = 'opt2'
+    else:
+        perc = 'unknown'
+
+    subsurface = 'shared' if 'shared' in key else 'per-HRU'
+    return {'forcing': forcing, 'perc_option': perc, 'subsurface': subsurface}
+
+
+def configs_from_namelist(gauge_id: str) -> List[str]:
+    """Read the `configurations:` list from a catchment's SPHY namelist.
+
+    Falls back to the legacy 4-config default if the SPHY namelist isn't
+    present or doesn't list a configurations block.
+    """
+    import yaml
+    nml_path = ROOT / 'namelists' / f'catchment_{gauge_id}_SPHY.yaml'
+    if not nml_path.exists():
+        nml_path = ROOT / 'namelists' / f'catchment_{gauge_id}.yaml'
+    if not nml_path.exists():
+        return ['glogem_subdaily_opt1', 'glogem_subdaily_opt2',
+                'glogem_subdaily_opt1_shared', 'glogem_subdaily_opt2_shared']
+    with open(nml_path) as f:
+        nml = yaml.safe_load(f) or {}
+    cfgs = nml.get('configurations', [])
+    return [c.strip() for c in cfgs if isinstance(c, str)]
 
 
 # ── Metric calculation ──────────────────────────────────────────────────────
@@ -85,28 +141,46 @@ def nse(sim: np.ndarray, obs: np.ndarray) -> float:
     return float(1 - ((sim - obs) ** 2).sum() / denom)
 
 
-def compute_metrics(df: pd.DataFrame, val_start: str, val_end: str) -> dict:
-    """Return KGE / NSE / KGE_winter / KGE_WB on validation window.
+WINTER_MONTHS    = (11, 12, 1, 2, 3)        # baseflow-dominated
+NONWINTER_MONTHS = (4, 5, 6, 7, 8, 9, 10)   # snowmelt + glacier-melt + rainfall
 
-    KGE_WB matches diagnostic.py: 0.5*KGE + 0.5*KGE_winter (Nov-Mar months).
+
+def compute_metrics(df: pd.DataFrame, val_start: str, val_end: str) -> dict:
+    """Return seasonal KGE/NSE breakdown on the validation window.
+
+    Returns
+    -------
+    dict with keys:
+      KGE, NSE             — full-year validation
+      KGE_winter           — Nov–Mar (winter baseflow signal)
+      KGE_nonwinter        — Apr–Oct (peak melt / rainfall season)
+      KGE_WB               — 0.5*KGE + 0.5*KGE_winter (matches diagnostic.py)
+
+    All values are NaN-safe: if a season has <30 valid days, that season's
+    metric is NaN and KGE_WB falls through to NaN too.
     """
     mask = (df['date'] >= val_start) & (df['date'] <= val_end)
     df = df.loc[mask].dropna(subset=['sim_Q', 'obs_Q'])
+    keys = ('KGE', 'NSE', 'KGE_winter', 'KGE_nonwinter', 'KGE_WB')
     if df.empty:
-        return {m: float('nan') for m in ('KGE', 'NSE', 'KGE_winter', 'KGE_WB')}
+        return {m: float('nan') for m in keys}
 
     sim = df['sim_Q'].to_numpy(dtype=float)
     obs = df['obs_Q'].to_numpy(dtype=float)
     k = kge(sim, obs)
     n = nse(sim, obs)
 
-    winter = df['date'].dt.month.isin([11, 12, 1, 2, 3])
-    sim_w = df.loc[winter, 'sim_Q'].to_numpy(dtype=float)
-    obs_w = df.loc[winter, 'obs_Q'].to_numpy(dtype=float)
-    k_w = kge(sim_w, obs_w)
-    k_wb = 0.5 * k + 0.5 * k_w if not math.isnan(k_w) and not math.isnan(k) else float('nan')
+    winter = df['date'].dt.month.isin(WINTER_MONTHS)
+    k_w = kge(df.loc[winter,  'sim_Q'].to_numpy(dtype=float),
+              df.loc[winter,  'obs_Q'].to_numpy(dtype=float))
+    k_nw = kge(df.loc[~winter, 'sim_Q'].to_numpy(dtype=float),
+               df.loc[~winter, 'obs_Q'].to_numpy(dtype=float))
 
-    return {'KGE': k, 'NSE': n, 'KGE_winter': k_w, 'KGE_WB': k_wb}
+    k_wb = (0.5 * k + 0.5 * k_w
+            if not math.isnan(k_w) and not math.isnan(k) else float('nan'))
+
+    return {'KGE': k, 'NSE': n,
+            'KGE_winter': k_w, 'KGE_nonwinter': k_nw, 'KGE_WB': k_wb}
 
 
 # ── File loaders ────────────────────────────────────────────────────────────
@@ -281,33 +355,100 @@ def analyze_catchment(
 # ── Plotting ────────────────────────────────────────────────────────────────
 
 def plot_catchment_performance(perf: pd.DataFrame, out_path: Path) -> None:
-    """Bar plot per catchment: configs on x-axis, KGE/KGE_WB on y, faceted by cali_metric."""
+    """Per catchment: 4-panel bar chart, one panel per eval metric
+    (KGE, KGE_winter, KGE_nonwinter, KGE_WB), bars per config × cali_metric.
+
+    KGE_winter is the baseflow proxy; KGE_nonwinter is the peak-melt-season
+    fit. Plotted side by side so it's easy to see which config does well
+    where.
+    """
     if perf.empty:
         return
+    eval_metrics = ['KGE', 'KGE_winter', 'KGE_nonwinter', 'KGE_WB']
     cali_metrics = sorted(perf['cali_metric'].unique())
-    eval_metrics = ['KGE', 'KGE_WB']
-    fig, axes = plt.subplots(1, len(cali_metrics), figsize=(6 * len(cali_metrics), 4),
-                             sharey=True, squeeze=False)
     configs = sorted(perf['config'].unique())
-    x = np.arange(len(configs))
-    width = 0.35
 
-    for ax, cm in zip(axes[0], cali_metrics):
-        sub = perf[(perf['cali_metric'] == cm) & (perf['eval_metric'].isin(eval_metrics))]
-        for i, em in enumerate(eval_metrics):
-            vals = [sub[(sub['config'] == c) & (sub['eval_metric'] == em)]['value'].mean()
+    fig, axes = plt.subplots(1, len(eval_metrics),
+                             figsize=(4.5 * len(eval_metrics), 4),
+                             sharey=True, squeeze=False)
+    x = np.arange(len(configs))
+    width = 0.8 / max(len(cali_metrics), 1)
+
+    for ax, em in zip(axes[0], eval_metrics):
+        for i, cm in enumerate(cali_metrics):
+            vals = [perf[(perf['config'] == c)
+                         & (perf['cali_metric'] == cm)
+                         & (perf['eval_metric'] == em)]['value'].mean()
                     for c in configs]
-            ax.bar(x + (i - 0.5) * width, vals, width, label=em)
-        ax.set_title(f'calibrated on {cm}')
+            offset = (i - (len(cali_metrics) - 1) / 2) * width
+            ax.bar(x + offset, vals, width, label=f'cal: {cm}')
+        ax.set_title(em)
         ax.set_xticks(x)
-        ax.set_xticklabels([c.replace('glogem_subdaily_', '') for c in configs],
-                           rotation=20, ha='right')
-        ax.set_ylim(0, 1)
+        ax.set_xticklabels([c.replace('glogem_', '') for c in configs],
+                           rotation=25, ha='right', fontsize=8)
+        ax.set_ylim(min(0, *[v for v in ax.containers[0].datavalues if not np.isnan(v)] or [0]), 1)
         ax.axhline(0.5, color='grey', lw=0.5, ls='--')
         ax.grid(axis='y', alpha=0.3)
-        ax.legend()
     axes[0, 0].set_ylabel('Validation score')
-    fig.suptitle(f"{perf['gauge_id'].iloc[0]} — SPHY option performance", y=1.02)
+    axes[0, 0].legend(fontsize=8, loc='lower left')
+    fig.suptitle(f"{perf['gauge_id'].iloc[0]} — SPHY option performance "
+                 f"(seasonal breakdown)", y=1.02)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=130, bbox_inches='tight')
+    plt.close(fig)
+
+
+def plot_forcing_comparison(perf: pd.DataFrame, region: Optional[str],
+                            out_path: Path) -> None:
+    """For catchments with multiple forcings (e.g. Indus: ERA5-Land vs TPHiPr),
+    show paired bars per (catchment, eval_metric, forcing).
+
+    Skips emit if only one forcing source is present.
+    """
+    if perf.empty:
+        return
+    # Classify each row
+    perf = perf.copy()
+    perf['forcing'] = perf['config'].map(
+        lambda c: classify_config(c, region)['forcing']
+    )
+    forcings = sorted(perf['forcing'].unique())
+    if len(forcings) < 2:
+        return  # nothing to compare
+
+    eval_metrics = ['KGE', 'KGE_winter', 'KGE_nonwinter', 'KGE_WB']
+    catchments = sorted(perf['gauge_id'].unique())
+
+    # For each (catchment, eval_metric, forcing), take the MAX score across
+    # the configs sharing that forcing — i.e. "best variant of this forcing".
+    # This isolates the forcing axis from the perc/shared axes.
+    fig, axes = plt.subplots(1, len(eval_metrics),
+                             figsize=(4.5 * len(eval_metrics), 4),
+                             sharey=True, squeeze=False)
+    x = np.arange(len(catchments))
+    width = 0.8 / len(forcings)
+
+    for ax, em in zip(axes[0], eval_metrics):
+        for i, f in enumerate(forcings):
+            vals = []
+            for gid in catchments:
+                sub = perf[(perf['gauge_id'] == gid)
+                           & (perf['eval_metric'] == em)
+                           & (perf['forcing'] == f)]
+                vals.append(sub['value'].max() if not sub.empty else np.nan)
+            offset = (i - (len(forcings) - 1) / 2) * width
+            ax.bar(x + offset, vals, width,
+                   label=f, color=FORCING_COLORS.get(f, None))
+        ax.set_title(em)
+        ax.set_xticks(x)
+        ax.set_xticklabels(catchments, rotation=0)
+        ax.axhline(0.5, color='grey', lw=0.5, ls='--')
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, 1)
+    axes[0, 0].set_ylabel('Best validation score across perc/shared variants')
+    axes[0, 0].legend(fontsize=9, loc='lower left')
+    fig.suptitle('Forcing source comparison — best variant per forcing',
+                 y=1.02)
     fig.tight_layout()
     fig.savefig(out_path, dpi=130, bbox_inches='tight')
     plt.close(fig)
@@ -439,8 +580,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--catchments', nargs='+', default=None,
                     help='Gauge IDs (default: all *_SPHY namelists)')
-    ap.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS,
-                    help=f'Configuration keys (default: {DEFAULT_CONFIGS})')
+    ap.add_argument('--configs', nargs='+', default=None,
+                    help='Configuration keys (default: auto-discover from each '
+                         "catchment's namelist `configurations:` block)")
     ap.add_argument('--metrics', nargs='+', default=DEFAULT_METRICS,
                     help=f'Calibration metrics (default: {DEFAULT_METRICS})')
     ap.add_argument('--env', default=None,
@@ -453,24 +595,49 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if not catchments:
         print('No catchments to analyze.', file=sys.stderr)
         return 1
+
+    # Per-catchment config sets: if --configs given, use that for all; else
+    # auto-discover from each namelist.
+    if args.configs:
+        per_catchment_configs = {gid: args.configs for gid in catchments}
+    else:
+        per_catchment_configs = {gid: configs_from_namelist(gid)
+                                 for gid in catchments}
+
+    all_configs_seen = sorted({c for cfgs in per_catchment_configs.values()
+                               for c in cfgs})
+
     print(f"Catchments: {catchments}")
-    print(f"Configs:    {args.configs}")
+    print(f"Configs (union across catchments): {all_configs_seen}")
     print(f"Metrics:    {args.metrics}")
 
     # Resolve output dir from first catchment's main_dir if not given
     if args.output_dir:
         out_dir = Path(args.output_dir)
     else:
-        first = build_nml(catchments[0], args.configs[0], args.metrics[0], args.env)
+        first_cfg = per_catchment_configs[catchments[0]][0]
+        first = build_nml(catchments[0], first_cfg, args.metrics[0], args.env)
         out_dir = Path(first['main_dir']) / 'cross_catchment_plots' / 'sphy_option_comparison'
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / 'per_catchment').mkdir(exist_ok=True)
-    print(f"Output:     {out_dir}")
+    print(f"Output:     {out_dir}\n")
 
     all_perf, all_regime, all_storage = [], [], []
+    # Track region per catchment for forcing classification
+    catchment_regions: Dict[str, Optional[str]] = {}
+
     for gid in catchments:
-        print(f"\n=== Catchment {gid} ===")
-        res = analyze_catchment(gid, args.configs, args.metrics, args.env)
+        cfgs = per_catchment_configs[gid]
+        print(f"=== Catchment {gid} ({len(cfgs)} configs) ===")
+        res = analyze_catchment(gid, cfgs, args.metrics, args.env)
+
+        # Stash region from the first successfully-built namelist (cheap)
+        try:
+            sample_nml = build_nml(gid, cfgs[0], args.metrics[0], args.env)
+            catchment_regions[gid] = sample_nml.get('region')
+        except Exception:
+            catchment_regions[gid] = None
+
         if not res['performance'].empty:
             all_perf.append(res['performance'])
         if not res['regime'].empty:
@@ -482,6 +649,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if not res['performance'].empty:
             plot_catchment_performance(res['performance'],
                                        out_dir / 'per_catchment' / f'{gid}_performance.png')
+            # Optional forcing comparison per catchment (Indus has both forcings)
+            plot_forcing_comparison(res['performance'],
+                                    catchment_regions[gid],
+                                    out_dir / 'per_catchment' / f'{gid}_forcing.png')
         if not res['regime'].empty:
             plot_catchment_regime(res['regime'],
                                   out_dir / 'per_catchment' / f'{gid}_regime.png')
@@ -494,6 +665,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 2
 
     perf = pd.concat(all_perf, ignore_index=True)
+
+    # Annotate with the three classification axes for downstream slicing
+    perf['region']      = perf['gauge_id'].map(catchment_regions)
+    perf['forcing']     = perf.apply(
+        lambda r: classify_config(r['config'], r['region'])['forcing'], axis=1)
+    perf['perc_option'] = perf['config'].map(
+        lambda c: classify_config(c)['perc_option'])
+    perf['subsurface']  = perf['config'].map(
+        lambda c: classify_config(c)['subsurface'])
+
     perf.to_csv(out_dir / 'performance_long.csv', index=False)
     perf.pivot_table(
         index=['gauge_id', 'config'], columns=['cali_metric', 'eval_metric'],
@@ -501,6 +682,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ).round(3).to_csv(out_dir / 'performance_wide.csv')
     winners_table(perf).to_csv(out_dir / 'winners.csv', index=False)
     plot_cross_catchment_heatmap(perf, out_dir / 'heatmap_validation.png')
+
+    # Cross-catchment forcing comparison if any catchment had ≥2 forcings
+    has_multiple_forcings = (
+        perf.groupby('gauge_id')['forcing'].nunique() >= 2
+    ).any()
+    if has_multiple_forcings:
+        # Restrict to catchments that actually have multiple forcings
+        multi = perf.groupby('gauge_id').filter(lambda g: g['forcing'].nunique() >= 2)
+        plot_forcing_comparison(
+            multi, region=None,
+            out_path=out_dir / 'forcing_comparison.png',
+        )
 
     if all_storage:
         storage = pd.concat(all_storage, ignore_index=True)
@@ -513,12 +706,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         summary.to_csv(out_dir / 'storage_summary.csv', index=False)
 
     print(f"\nDone. Wrote results to {out_dir}")
-    print(' - performance_long.csv   (every catchment×config×cali_metric×eval_metric)')
-    print(' - performance_wide.csv   (pivot for quick scanning)')
-    print(' - winners.csv            (best config per catchment & metric)')
-    print(' - storage_summary.csv    (mean storage + cross-HRU spread per config)')
-    print(' - heatmap_validation.png (KGE / KGE_WB validation grid)')
-    print(' - per_catchment/<gid>_{performance,regime,storage}.png')
+    print(' - performance_long.csv   (per row: catchment × config × cali × eval_metric')
+    print('                           + region / forcing / perc_option / subsurface)')
+    print(' - performance_wide.csv   (pivot, easy to eyeball)')
+    print(' - winners.csv            (best config per catchment × metric pair)')
+    print(' - storage_summary.csv    (mean storage + cross-HRU spread)')
+    print(' - heatmap_validation.png (KGE / KGE_WB grid across catchments)')
+    if has_multiple_forcings:
+        print(' - forcing_comparison.png (ERA5 vs TPHiPr paired bars,')
+        print('                           best-of-perc/shared per forcing)')
+    print(' - per_catchment/<gid>_performance.png   (seasonal KGE breakdown)')
+    print(' - per_catchment/<gid>_forcing.png       (forcing source comparison)')
+    print(' - per_catchment/<gid>_regime.png        (monthly mean Q)')
+    print(' - per_catchment/<gid>_storage.png       (subsurface storage)')
     return 0
 
 
