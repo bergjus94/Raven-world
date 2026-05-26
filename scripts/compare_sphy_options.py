@@ -347,6 +347,18 @@ def analyze_catchment(
                 print(f"  [{gauge_id}/{cfg_key}/{cali_metric}] missing: {output_dir}")
                 continue
 
+            # Skip runs that haven't finished calibrating. Hydrographs.csv gets
+            # overwritten on every SCEUA iteration, so if the final-best run
+            # hasn't fired yet, what we'd be reading is a mid-search snapshot
+            # — not the converged result. spotpy_optimize writes
+            # <gauge>_<model>_VERIFIED_best_params.csv only after the final
+            # best-params re-run completes.
+            verified = output_dir / f"{gauge_id}_{MODEL_TYPE}_VERIFIED_best_params.csv"
+            if not verified.exists():
+                print(f"  [{gauge_id}/{cfg_key}/{cali_metric}] still calibrating "
+                      f"(no VERIFIED_best_params.csv yet); skipping")
+                continue
+
             cali_end = nml.get('cali_end_date')
             end = nml.get('end_date')
             if not cali_end or not end:
