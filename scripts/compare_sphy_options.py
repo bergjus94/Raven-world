@@ -227,17 +227,46 @@ def load_soil_by_hru(output_dir: Path, soil_idx: int) -> Optional[pd.DataFrame]:
     )
     if not matches:
         return None
-    df = pd.read_csv(matches[0], skiprows=1)
-    if 'date' not in df.columns and 'day' in df.columns:
-        df['date'] = pd.to_datetime(df['day'])
-    elif 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'])
+    src = matches[0]
+
+    # Raven BY_HRU CustomOutput format has TWO header rows:
+    #   line 0:  ,HRU:,1,2,3,...,64,           ← HRU IDs live here
+    #   line 1:  time,day,mean,mean,...,mean,  ← aggregation labels (all 'mean')
+    #   line 2+: actual data
+    # Using skiprows=1 would lose the HRU IDs (all data cols become 'mean'),
+    # so parse the HRU IDs out of line 0 manually and skip both header lines.
+    with open(src) as fh:
+        first_line = fh.readline().rstrip('\n')
+    raw_cols = first_line.split(',')
+    # Trim trailing empty field from the trailing comma some Raven outputs have
+    if raw_cols and raw_cols[-1] == '':
+        raw_cols = raw_cols[:-1]
+    # raw_cols layout: ['', 'HRU:', '1', '2', ..., 'N']
+
+    df = pd.read_csv(src, skiprows=2, header=None)
+    # Drop the same trailing-empty column from the data, if present
+    if df.shape[1] == len(raw_cols) + 1 and df.iloc[:, -1].isna().all():
+        df = df.iloc[:, :-1]
+
+    if df.shape[1] != len(raw_cols):
+        # Fallback for older / different layouts: trust the standard header row
+        df = pd.read_csv(src, skiprows=1)
+        if 'day' in df.columns:
+            df = df.rename(columns={'day': 'date'})
+
     else:
+        df.columns = raw_cols
+        # First two cols are time + date; rename them
+        df.rename(columns={raw_cols[0]: 'time', raw_cols[1]: 'date'},
+                  inplace=True)
+
+    if 'date' not in df.columns:
         return None
-    drop = {'time', 'day', 'date', 'hour'}
+    df['date'] = pd.to_datetime(df['date'])
+    drop = {'time', 'day', 'date', 'hour', 'HRU:'}
     hru_cols = [c for c in df.columns if c not in drop]
     out = df.set_index('date')[hru_cols].apply(pd.to_numeric, errors='coerce')
-    # Column names look like "1", "2", ... or "HRU 1", "HRU 2", ... — extract int
+    # Column names are integer HRU IDs as strings ('1', '2', ...) — cast to int
     new_cols = []
     for c in out.columns:
         digits = ''.join(ch for ch in str(c) if ch.isdigit())
@@ -247,14 +276,29 @@ def load_soil_by_hru(output_dir: Path, soil_idx: int) -> Optional[pd.DataFrame]:
 
 
 def load_hru_areas(topo_dir: Path) -> Optional[pd.Series]:
-    """Load HRU_ID → Area_km2 from topo_files/<variant>/HRU_table.csv."""
+    """Load HRU_ID → Area_km2 from topo_files/<variant>/HRU_table.csv.
+
+    Two schemas exist:
+
+    1. Python-side stats CSV (older runs):
+           HRU_ID,Area_km2,...
+
+    2. Raven .rvh-style attribute table (current default):
+           :ATTRIBUTES,AREA,ELEVATION,LATITUDE,...
+           1,15.78,2951.7,...
+
+    Both are accepted. Returns a Series indexed by HRU_ID, values in km².
+    """
     f = topo_dir / 'HRU_table.csv'
     if not f.exists():
         return None
     df = pd.read_csv(f)
-    if 'HRU_ID' not in df.columns or 'Area_km2' not in df.columns:
-        return None
-    return df.set_index('HRU_ID')['Area_km2']
+    if 'HRU_ID' in df.columns and 'Area_km2' in df.columns:
+        return df.set_index('HRU_ID')['Area_km2'].astype(float)
+    if ':ATTRIBUTES' in df.columns and 'AREA' in df.columns:
+        return (df.set_index(':ATTRIBUTES')['AREA']
+                  .rename_axis('HRU_ID').rename('Area_km2').astype(float))
+    return None
 
 
 # ── Per-catchment analysis ──────────────────────────────────────────────────
