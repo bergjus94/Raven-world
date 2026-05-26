@@ -204,15 +204,27 @@ def load_hydrograph(output_dir: Path, gauge_id: str) -> Optional[pd.DataFrame]:
 
 
 def load_soil_by_hru(output_dir: Path, soil_idx: int) -> Optional[pd.DataFrame]:
-    """Load Raven ':CustomOutput DAILY AVERAGE SOIL[N] BY_HRU' CSV.
+    """Load Raven ':CustomOutput DAILY AVERAGE SOIL[N] BY_HRU' CSV (the
+    storage state, not the cumulative fluxes).
 
-    Brackets are literal in the filename, so we glob *.csv and filter by
-    substring (same trick baseflow_separation.py uses).
+    Brackets are literal in the filename so we glob and substring-match.
+    Critically, several files share the SOIL[N]_Daily_Average_ByHRU
+    suffix — we want the *storage* one and must exclude the flux variants:
+
+        2268_SPHY_SOIL[1]_Daily_Average_ByHRU.csv               ← storage  ✓
+        2268_SPHY_FROM_SOIL[1]_Daily_Average_ByHRU.csv          ← cumulative out
+        2268_SPHY_BETWEEN_SOIL[1]_AND_SURFACE_WATER_..._ByHRU   ← cumulative between
+
+    Filtering by substring alone was picking FROM_SOIL alphabetically first.
 
     Returns DataFrame indexed by date, columns = HRU IDs (int), values = mm.
     """
-    needle = f"SOIL[{soil_idx}]_Daily_Average_ByHRU"
-    matches = sorted(p for p in output_dir.glob('*.csv') if needle in p.name)
+    needle = f"_SOIL[{soil_idx}]_Daily_Average_ByHRU"
+    exclude = (f"FROM_SOIL[{soil_idx}]", f"BETWEEN_SOIL[{soil_idx}]")
+    matches = sorted(
+        p for p in output_dir.glob('*.csv')
+        if needle in p.name and not any(x in p.name for x in exclude)
+    )
     if not matches:
         return None
     df = pd.read_csv(matches[0], skiprows=1)
