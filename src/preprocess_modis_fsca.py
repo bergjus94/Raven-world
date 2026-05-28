@@ -386,36 +386,131 @@ def derive_for_catchment(
                       f"deriving without glacier mask.")
 
     if verbose:
-        print(f"Gauge:       {gauge_id}")
-        print(f"Region:      {region}")
+        print(f"Gauge:       {gauge_id}", flush=True)
+        print(f"Region:      {region}", flush=True)
         print(f"Aggregation: {aggregation}"
               + (f"  (band_width={band_width_m} m)"
-                 if aggregation == 'elevation_band' else ''))
-        print(f"NetCDFs:     {len(year_files)} files")
-        print(f"Catchment:   {catchment_shp.name}")
+                 if aggregation == 'elevation_band' else ''), flush=True)
+        print(f"NetCDFs:     {len(year_files)} files", flush=True)
+        print(f"Catchment:   {catchment_shp.name}", flush=True)
         print(f"Glacier:     "
-              f"{glacier_shp.name if glacier_shp else '(no mask)'}")
+              f"{glacier_shp.name if glacier_shp else '(no mask)'}",
+              flush=True)
 
-    # Load + clip
-    da = open_region_dataset(year_files)
-    clipped = clip_to_catchment(da, catchment_shp, glacier_shp)
+    # ── Pre-compute everything that's catchment-shape-dependent ONCE ─────
+    # The previous implementation concatenated the full 26-year region array
+    # before clipping. For Indus that's a (1222, 2334, 4483) lazy structure,
+    # and even with join='override' the concat + downstream clip burned
+    # >15 minutes on Hunza before any aggregation could start. Solution:
+    # stream year-by-year, so every per-step array is catchment-bounded.
 
-    # Aggregate
-    if aggregation == 'basin_mean':
-        df = basin_mean_per_timestep(clipped)
-    else:
-        # Resolve catchment DEM (region DEM is fine; we resample to MODIS grid)
+    import geopandas as gpd
+    import rioxarray  # noqa: F401  (registers .rio)
+
+    catch_gdf = gpd.read_file(catchment_shp).to_crs('EPSG:4326')
+
+    # Union glacier polygons in catchment bbox into one geometry — one clip
+    # per year instead of N (Indus RGI has ~30k glaciers; Hunza bbox has
+    # thousands).  Critical for runtime: rio.clip cost is per-polygon.
+    glacier_geom = None
+    if glacier_shp is not None:
+        try:
+            from shapely.ops import unary_union
+            glacier_gdf = gpd.read_file(glacier_shp).to_crs('EPSG:4326')
+            minx, miny, maxx, maxy = catch_gdf.total_bounds
+            in_bbox = glacier_gdf.cx[minx:maxx, miny:maxy]
+            if len(in_bbox) > 0:
+                glacier_geom = unary_union(in_bbox.geometry.values)
+                if verbose:
+                    print(f"Glacier mask: {len(in_bbox)} polygons unioned",
+                          flush=True)
+        except Exception as e:
+            if verbose:
+                print(f"  ⚠️ Glacier shapefile load failed: {e}; no mask.",
+                      flush=True)
+
+    # Optional DEM resample — done ONCE outside the year loop, on a single
+    # opened year's grid (all years end up clipped onto the same catchment
+    # footprint so this works for both single-tile and multi-tile regions).
+    elevation_clipped = None
+    if aggregation == 'elevation_band':
         dem_path = main_dir / nml.get(
-            'raster_dir',
-            '01_data/topo/catchment_dem/dem_Indus.tif',
+            'raster_dir', '01_data/topo/catchment_dem/dem_Indus.tif',
         )
         if not dem_path.exists():
             raise FileNotFoundError(
                 f"DEM not found at {dem_path}; needed for elevation-band "
                 f"aggregation."
             )
-        elevation = dem_on_modis_grid(dem_path, clipped)
-        df = elevation_band_per_timestep(clipped, elevation, band_width_m)
+        # Use year 0's grid as the reproject target — all years downstream
+        # get clipped onto the same catchment polygon, producing identical
+        # post-clip grids (modulo sub-pixel drift which assign_coords fixes).
+        da0 = xr.open_dataset(year_files[0])['snow_extent']
+        if da0.rio.crs is None:
+            da0 = da0.rio.write_crs('EPSG:4326')
+        # Crop the region grid to the catchment polygon to get the small
+        # post-clip footprint (no glacier mask yet — we want the full
+        # catchment elevation map).
+        da0_clipped = da0.isel(time=0).rio.clip(catch_gdf.geometry, drop=True)
+        elevation_clipped = dem_on_modis_grid(dem_path, da0_clipped)
+        if verbose:
+            print(f"DEM resampled onto catchment grid: "
+                  f"{dict(elevation_clipped.sizes)}", flush=True)
+
+    # ── Per-year streaming aggregation ───────────────────────────────────
+    rows = []
+    ref_x = ref_y = None  # captured from the first year's clipped grid
+    for yi, yf in enumerate(year_files):
+        da_y = xr.open_dataset(yf)['snow_extent']
+        if da_y.rio.crs is None:
+            da_y = da_y.rio.write_crs('EPSG:4326')
+
+        # Catchment clip (drops to bbox + masks outside polygon)
+        clipped_y = da_y.rio.clip(catch_gdf.geometry, drop=True)
+
+        # Align grid to the first year (sub-pixel drift across years)
+        if ref_x is None:
+            ref_x = clipped_y.x.values
+            ref_y = clipped_y.y.values
+        else:
+            if clipped_y.sizes.get('x') == len(ref_x) \
+               and clipped_y.sizes.get('y') == len(ref_y):
+                clipped_y = clipped_y.assign_coords(x=ref_x, y=ref_y)
+            else:
+                clipped_y = clipped_y.reindex(
+                    x=ref_x, y=ref_y, method='nearest', tolerance=1e-3,
+                )
+                clipped_y = clipped_y.assign_coords(x=ref_x, y=ref_y)
+
+        # Apply glacier mask (single unioned polygon)
+        if glacier_geom is not None:
+            clipped_y = clipped_y.rio.clip([glacier_geom], invert=True,
+                                            drop=False)
+
+        # Aggregate this year only
+        if aggregation == 'basin_mean':
+            df_y = basin_mean_per_timestep(clipped_y)
+        else:
+            # Align elevation grid to this year's clipped grid (should match
+            # by construction since both come from the catchment clip).
+            elev_y = elevation_clipped
+            if (elev_y.sizes.get('x') != clipped_y.sizes.get('x')
+                    or elev_y.sizes.get('y') != clipped_y.sizes.get('y')):
+                elev_y = elev_y.reindex(
+                    x=clipped_y.x, y=clipped_y.y,
+                    method='nearest', tolerance=1e-3,
+                )
+            df_y = elevation_band_per_timestep(clipped_y, elev_y,
+                                                band_width_m=band_width_m)
+        rows.append(df_y)
+        if verbose:
+            print(f"  year {yf.stem.split('_')[-1]}: "
+                  f"{len(df_y)} rows  ({dict(clipped_y.sizes)})",
+                  flush=True)
+
+    if not rows:
+        raise RuntimeError(f"No data aggregated for {gauge_id}")
+    df = pd.concat(rows, ignore_index=True)
 
     # Write CSV
     out_dir = main_dir / '01_data' / 'snow' / 'MODIS' / 'basins' / gauge_id
