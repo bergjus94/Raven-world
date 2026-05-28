@@ -33,9 +33,11 @@ models:
 configurations:
   - glogem_subdaily_opt1
 
-_calibration_metric: 'Q_snow_baseflow'   # routes outputs to SPHY_Q_snow_baseflow/
-
 calibration:
+  # See note in catchment_2268_SPHY_Q_snow.yaml — `metrics:` is the
+  # routing/labelling list. 'Q_snow_baseflow' sends outputs to
+  # SPHY_Q_snow_baseflow/ subdir.
+  metrics: ['Q_snow_baseflow']
   iterations: 3000
   ngs: 15
 

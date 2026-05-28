@@ -47,9 +47,13 @@ models:
 configurations:
   - glogem_subdaily_opt1
 
-_calibration_metric: 'Q_snow'    # routes outputs to SPHY_Q_snow/ subdir
-
 calibration:
+  # `metrics:` is a label list the multi-config orchestrator iterates over.
+  # We use ONE entry tagged 'Q_snow' so the output dir becomes
+  # SPHY_Q_snow/ (vs the default SPHY/ for plain KGE). The actual Q
+  # objective is computed as KGE per the Q.metric line below — the
+  # 'Q_snow' tag is purely a routing/labelling string.
+  metrics: ['Q_snow']
   iterations: 3000
   ngs: 15
 
