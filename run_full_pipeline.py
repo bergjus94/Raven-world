@@ -870,9 +870,18 @@ def _run_multi_config(catchment_nml, args):
     # Phase A2: Copy input/template files to non-default metric directories
     # =====================================================================
     # Phase A only creates files in the base model dir (e.g. HBV/).
-    # Non-default metrics (e.g. LogKGE) use a separate dir (HBV_LogKGE/)
-    # that needs the same input and template files.
-    if len(metrics) > 1:
+    # Non-default metrics (e.g. LogKGE, Q_snow, Q_snow_baseflow_pareto) use
+    # a separate dir (HBV_LogKGE/, SPHY_Q_snow/, …) that needs the same
+    # input and template files.
+    #
+    # Run Phase A2 whenever ANY metric is non-default ('KGE' uses the base
+    # dir directly). Previously gated on `len(metrics) > 1`, which
+    # accidentally skipped the copy for single-metric runs like
+    # `metrics: ['Q_snow_baseflow_pareto']` and left those output dirs
+    # missing every template — calibration would then 'finish' in seconds
+    # with every Raven invocation failing silently.
+    needs_phase_a2 = any(m != 'KGE' for m in metrics)
+    if needs_phase_a2:
         # Ensure main_dir is set (may be None if --skip-preprocessing was used)
         if main_dir is None:
             for config in configurations:
