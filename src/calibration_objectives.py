@@ -281,16 +281,69 @@ def load_modis_fsca_bands(
     return df.pivot(index='date', columns='band_m', values='fsca')
 
 
+def _load_raven_by_hru_csv(src: Path) -> pd.DataFrame:
+    """Parse a Raven ``:CustomOutput DAILY AVERAGE <X> BY_HRU`` CSV.
+
+    Three formats observed in the wild:
+
+    A. Title-row prefix:
+           :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU [-]
+           time,date,hour,1,2,3,...
+
+    B. Two-row header (current SPHY/HBV output):
+           ,HRU:,1,2,3,...,N,
+           time,day,mean,mean,...,mean,
+           1,1990-01-01,0.5,...
+
+    C. Plain CSV (test fixtures):
+           time,date,hour,1,2,3,...
+
+    Returns a DataFrame indexed by 'date' (parsed datetime) with one
+    column per HRU (integer-named).
+    """
+    with open(src) as f:
+        line0 = f.readline().rstrip('\n')
+        line1 = f.readline().rstrip('\n')
+
+    # Format B: line 0 has 'HRU:' as its second token. Line 1 is the
+    # aggregation labels (all 'mean'). HRU IDs live in line 0.
+    if 'HRU:' in line0 and ('mean' in line1 or 'day' in line1):
+        raw_cols = line0.split(',')
+        if raw_cols and raw_cols[-1] == '':
+            raw_cols = raw_cols[:-1]
+        df = pd.read_csv(src, skiprows=2, header=None)
+        if df.shape[1] == len(raw_cols) + 1 and df.iloc[:, -1].isna().all():
+            df = df.iloc[:, :-1]
+        df.columns = raw_cols
+        # Position 0 = time index, position 1 = date — name them.
+        df.rename(columns={raw_cols[0]: 'time', raw_cols[1]: 'date'},
+                  inplace=True)
+        df['date'] = pd.to_datetime(df['date'])
+        return df.set_index('date')
+
+    # Format A: line 0 is a Raven directive. Skip it.
+    if line0.lstrip().startswith(':'):
+        df = pd.read_csv(src, skiprows=1)
+        if 'day' in df.columns and 'date' not in df.columns:
+            df = df.rename(columns={'day': 'date'})
+        df['date'] = pd.to_datetime(df['date'])
+        return df.set_index('date')
+
+    # Format C: plain header on line 0.
+    df = pd.read_csv(src)
+    if 'day' in df.columns and 'date' not in df.columns:
+        df = df.rename(columns={'day': 'date'})
+    df['date'] = pd.to_datetime(df['date'])
+    return df.set_index('date')
+
+
 def load_raven_snow_frac(
     output_dir: Union[str, Path],
     hru_areas: Dict[int, float],
     glacier_hrus: Optional[Iterable[int]] = None,
 ) -> pd.Series:
-    """Read Raven `:CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU` and aggregate
-    to basin-mean off-glacier snow cover fraction.
-
-    Raven names the file `<prefix>_SNOW_FRAC_Daily_Average_ByHRU.csv` with
-    columns: 'time', 'date', 'hour', then one column per HRU.
+    """Read Raven SNOW_FRAC BY_HRU and aggregate to basin-mean off-glacier
+    snow cover fraction.
 
     Parameters
     ----------
@@ -307,27 +360,17 @@ def load_raven_snow_frac(
             "Make sure ':CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU' is in "
             "the .rvi during calibration."
         )
-
-    # Raven CustomOutput files prepend a one-line title (":CustomOutput …")
-    # before the actual CSV header. Other writers omit it. Peek line 1 and
-    # skip it iff it's a Raven directive.
-    src = matches[0]
-    with open(src) as f:
-        first = f.readline().lstrip()
-    skip = 1 if first.startswith(':') else 0
-    df = pd.read_csv(src, skiprows=skip)
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.set_index('date')
+    df = _load_raven_by_hru_csv(matches[0])
 
     # HRU columns are integer IDs; drop non-data columns.
-    drop_cols = {'time', 'hour', 'tag'}
+    drop_cols = {'time', 'hour', 'tag', 'HRU:'}
     hru_cols_raw = [c for c in df.columns if c not in drop_cols]
     hru_cols: list = []
     for c in hru_cols_raw:
         try:
             int(c)
             hru_cols.append(c)
-        except ValueError:
+        except (ValueError, TypeError):
             continue
 
     if glacier_hrus is not None:
@@ -366,16 +409,9 @@ def load_raven_snow_frac_per_band(
             "Make sure ':CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU' is in "
             "the .rvi during calibration."
         )
+    df = _load_raven_by_hru_csv(matches[0])
 
-    src = matches[0]
-    with open(src) as f:
-        first = f.readline().lstrip()
-    skip = 1 if first.startswith(':') else 0
-    df = pd.read_csv(src, skiprows=skip)
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.set_index('date')
-
-    drop_cols = {'time', 'hour', 'tag'}
+    drop_cols = {'time', 'hour', 'tag', 'HRU:'}
     glacier_set = {int(h) for h in (glacier_hrus or [])}
 
     # Build per-HRU columns list (integer IDs), excluding glaciers
@@ -385,7 +421,7 @@ def load_raven_snow_frac_per_band(
             continue
         try:
             hid = int(c)
-        except ValueError:
+        except (ValueError, TypeError):
             continue
         if hid in glacier_set or hid not in hru_areas or hid not in hru_elevations:
             continue
