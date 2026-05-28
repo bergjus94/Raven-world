@@ -53,11 +53,32 @@ def discover_year_files(region_dir: Path, product: str,
 
 
 def open_region_dataset(year_files: List[Path]) -> xr.DataArray:
-    """Concatenate per-year MODIS region NetCDFs along time."""
+    """Concatenate per-year MODIS region NetCDFs along time.
+
+    Per-year mosaicking + reproject in build_modis_region.py can produce
+    slightly different (x, y) grids across years for multi-tile regions
+    (e.g. Indus year 2000: 2442×4692 vs years 2001+: 2334×4483, drift of
+    ~30 m vs the 500 m MODIS pixel). xarray's default outer-join concat
+    silently fills the union with NaN and will be a hard error in future
+    versions. Reindex every non-reference year onto a chosen reference
+    grid using nearest-neighbour — the drift is far below pixel resolution
+    so the reindex is effectively lossless.
+    """
     parts = [xr.open_dataset(f)['snow_extent'] for f in year_files]
     if len(parts) == 1:
         return parts[0]
-    return xr.concat(parts, dim='time')
+
+    # Pick the smallest grid as reference (tight bbox, no over-extension).
+    # Fall back to the first part if sizes are identical.
+    ref = min(parts, key=lambda p: p.sizes.get('x', 0) * p.sizes.get('y', 0))
+    aligned = []
+    for p in parts:
+        if p.sizes == ref.sizes and (p.x.equals(ref.x)) and (p.y.equals(ref.y)):
+            aligned.append(p)
+        else:
+            aligned.append(p.reindex_like(ref, method='nearest',
+                                          tolerance=1e-3))
+    return xr.concat(aligned, dim='time', join='override')
 
 
 def clip_to_catchment(
