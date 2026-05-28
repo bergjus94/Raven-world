@@ -1,0 +1,58 @@
+# =============================================================================
+# Catchment 2256 - Rosegbach @ Pontresina — SPHY, Q+snow+baseflow calibration
+# =============================================================================
+# Sibling to catchment_2256_SPHY_Q_snow.yaml — adds explicit winter-baseflow
+# objective on top of the elevation-band snow target. Tests whether the
+# Huang-et-al-style full multi-objective recovers the base-model-selection
+# advantage that opt2 had on this catchment.
+#
+# Output routes to:
+#   model_runs/catchment_2256/configs/glogem_subdaily_opt1/SPHY_Q_snow_baseflow/
+# =============================================================================
+
+catchment: '2256'
+display_name: 'Rosegbach @ Pontresina'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1
+
+calibration:
+  metrics: ['Q_snow_baseflow']
+  iterations: 3000
+  ngs: 15
+
+  objectives: [Q, snow, baseflow]
+  weights:
+    Q:        0.4
+    snow:     0.3
+    baseflow: 0.3
+  Q:
+    metric: KGE
+  snow:
+    metric: RMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+  baseflow:
+    metric: KGE
+    method: eckhardt
+    window: winter
+
+future:
+  enabled: false
