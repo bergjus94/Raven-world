@@ -68,16 +68,24 @@ def open_region_dataset(year_files: List[Path]) -> xr.DataArray:
     if len(parts) == 1:
         return parts[0]
 
-    # Pick the smallest grid as reference (tight bbox, no over-extension).
-    # Fall back to the first part if sizes are identical.
+    # Pick the smallest spatial grid as reference (tight bbox, no
+    # over-extension). Fall back to the first part if all sizes are equal.
     ref = min(parts, key=lambda p: p.sizes.get('x', 0) * p.sizes.get('y', 0))
+    rx, ry = ref.sizes.get('x'), ref.sizes.get('y')
+
     aligned = []
     for p in parts:
-        if p.sizes == ref.sizes and (p.x.equals(ref.x)) and (p.y.equals(ref.y)):
-            aligned.append(p)
+        if p.sizes.get('x') == rx and p.sizes.get('y') == ry:
+            # Same spatial size — coordinate drift is sub-pixel, just
+            # force-align the x/y label arrays (do NOT touch time).
+            aligned.append(p.assign_coords(x=ref.x.values, y=ref.y.values))
         else:
-            aligned.append(p.reindex_like(ref, method='nearest',
-                                          tolerance=1e-3))
+            # Different grid size — reindex spatial dims only, nearest
+            # within 1e-3° (~100 m), well below the 500 m MODIS pixel.
+            # CRITICAL: pass x=, y= explicitly so we don't accidentally
+            # align time and drop every year's actual MODIS dates.
+            aligned.append(p.reindex(x=ref.x, y=ref.y,
+                                     method='nearest', tolerance=1e-3))
     return xr.concat(aligned, dim='time', join='override')
 
 
