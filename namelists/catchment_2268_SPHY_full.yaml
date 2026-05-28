@@ -25,7 +25,6 @@ configurations:
   - glogem_subdaily_opt1
 
 calibration:
-  metrics: [KGE, KGE_WB]
   iterations: 3000
   ngs: 15
 

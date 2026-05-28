@@ -44,10 +44,6 @@ configurations:
   - glogem_subdaily_opt1
 
 calibration:
-  # Legacy `metrics:` kept so the multi-metric runner script (which reads
-  # this field independently of the new `objectives:`) still launches both
-  # the KGE and KGE_WB calibration variants per config.
-  metrics: [KGE, KGE_WB]
   iterations: 3000
   ngs: 15
 
