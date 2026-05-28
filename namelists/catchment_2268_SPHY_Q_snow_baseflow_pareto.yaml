@@ -1,0 +1,75 @@
+# =============================================================================
+# Catchment 2268 — SPHY, Q+snow+baseflow Pareto-front exploration (NSGAII)
+# =============================================================================
+# Sibling to catchment_2268_SPHY_Q_snow_baseflow.yaml — same objectives, but
+# uses NSGAII to explore the full Pareto front rather than committing to
+# fixed weights. Output is a *set* of non-dominated parameter sets, not one.
+#
+# Methodological motivation: Huang et al. 2026 (Pamir SPHY winter baseflow)
+# reported uncertainty ranges rather than a single best-fit point, consistent
+# with a behavioural-ensemble / Pareto approach. Running NSGAII alongside the
+# weighted-sum SCEUA runs lets us cross-check whether the SCEUA point lies
+# on the Pareto front and visualise the cost/benefit trade-offs explicitly.
+#
+# Output routes to SPHY_Q_snow_baseflow_pareto/ subdir.
+#
+# Budget:
+#   iterations:  200  (SMOKE — bumps to ~10000 for a real Pareto front)
+#   n_pop:       20   (SMOKE — bumps to 50 for production)
+#   → n_generations = iterations // n_pop = 10 generations
+# Smoke wall-clock: ~15-20 min on 2268. Production ~12-17 hours.
+# =============================================================================
+
+catchment: '2268'
+display_name: 'Rhone @ Gletsch'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1
+
+calibration:
+  # Route outputs to SPHY_Q_snow_baseflow_pareto/ so this doesn't collide
+  # with the SCEUA variant in SPHY_Q_snow_baseflow/.
+  metrics: ['Q_snow_baseflow_pareto']
+
+  # ── Algorithm: NSGAII (multi-objective Pareto) ────────────────────────
+  algorithm: NSGAII
+  iterations: 200          # SMOKE budget; production ~10000
+  n_pop: 20                # SMOKE pop size; production 50
+  # n_generations = iterations // n_pop = 10 for smoke, 200 for production
+
+  # ── Objectives (identical to SCEUA Q_snow_baseflow variant) ───────────
+  # NSGAII ignores `weights:` — Pareto-front exploration is weight-free.
+  # The same objectives still get computed per iteration and stored as
+  # obj_Q / obj_snow / obj_baseflow in the results CSV; NSGAII uses them
+  # for non-dominated sorting.
+  objectives: [Q, snow, baseflow]
+  Q:
+    metric: KGE
+  snow:
+    metric: RMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+  baseflow:
+    metric: KGE
+    method: eckhardt
+    window: winter
+
+future:
+  enabled: false

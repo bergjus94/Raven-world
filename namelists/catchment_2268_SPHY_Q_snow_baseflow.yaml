@@ -42,11 +42,14 @@ calibration:
   ngs: 15
 
   # Full multi-objective: Q + snow + winter baseflow.
+  # Weights: Q slightly dominant, snow and baseflow equally constrained.
+  # Reflects the paper's focus on baseflow physics — baseflow gets equal
+  # weight to snow rather than the legacy "primary + secondary" hierarchy.
   objectives: [Q, snow, baseflow]
   weights:
-    Q:        0.5
+    Q:        0.4
     snow:     0.3
-    baseflow: 0.2
+    baseflow: 0.3
   Q:
     metric: KGE
   snow:
