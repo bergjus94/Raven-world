@@ -1,0 +1,53 @@
+# =============================================================================
+# Catchment 2161 - Massa @ Blatten bei Naters — SPHY, Q+snow calibration
+# =============================================================================
+# Replicates the 2268 Q+snow setup on a second Swiss catchment as part of
+# Phase 3.2 expansion. Massa is heavily glacierized (Aletsch headwaters)
+# with a wide elevation range — good stress test for the per-elevation-band
+# snow signal.
+#
+# Output routes to:
+#   model_runs/catchment_2161/configs/glogem_subdaily_opt1/SPHY_Q_snow/
+# =============================================================================
+
+catchment: '2161'
+display_name: 'Massa @ Blatten bei Naters'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1
+
+calibration:
+  metrics: ['Q_snow']
+  iterations: 3000
+  ngs: 15
+
+  objectives: [Q, snow]
+  weights:
+    Q:    0.7
+    snow: 0.3
+  Q:
+    metric: KGE
+  snow:
+    metric: RMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+
+future:
+  enabled: false
