@@ -239,6 +239,13 @@ class RavenSCEUA(object):
         display_name = (self.namelist or {}).get('display_name', '')
         # Strip any '@'/spaces — folder names use the leading word
         folder_name = display_name.split('@')[0].strip().split()[0] if display_name else ''
+        # Default diagnostic_log to <output_dir>/snow_sidecar.csv when snow is
+        # active. Cheap (~few MB per run), surfaces silent failures (e.g.
+        # "high KGE but bad bias"). Explicit `diagnostic_log: null` in the
+        # namelist opts out.
+        default_sidecar = str(self.output_path / 'snow_sidecar.csv')
+        diag_log = snow_cfg['diagnostic_log'] if 'diagnostic_log' in snow_cfg \
+                                              else default_sidecar
         self.obj_settings['snow'] = {
             'metric':              snow_cfg.get('metric', 'KGE'),
             'fsca_csv':            snow_cfg.get('fsca_csv'),  # explicit override
@@ -250,7 +257,7 @@ class RavenSCEUA(object):
             'min_pixels_per_band': int(snow_cfg.get('min_pixels_per_band', 30)),
             'band_aggregation':    snow_cfg.get('band_aggregation',
                                                  'area_weighted_mean'),
-            'diagnostic_log':      snow_cfg.get('diagnostic_log'),
+            'diagnostic_log':      diag_log,
         }
 
         # Baseflow
