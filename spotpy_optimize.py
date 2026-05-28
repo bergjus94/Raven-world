@@ -274,20 +274,35 @@ class RavenSCEUA(object):
             print(f"  weights:    {self.weights}")
 
     def _inject_snow_output_in_rvi(self):
-        """Ensure :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU is present in
-        the calibration .rvi so the snow objective can be computed each run.
-        Idempotent — only adds the line if missing."""
+        """Ensure ``:CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU`` is present
+        in the calibration .rvi so the snow objective can read it each iter.
+
+        Writes to the .rvi.tpl TEMPLATE rather than the rendered .rvi —
+        every iteration's _write_parameters_to_file regenerates .rvi from
+        the template, so an edit to .rvi alone would be lost on iteration 1.
+        Falls back to editing .rvi directly if no template exists.
+
+        Idempotent: returns silently if the directive is already present.
+        """
+        tpl = (self.model_dir / 'templates'
+               / f'{self.gauge_id}_{self.model_type}.rvi.tpl')
         rvi = self.model_dir / f'{self.gauge_id}_{self.model_type}.rvi'
-        if not rvi.exists():
-            print(f"⚠️ RVI file not found at {rvi}; snow output injection skipped")
+        # Prefer the template; fall back to the rendered file when there's
+        # no template (rare — only legacy setups that pre-date the
+        # template-driven workflow).
+        target = tpl if tpl.exists() else rvi
+        if not target.exists():
+            print(f"⚠️ Neither .rvi.tpl nor .rvi found at {self.model_dir}; "
+                  f"snow output injection skipped")
             return
-        text = rvi.read_text()
+        text = target.read_text()
         needle = ':CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU'
         if needle in text:
             return
-        # Insert after :Routing or at the bottom — safest is just append before
-        # :EndRouting if present, else at EOF.
-        insertion = f"\n# Snow cover fraction for MODIS-based calibration objective\n  {needle}\n"
+        insertion = (
+            "\n# Snow cover fraction for MODIS-based calibration objective\n"
+            f"  {needle}\n"
+        )
         if ':EndHydrologicProcesses' in text:
             text = text.replace(
                 ':EndHydrologicProcesses',
@@ -295,13 +310,25 @@ class RavenSCEUA(object):
             )
         else:
             text = text.rstrip() + insertion + "\n"
-        rvi.write_text(text)
-        print(f"📝 Injected SNOW_FRAC CustomOutput into {rvi.name}")
+        target.write_text(text)
+        # Also write to the rendered .rvi so Raven uses it immediately —
+        # without this, the snow objective on iteration 0 (which uses the
+        # current .rvi, before _write_parameters_to_file's first regen)
+        # might miss SNOW_FRAC. After iter 1 the regen from .rvi.tpl will
+        # pick it up automatically.
+        if target == tpl and rvi.exists():
+            rvi.write_text(text)
+        print(f"📝 Injected SNOW_FRAC CustomOutput into {target.name}")
 
     def _load_hru_info(self):
         """Parse the .rvh once to learn each HRU's area (km²), elevation (m),
         and land-use class.  Populates self.hru_areas, self.hru_elevations,
         and self.glacier_hrus.
+
+        Raven's :HRUs block is comma-separated (with optional whitespace
+        padding), so we split on commas and strip whitespace per token.
+        Splitting on whitespace alone leaves trailing commas on every
+        numeric token and silently drops every HRU at the int/float cast.
         """
         rvh = self.model_dir / f'{self.gauge_id}_{self.model_type}.rvh'
         self.hru_areas = {}
@@ -322,8 +349,8 @@ class RavenSCEUA(object):
                 continue
             if not in_block or not line or line.startswith(':') or line.startswith('#'):
                 continue
-            parts = line.split()
-            if len(parts) < 6:
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) < 7:
                 continue
             try:
                 hru_id = int(parts[0])
@@ -333,8 +360,8 @@ class RavenSCEUA(object):
                 continue
             self.hru_areas[hru_id] = area
             self.hru_elevations[hru_id] = elev
-            # land-use class is typically column index 5 (0-based) in Raven's
-            # :HRUs block: ID, AREA, ELEV, LAT, LON, BASIN_ID, LAND_USE_CLASS, ...
+            # :Attributes order: ID, AREA, ELEV, LAT, LON, BASIN_ID,
+            # LAND_USE_CLASS, ...  → land use at index 6.
             lu = parts[6].upper() if len(parts) > 6 else ''
             if 'GLACIER' in lu or 'ICE' in lu:
                 self.glacier_hrus.add(hru_id)
