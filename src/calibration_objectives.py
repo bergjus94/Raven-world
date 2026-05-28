@@ -550,32 +550,78 @@ def snow_objective(
 # Baseflow objective
 # ---------------------------------------------------------------------------
 
+def _resolve_window(window) -> tuple:
+    """Convert a window spec to a tuple of month integers.
+
+    Accepted forms:
+      - 'winter'      → (11, 12, 1, 2, 3)
+      - 'raw_winter'  → (12, 1, 2, 3)   (tighter; for filter-free use)
+      - 'all'         → (1, 2, …, 12)
+      - list/tuple of month ints, e.g. [12, 1, 2] for DJF only
+    """
+    if isinstance(window, (list, tuple)) and not isinstance(window, str):
+        months = tuple(int(m) for m in window)
+        if not months:
+            raise ValueError("Custom baseflow window is empty.")
+        bad = [m for m in months if not 1 <= m <= 12]
+        if bad:
+            raise ValueError(
+                f"Custom baseflow window months must be 1-12; got {bad}."
+            )
+        return months
+
+    if window == 'winter':
+        return WINTER_MONTHS
+    if window == 'raw_winter':
+        return (12, 1, 2, 3)
+    if window == 'all':
+        return tuple(range(1, 13))
+
+    raise ValueError(
+        f"Unknown window {window!r}. Use a preset ('winter' | 'raw_winter' | "
+        f"'all') or an explicit list of month integers (e.g. [12, 1, 2])."
+    )
+
+
 def baseflow_objective(
     obs_Q: pd.Series,
     sim_Q: pd.Series,
     method: str = 'eckhardt',
-    window: str = 'winter',
+    window='winter',
     metric: str = 'KGE',
     date_range: Optional[tuple] = None,
     eckhardt_kwargs: Optional[dict] = None,
 ) -> float:
     """KGE between observed and simulated baseflow.
 
-    Both Q series run through the same filter; metric is then computed on
-    the configured window (winter = Nov-Mar default).
+    Both Q series run through the same filter (eckhardt / lyne_hollick /
+    sliding_min) — or, for ``method='raw_winter'``, no filter is applied
+    and the raw Q series is used directly under the mass-balance
+    assumption Q ≈ baseflow during the chosen window.
 
-    method  : 'eckhardt' | 'lyne_hollick' | 'sliding_min' | 'raw_winter'
-              ('raw_winter' assumes Q ≡ baseflow for high-altitude
-               truly-frozen catchments — Dec-Mar window only.)
-    window  : 'winter' (Nov-Mar) | 'all'
+    Parameters
+    ----------
+    method : {'eckhardt', 'lyne_hollick', 'sliding_min', 'raw_winter'}
+    window : str or list of int
+        Months to evaluate the metric on. Presets: 'winter' (Nov-Mar),
+        'raw_winter' (Dec-Mar — tighter; recommended companion for
+        method='raw_winter'), 'all' (12 months). Or an explicit list of
+        month integers, e.g. ``[12, 1, 2]`` for DJF.
+
+        With ``method='raw_winter'`` and ``window='winter'`` (the legacy
+        default), the window is auto-tightened to Dec-Mar to avoid
+        autumn-drainage residuals. Any explicit list of months is taken
+        as-is (the user chose it, so we don't second-guess).
     """
     eck = eckhardt_kwargs or {}
 
     if method == 'raw_winter':
         obs_bf = obs_Q.copy()
         sim_bf = sim_Q.copy()
-        # raw_winter forces a tighter Dec-Mar window
-        window = 'raw_winter'
+        # Auto-tighten only if the user is on the default preset 'winter'.
+        # Explicit windows (list or other preset) are respected as-is.
+        if window == 'winter':
+            window = 'raw_winter'
     else:
         obs_sep = BaseflowSeparator(obs_Q.dropna())
         sim_sep = BaseflowSeparator(sim_Q.dropna())
@@ -592,15 +638,7 @@ def baseflow_objective(
         else:
             raise ValueError(f"Unknown baseflow method '{method}'")
 
-    if window == 'winter':
-        months = WINTER_MONTHS
-    elif window == 'raw_winter':
-        months = (12, 1, 2, 3)
-    elif window == 'all':
-        months = tuple(range(1, 13))
-    else:
-        raise ValueError(f"Unknown window '{window}'")
-
+    months = _resolve_window(window)
     obs_bf = obs_bf[obs_bf.index.month.isin(months)]
     sim_bf = sim_bf[sim_bf.index.month.isin(months)]
 

@@ -158,6 +158,38 @@ class TestBaseflowObjective:
         with pytest.raises(ValueError, match='Unknown baseflow method'):
             co.baseflow_objective(q, q, method='not_a_method')
 
+    def test_custom_window_list(self):
+        """User can pass an explicit month list (e.g. just DJF)."""
+        q = _make_q_series(n=365 * 3, seed=5)
+        v = co.baseflow_objective(q, q, method='eckhardt',
+                                   window=[12, 1, 2], metric='KGE')
+        assert v == pytest.approx(1.0, abs=1e-3)
+
+    def test_custom_window_raw_winter(self):
+        """Custom window with raw_winter method — separator skipped, user's
+        months respected (no auto-tighten to Dec-Mar)."""
+        q = _make_q_series(n=365 * 2, seed=6)
+        # JF only (extreme winter), with raw Q. The user-explicit window
+        # should NOT be replaced by the default 'raw_winter' (Dec-Mar).
+        v = co.baseflow_objective(q, q, method='raw_winter',
+                                   window=[1, 2], metric='KGE')
+        assert v == pytest.approx(1.0, abs=1e-6)
+
+    def test_invalid_window_month_raises(self):
+        q = _make_q_series(n=400, seed=7)
+        with pytest.raises(ValueError, match='1-12'):
+            co.baseflow_objective(q, q, window=[0, 13])
+
+    def test_empty_window_raises(self):
+        q = _make_q_series(n=400, seed=8)
+        with pytest.raises(ValueError, match='empty'):
+            co.baseflow_objective(q, q, window=[])
+
+    def test_unknown_window_string_raises(self):
+        q = _make_q_series(n=400, seed=9)
+        with pytest.raises(ValueError, match='Unknown window'):
+            co.baseflow_objective(q, q, window='lustige_jahreszeit')
+
 
 # ───────────────────────── MODIS fSCA loader ─────────────────────────
 

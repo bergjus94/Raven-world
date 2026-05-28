@@ -49,9 +49,13 @@ calibration:
   baseflow:
     metric: KGE
     method: eckhardt           # standard digital filter (Eckhardt 2005)
-    window: winter             # Nov-Mar — keeps melt out of the baseflow
-                               # signal, matching the existing
-                               # baseflow_separation.py convention.
+    window: winter             # 'winter' preset = Nov-Mar. Alternatives:
+                               #   'raw_winter' (Dec-Mar, tighter)
+                               #   'all' (12 months — drops the seasonal gate)
+                               #   [12, 1, 2] (any explicit month list)
+                               # Nov-Mar is the standard for Swiss alpine
+                               # — keeps melt-water out of the baseflow
+                               # signal (Stahl 2008, Klaus & McDonnell 2013).
 
 future:
   enabled: false

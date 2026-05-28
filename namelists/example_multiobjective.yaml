@@ -89,7 +89,13 @@ calibration:
   baseflow:
     metric: KGE
     method: eckhardt            # eckhardt | lyne_hollick | sliding_min | raw_winter
-    window: winter              # winter (Nov-Mar) | all
+    window: winter              # preset: 'winter' (Nov-Mar) | 'raw_winter'
+                                # (Dec-Mar) | 'all' (12 months)
+                                # OR explicit month list, e.g. [12, 1, 2]
+                                # for DJF only, [10, 11, 12, 1, 2] for
+                                # ONDJF, etc. — useful when the local
+                                # snow regime makes a specific window
+                                # more diagnostic than the Nov-Mar default.
 
 future:
   enabled: false
