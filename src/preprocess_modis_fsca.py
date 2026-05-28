@@ -512,6 +512,20 @@ def derive_for_catchment(
         raise RuntimeError(f"No data aggregated for {gauge_id}")
     df = pd.concat(rows, ignore_index=True)
 
+    # Year-boundary dedup. MODIS Terra 8-day composites can have the last
+    # date of one calendar year (e.g. 2000-12-26 = DOY 361) re-appear in
+    # the next year's NetCDF granule list — build_modis_region uses a
+    # year-overlapping CMR search to make sure boundary dates aren't lost,
+    # but the duplicate then makes load_modis_fsca_bands' df.pivot() fail
+    # with "Index contains duplicate entries, cannot reshape" and silently
+    # kills the snow objective every iteration. Drop duplicates here.
+    dup_key = ['date', 'band_m'] if aggregation == 'elevation_band' else ['date']
+    before = len(df)
+    df = df.drop_duplicates(subset=dup_key, keep='first').reset_index(drop=True)
+    if verbose and before != len(df):
+        print(f"Dedup: dropped {before - len(df)} duplicate rows at year "
+              f"boundaries (kept first occurrence).", flush=True)
+
     # Write CSV
     out_dir = main_dir / '01_data' / 'snow' / 'MODIS' / 'basins' / gauge_id
     out_dir.mkdir(parents=True, exist_ok=True)

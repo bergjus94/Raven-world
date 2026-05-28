@@ -1535,7 +1535,20 @@ class RavenSCEUA(object):
 
             # Run with no args so _run_model skips _write_parameters_to_file
             obj_value, vali_obj = self._run_model()
-            
+
+            # In multi-objective mode _run_model returns the per-objective
+            # dict, not the legacy single float. Collapse via the same
+            # weighted-sum used by the calibration loop so the rest of this
+            # function (which expects a scalar) works unchanged, and the
+            # per-obj breakdown still gets logged.
+            if isinstance(obj_value, dict):
+                per_obj = obj_value
+                obj_value = self._combine_weighted(per_obj)
+                print(f"Final run per-objective values:")
+                for o in self.objectives:
+                    v = per_obj.get(o, float('nan'))
+                    print(f"  {o:8s}: {v:.4f}")
+
             print(f"Final run with best parameters:")
             print(f"  Calibration {self.obj_function}: {obj_value:.4f}")
             print(f"  Validation {self.obj_function}: {vali_obj:.4f}")

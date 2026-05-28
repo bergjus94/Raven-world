@@ -262,6 +262,22 @@ def load_modis_fsca_bands(
     df['fsca'] = df['fsca'].where(df['n_valid'] >= min_pixels_per_band,
                                    other=np.nan)
     df['band_m'] = df['band_m'].astype(int)
+
+    # Defend against year-boundary duplicates that would otherwise produce
+    # a cryptic "Index contains duplicate entries, cannot reshape" from
+    # df.pivot. preprocess_modis_fsca.derive_for_catchment already dedupes
+    # at write time; this is a backstop for stale CSVs from old runs.
+    if df.duplicated(subset=['date', 'band_m']).any():
+        dup_n = int(df.duplicated(subset=['date', 'band_m']).sum())
+        df = df.drop_duplicates(subset=['date', 'band_m'], keep='first')
+        # Loud warning so the user knows to re-derive when convenient.
+        import warnings
+        warnings.warn(
+            f"{csv_path}: {dup_n} duplicate (date, band_m) rows dropped "
+            f"during load (kept first). Re-run derive_basin_fsca.py to "
+            f"refresh the CSV.", stacklevel=2,
+        )
+
     return df.pivot(index='date', columns='band_m', values='fsca')
 
 
