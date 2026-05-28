@@ -1,11 +1,16 @@
 # =============================================================================
-# Catchment 2268 - Rhone @ Gletsch (Switzerland) — SPHY model_type test
+# Catchment 2268 - Rhone @ Gletsch — SPHY production (cell C: Q + snow)
 # =============================================================================
-# Server production run testing the SPHY model_type on a Swiss alpine
-# catchment with MeteoSwiss forcing (via region: switzerland). Two-axis
-# matrix: {opt1 HBV-Light, opt2 SPHY-faithful} percolation. No TPHiPr —
-# Swiss catchments use MeteoSwiss precip from the region layer override.
-# Companion to namelists/catchment_2268.yaml (HBV runs).
+# Production calibration after the base-model selection (see
+# cross_catchment_plots/sphy_option_comparison/ for the 4-config sweep that
+# led to choosing opt1 + per-HRU). Multi-objective with elevation-band MODIS
+# fSCA as the second target.
+#
+# Companion namelists for the experimental matrix:
+#   catchment_2268_SPHY.yaml             ← this file (cell C: Q + snow)
+#   catchment_2268_SPHY_full.yaml        ← cell E (Q + snow + baseflow)
+# Baseline (cell A: Q only) is archived in model_runs_finding_base_model/
+# from the base-model selection runs.
 # =============================================================================
 
 catchment: '2268'
@@ -29,18 +34,24 @@ precip_correction: true
 models:
   - SPHY
 
+# Locked to opt1 (HBV-Light, per-HRU) per the base-model selection. The
+# 4-config sweep showed opt2 had a 0.04-0.07 KGE_WB edge on most catchments
+# but within calibration noise (Schaefli & Gupta 2007), and KGE_winter
+# actually favours opt1 — parsimony argument (Beven 2006) selects opt1.
+# `_shared` variants dropped: per-HRU storage won 7/8 catchments in the
+# sweep, with sound physical reasoning (downslope-dominated alpine drainage).
 configurations:
-  - glogem_subdaily_opt1          # MeteoSwiss (via region) + perc opt 1 (HBV-Light)
-  - glogem_subdaily_opt2          # MeteoSwiss (via region) + perc opt 2 (SPHY-faithful)
-  - glogem_subdaily_opt1_shared   # opt 1 + shared subsurface (HBV-EC-style)
-  - glogem_subdaily_opt2_shared   # opt 2 + shared subsurface
+  - glogem_subdaily_opt1
 
 calibration:
+  # Legacy `metrics:` kept so the multi-metric runner script (which reads
+  # this field independently of the new `objectives:`) still launches both
+  # the KGE and KGE_WB calibration variants per config.
   metrics: [KGE, KGE_WB]
   iterations: 3000
   ngs: 15
 
-  # ── Multi-objective: enable snow as a second calibration target ──────
+  # ── Multi-objective: cell C of the experimental matrix ───────────────
   # Triggers MODIS fSCA derivation in STEP 5d of create_input_files (gated
   # on `'snow' in objectives`). Reads the region NetCDF for Switzerland,
   # clips to this catchment, masks RGI glaciers, aggregates per 100 m band.
@@ -50,12 +61,24 @@ calibration:
     Q:    0.7
     snow: 0.3
   Q:
-    metric: KGE_WB              # baseflow-weighted, matches what `metrics:` lists
+    metric: KGE                 # plain KGE; KGE_WB redundant with explicit
+                                # baseflow objective if we ever add one.
   snow:
-    metric: RMSE                # bounded [0, 1] for fSCA — Tahir 2011 style
-    aggregation: elevation_band # vs. basin_mean
-    band_width_m: 100           # matches HRU elevation discretization
-    min_pixels_per_band: 5      # small Swiss catchment → loosen the default 30
+    metric: RMSE                # bounded [0, 1] for fSCA — Tahir 2011 style.
+                                # KGE on fSCA is unstable for tail bands
+                                # (near-zero variance) — RMSE behaves well.
+    aggregation: elevation_band # Finger 2015 WRR — distributed by elevation
+                                # band beats basin-mean for alpine catchments
+                                # because it identifies the snowline elevation
+                                # directly. Defensible in a methods section.
+    band_width_m: 100           # Matches the HRU elevation discretization
+                                # (criteria: [elevation, landuse] with
+                                #  elevation_distance: 100). One HRU per
+                                # band per landuse class → clean sim
+                                # aggregation per band.
+    min_pixels_per_band: 5      # Small Swiss catchment (~30 km², ~330
+                                # MODIS pixels post-clip) → loosen the
+                                # default 30. For Indus catchments use 30.
     band_aggregation: area_weighted_mean
     cloud_threshold: 0.5
 

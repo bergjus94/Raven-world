@@ -1,0 +1,58 @@
+# =============================================================================
+# Catchment 2268 — cell E of the multi-objective experiment matrix
+# (Q + snow + baseflow). Sibling to catchment_2268_SPHY.yaml (cell C: Q + snow).
+# Identical setup, with one extra objective.
+# =============================================================================
+
+catchment: '2268'
+display_name: 'Rhone @ Gletsch'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1
+
+calibration:
+  metrics: [KGE, KGE_WB]
+  iterations: 3000
+  ngs: 15
+
+  # Cell E: full multi-objective. Adds explicit winter-baseflow target on
+  # top of the elevation-band snow target. Tests whether snow constraint
+  # alone already captures baseflow, or whether the separate baseflow
+  # objective adds independent signal.
+  objectives: [Q, snow, baseflow]
+  weights:
+    Q:        0.5
+    snow:     0.3
+    baseflow: 0.2
+  Q:
+    metric: KGE
+  snow:
+    metric: RMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+  baseflow:
+    metric: KGE
+    method: eckhardt           # standard digital filter (Eckhardt 2005)
+    window: winter             # Nov-Mar — keeps melt out of the baseflow
+                               # signal, matching the existing
+                               # baseflow_separation.py convention.
+
+future:
+  enabled: false
