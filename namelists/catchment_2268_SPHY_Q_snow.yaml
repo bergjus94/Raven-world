@@ -1,16 +1,20 @@
 # =============================================================================
-# Catchment 2268 - Rhone @ Gletsch — SPHY production (cell C: Q + snow)
+# Catchment 2268 - Rhone @ Gletsch — SPHY, Q+snow calibration
 # =============================================================================
 # Production calibration after the base-model selection (see
 # cross_catchment_plots/sphy_option_comparison/ for the 4-config sweep that
 # led to choosing opt1 + per-HRU). Multi-objective with elevation-band MODIS
 # fSCA as the second target.
 #
-# Companion namelists for the experimental matrix:
-#   catchment_2268_SPHY.yaml             ← this file (cell C: Q + snow)
-#   catchment_2268_SPHY_full.yaml        ← cell E (Q + snow + baseflow)
-# Baseline (cell A: Q only) is archived in model_runs_finding_base_model/
-# from the base-model selection runs.
+# Experimental matrix for catchment 2268:
+#   catchment_2268_SPHY_Q_snow.yaml             ← this file (Q + snow)
+#   catchment_2268_SPHY_Q_snow_baseflow.yaml    ← Q + snow + winter baseflow
+# Baseline (Q-only) is archived in model_runs_finding_base_model/ from the
+# base-model selection runs.
+#
+# `_calibration_metric: Q_snow` routes outputs to
+#   model_runs/catchment_2268/configs/glogem_subdaily_opt1/SPHY_Q_snow/
+# so this and the Q+snow+baseflow variant don't collide on disk.
 # =============================================================================
 
 catchment: '2268'
@@ -43,11 +47,13 @@ models:
 configurations:
   - glogem_subdaily_opt1
 
+_calibration_metric: 'Q_snow'    # routes outputs to SPHY_Q_snow/ subdir
+
 calibration:
   iterations: 3000
   ngs: 15
 
-  # ── Multi-objective: cell C of the experimental matrix ───────────────
+  # Multi-objective: Q + snow (elevation-band MODIS fSCA).
   # Triggers MODIS fSCA derivation in STEP 5d of create_input_files (gated
   # on `'snow' in objectives`). Reads the region NetCDF for Switzerland,
   # clips to this catchment, masks RGI glaciers, aggregates per 100 m band.

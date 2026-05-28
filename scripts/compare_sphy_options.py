@@ -349,14 +349,21 @@ def analyze_catchment(
 
             # Skip runs that haven't finished calibrating. Hydrographs.csv gets
             # overwritten on every SCEUA iteration, so if the final-best run
-            # hasn't fired yet, what we'd be reading is a mid-search snapshot
-            # — not the converged result. spotpy_optimize writes
-            # <gauge>_<model>_VERIFIED_best_params.csv only after the final
-            # best-params re-run completes.
+            # hasn't fired yet, what we'd be reading is a mid-search snapshot.
+            #
+            # Two completion markers, either is sufficient:
+            #   1. VERIFIED_best_params.csv — spotpy's clean exit marker
+            #   2. AET_Daily_Average_ByHRU.csv — only written by Raven when the
+            #      .rvi has the extended-output directives, which spotpy injects
+            #      ONLY for the final-best re-run. So if AET ByHRU exists,
+            #      Raven did run with the best params and produced the
+            #      validation Hydrographs.csv we want to read — even if
+            #      spotpy died before writing its own completion marker.
             verified = output_dir / f"{gauge_id}_{MODEL_TYPE}_VERIFIED_best_params.csv"
-            if not verified.exists():
+            aet_byhru = output_dir / f"{gauge_id}_{MODEL_TYPE}_AET_Daily_Average_ByHRU.csv"
+            if not verified.exists() and not aet_byhru.exists():
                 print(f"  [{gauge_id}/{cfg_key}/{cali_metric}] still calibrating "
-                      f"(no VERIFIED_best_params.csv yet); skipping")
+                      f"(no VERIFIED nor AET ByHRU); skipping")
                 continue
 
             cali_end = nml.get('cali_end_date')
@@ -663,9 +670,20 @@ def winners_table(perf: pd.DataFrame) -> pd.DataFrame:
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 def discover_sphy_catchments() -> list[str]:
-    """Find all SPHY-bearing catchment configs (those with _SPHY namelist)."""
-    nlists = sorted(ROOT.glob('namelists/catchment_*_SPHY.yaml'))
-    return [p.stem.split('_')[1] for p in nlists]
+    """Find all SPHY-bearing catchment configs.
+
+    A catchment may have several SPHY namelists (one per objective variant,
+    e.g. catchment_2268_SPHY_Q_snow.yaml + catchment_2268_SPHY_Q_snow_baseflow.yaml).
+    Deduplicate by gauge ID so the comparison only processes each catchment
+    once — it's keyed on output dirs, not on which objective combo was used.
+    """
+    nlists = sorted(ROOT.glob('namelists/catchment_*_SPHY*.yaml'))
+    seen = []
+    for p in nlists:
+        gid = p.stem.split('_')[1]
+        if gid not in seen:
+            seen.append(gid)
+    return seen
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:

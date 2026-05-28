@@ -1,7 +1,16 @@
 # =============================================================================
-# Catchment 2268 — cell E of the multi-objective experiment matrix
-# (Q + snow + baseflow). Sibling to catchment_2268_SPHY.yaml (cell C: Q + snow).
-# Identical setup, with one extra objective.
+# Catchment 2268 — SPHY, Q+snow+baseflow calibration (full multi-objective)
+# =============================================================================
+# Sibling to catchment_2268_SPHY_Q_snow.yaml. Identical setup, adds an
+# explicit winter-baseflow target on top of the elevation-band snow target.
+#
+# Tests whether the snow constraint alone already captures baseflow, or
+# whether a separate baseflow objective (Huang et al. 2026 style) adds
+# independent signal.
+#
+# `_calibration_metric: Q_snow_baseflow` routes outputs to
+#   model_runs/catchment_2268/configs/glogem_subdaily_opt1/SPHY_Q_snow_baseflow/
+# so this and the Q+snow variant don't collide on disk.
 # =============================================================================
 
 catchment: '2268'
@@ -24,14 +33,13 @@ models:
 configurations:
   - glogem_subdaily_opt1
 
+_calibration_metric: 'Q_snow_baseflow'   # routes outputs to SPHY_Q_snow_baseflow/
+
 calibration:
   iterations: 3000
   ngs: 15
 
-  # Cell E: full multi-objective. Adds explicit winter-baseflow target on
-  # top of the elevation-band snow target. Tests whether snow constraint
-  # alone already captures baseflow, or whether the separate baseflow
-  # objective adds independent signal.
+  # Full multi-objective: Q + snow + winter baseflow.
   objectives: [Q, snow, baseflow]
   weights:
     Q:        0.5
