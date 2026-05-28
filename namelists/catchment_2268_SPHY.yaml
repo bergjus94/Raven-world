@@ -40,5 +40,24 @@ calibration:
   iterations: 3000
   ngs: 15
 
+  # ── Multi-objective: enable snow as a second calibration target ──────
+  # Triggers MODIS fSCA derivation in STEP 5d of create_input_files (gated
+  # on `'snow' in objectives`). Reads the region NetCDF for Switzerland,
+  # clips to this catchment, masks RGI glaciers, aggregates per 100 m band.
+  # Empirically validated: ~10 s preprocessing on 2268.
+  objectives: [Q, snow]
+  weights:
+    Q:    0.7
+    snow: 0.3
+  Q:
+    metric: KGE_WB              # baseflow-weighted, matches what `metrics:` lists
+  snow:
+    metric: RMSE                # bounded [0, 1] for fSCA — Tahir 2011 style
+    aggregation: elevation_band # vs. basin_mean
+    band_width_m: 100           # matches HRU elevation discretization
+    min_pixels_per_band: 5      # small Swiss catchment → loosen the default 30
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+
 future:
   enabled: false
