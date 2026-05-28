@@ -434,11 +434,21 @@ def plot_baseflow(hydro: pd.DataFrame, method: str, window,
 
 def run_for_config(nml: dict, config: str, metric: str, env: Optional[str]) -> None:
     from preprocess_modis_fsca import resolve_region  # noqa
-    # Merge once so paths come out resolved
+    # Compose overrides from the orchestrator namelist (the file the user
+    # actually runs run_full_pipeline against). Mirrors what
+    # run_full_pipeline._run_multi_config does so the merged config sees
+    # the user's calibration.objectives / weights / per-objective blocks.
+    overrides = {'_calibration_metric': metric}
+    for key in ('start_date', 'end_date', 'cali_end_date', 'warm_up_date',
+                'display_name', 'gauge_id', 'warmup', 'precip_correction'):
+        if key in nml:
+            overrides[key] = nml[key]
+    if 'calibration' in nml:
+        overrides['calibration'] = nml['calibration']
     merged, _tmp = load_config(
         catchment=nml['catchment'], configuration=config,
         model=nml.get('models', ['HBV'])[0], env=env,
-        overrides={'_calibration_metric': metric},
+        overrides=overrides,
     )
     paths = get_paths(merged)
     output_dir = paths['output_dir']
@@ -484,9 +494,8 @@ def run_for_config(nml: dict, config: str, metric: str, env: Optional[str]) -> N
         product = snow_cfg.get('product', 'MOD10A2')
         obs_fsca = (main_dir / '01_data' / 'snow' / 'MODIS'
                     / 'basins' / gauge_id / f'fsca_{product}_{gauge_id}.csv')
-        # HRU areas + elevations from the .rvh (same logic as
-        # spotpy_optimize._load_hru_info)
-        from spotpy_optimize import RavenSCEUA  # noqa  (just for the parser)
+        # HRU areas + elevations from the .rvh — use the comma-aware parser
+        # defined below (mirrors spotpy_optimize._load_hru_info).
         rvh = paths['model_dir'] / f'{gauge_id}_{model}.rvh'
         hru_areas, hru_elev, glacier_hrus = _parse_rvh_hrus(rvh)
 
