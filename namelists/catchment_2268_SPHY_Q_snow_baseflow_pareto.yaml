@@ -47,9 +47,10 @@ calibration:
 
   # ── Algorithm: NSGAII (multi-objective Pareto) ────────────────────────
   algorithm: NSGAII
-  iterations: 200          # SMOKE budget; production ~10000
-  n_pop: 20                # SMOKE pop size; production 50
-  # n_generations = iterations // n_pop = 10 for smoke, 200 for production
+  iterations: 10000        # production budget (was 200 for smoke)
+  n_pop: 50                # production pop size (was 20 for smoke)
+  # n_generations = iterations // n_pop = 200 generations
+  # ETA ~14-17h wall clock on 2268.
 
   # ── Objectives (identical to SCEUA Q_snow_baseflow variant) ───────────
   # NSGAII ignores `weights:` — Pareto-front exploration is weight-free.
