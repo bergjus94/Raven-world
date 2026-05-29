@@ -1,0 +1,29 @@
+# Paper 5 — Structure S2 (HBV-linear architecture + glacier→GW connectivity)
+#
+# Identical to glogem_subdaily_opt1 (S1 baseline) except glacier_routing is set to
+# 'split_to_slow'. The :Split process (preprocess_SPHY.py line ~1566) inserts before
+# :Infiltration on MASKED_GLACIER HRUs and partitions glacier meltwater as
+# GlacROF·SURFACE_WATER + (1-GlacROF)·SLOW_RESERVOIR.
+#
+# This is the cleanest single-axis change in the Paper 5 design — same percolation
+# (single PERC_CONSTANT FAST→SLOW), same linear baseflow release from both reservoirs,
+# same surface-runoff handling (sat-excess flushed to FAST_RES on land HRUs).
+#
+# Adds X16 (GlacROF) to the calibrated parameter set.
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.2
+# Implementation reference: Terink et al. 2015 (SPHY v2.0, GMD); Lutz et al. 2014.
+
+_config_key: 'glogem_subdaily_opt1_glaciergw'
+display_name: 'SPHY GloGEM opt1 + Glacier-GW (S2)'
+color: '#6baed6'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 1
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'split_to_slow'
+compatible_models: ['SPHY']

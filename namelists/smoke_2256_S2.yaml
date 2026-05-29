@@ -1,0 +1,50 @@
+# =============================================================================
+# SMOKE TEST: Structure S2 on catchment 2256 Rosegbach
+# =============================================================================
+# Minimal calibration budget (~10 SCEUA iterations) just to verify the full
+# pipeline (preprocess + Raven + spotpy) runs end-to-end with the new
+# glogem_subdaily_opt1_glaciergw configuration (S2 from paper_5_methodology.md).
+#
+# Validates:
+#   - Config layer loads and merges correctly with the catchment namelist
+#   - preprocess_SPHY.py handles glacier_routing='split_to_slow' on SPHY model
+#   - X16 (GlacROF) is auto-included in calibrated parameter set via
+#     'has_glacier_split' optional-param condition
+#   - Raven generates :Split process before :Infiltration on MASKED_GLACIER HRUs
+#   - Calibration completes without errors
+#
+# Output:
+#   model_runs/catchment_2256/configs/glogem_subdaily_opt1_glaciergw/SPHY_S2_smoke/
+# =============================================================================
+
+catchment: '2256'
+display_name: 'Rosegbach @ Pontresina'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1_glaciergw
+
+calibration:
+  metrics: ['S2_smoke']
+  iterations: 10
+  ngs: 3
+
+  objectives: [Q]
+  Q:
+    metric: KGE
+
+future:
+  enabled: false
