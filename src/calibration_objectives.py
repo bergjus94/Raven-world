@@ -67,6 +67,15 @@ def _rmse_raw(obs: np.ndarray, sim: np.ndarray) -> float:
     return float(np.sqrt(np.mean((sim - obs) ** 2)))
 
 
+def _nrmse_raw(obs: np.ndarray, sim: np.ndarray) -> float:
+    """Mean-normalized RMSE: RMSE / mean(obs).  Returns NaN if mean(obs) is
+    zero or non-finite (no signal to normalize against)."""
+    mean_obs = obs.mean()
+    if mean_obs == 0 or not np.isfinite(mean_obs):
+        return float('nan')
+    return float(_rmse_raw(obs, sim) / mean_obs)
+
+
 def _mae_raw(obs: np.ndarray, sim: np.ndarray) -> float:
     return float(np.mean(np.abs(sim - obs)))
 
@@ -112,6 +121,17 @@ def _rmse(obs: np.ndarray, sim: np.ndarray) -> float:
     return 1.0 - _rmse_raw(obs, sim)
 
 
+def _nrmse(obs: np.ndarray, sim: np.ndarray) -> float:
+    """Score form of mean-normalized RMSE: 1 - RMSE/mean(obs).
+
+    KGE-shaped scale so this can be combined with KGE-on-Q in a weighted-sum
+    objective without the structural over-weighting that plain (1-RMSE) gives
+    on bounded variables like fSCA.  Good fits on fSCA bands typically score
+    0.5-0.8, mediocre ~0, bad goes negative (consistent with KGE behaviour).
+    """
+    return 1.0 - _nrmse_raw(obs, sim)
+
+
 def _mae(obs: np.ndarray, sim: np.ndarray) -> float:
     return 1.0 - _mae_raw(obs, sim)
 
@@ -131,6 +151,7 @@ METRICS = {
     'NSE':    _nse,
     'LogKGE': _logkge,
     'RMSE':   _rmse,         # score form: 1 - RMSE (assumes bounded variable)
+    'nRMSE':  _nrmse,        # score form: 1 - RMSE/mean(obs); KGE-shaped scale
     'MAE':    _mae,          # score form: 1 - MAE
     'PBIAS':  _pbias_score,  # score form: 1 - |PBIAS|/100
     'CSI':    _csi,
@@ -508,9 +529,12 @@ def snow_objective(
 
     Parameters
     ----------
-    metric            : KGE | NSE | LogKGE | RMSE | MAE | PBIAS | CSI.
+    metric            : KGE | NSE | LogKGE | RMSE | nRMSE | MAE | PBIAS | CSI.
                         Higher-is-better in all cases (error metrics are
-                        score-converted).
+                        score-converted).  For fSCA in [0,1], prefer nRMSE
+                        over RMSE when combining with KGE-on-Q in a weighted
+                        sum — plain (1-RMSE) sits in [0.6, 0.9] and
+                        structurally over-weights snow in the combination.
     band_aggregation  : area_weighted_mean | mean | median | min.
     min_pixels_per_band : skip a (date, band) cell if fewer valid pixels.
     diagnostic_log    : optional path; if set, appends one row per call
