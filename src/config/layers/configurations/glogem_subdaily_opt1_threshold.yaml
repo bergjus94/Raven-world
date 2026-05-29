@@ -1,0 +1,32 @@
+# Paper 5 — Structure S3 (HBV-Light Q0+Q1 threshold release on FAST_RES, no glacier-GW)
+#
+# Identical to glogem_subdaily_opt1 (S1 baseline) except sets
+# fast_reservoir_release='threshold'. This causes preprocess_SPHY.py to:
+#   1. Emit a second :Baseflow BASE_THRESH_STOR alongside the existing
+#      BASE_LINEAR from FAST_RES → SURFACE_WATER (HBV-Light Q0+Q1 mechanism)
+#   2. Add BASEFLOW_COEFF2 (X18, K0) and STORAGE_THRESHOLD (X17, UZL) columns
+#      to the FAST_RES row of the .rvp soil parameter table
+#
+# X17 (UZL) and X18 (K0) auto-include in the calibrated parameter set via the
+# 'has_threshold_release' optional-param condition.
+#
+# Glacier handling identical to S1: meltwater → SURFACE_WATER → outlet (no
+# glacier-GW pathway; no :Split process).
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.3
+# Implementation reference: Bergström 1976 (HBV); Seibert & Vis 2012 (HBV-Light).
+
+_config_key: 'glogem_subdaily_opt1_threshold'
+display_name: 'SPHY GloGEM opt1 + Threshold (S3)'
+color: '#ff7f0e'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 1
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'none'
+fast_reservoir_release: 'threshold'
+compatible_models: ['SPHY']

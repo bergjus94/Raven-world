@@ -1,0 +1,29 @@
+# Paper 5 — Structure S4 (HBV-Light threshold + glacier-GW connectivity)
+#
+# Stacks both structural changes from S2 and S3:
+#   - fast_reservoir_release='threshold' → BASE_THRESH_STOR + BASE_LINEAR on FAST_RES
+#     (HBV-Light Q0+Q1 mechanism, from S3)
+#   - glacier_routing='split_to_slow' → :Split on MASKED_GLACIER PONDED_WATER
+#     (glacier-GW connectivity, from S2)
+#
+# Allows direct test of additivity vs interaction between the two structural
+# improvements. No new code required — reuses S2's and S3's machinery.
+#
+# Expected calibrated parameter count: 15 (S1's 12 + X16 GlacROF + X17 UZL + X18 K0).
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.4
+
+_config_key: 'glogem_subdaily_opt1_threshold_glaciergw'
+display_name: 'SPHY GloGEM opt1 + Threshold + Glacier-GW (S4)'
+color: '#d62728'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 1
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'split_to_slow'
+fast_reservoir_release: 'threshold'
+compatible_models: ['SPHY']

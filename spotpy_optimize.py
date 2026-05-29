@@ -423,6 +423,10 @@ class RavenSCEUA(object):
             elif condition == 'perc_option_2':
                 # SPHY: TOPSOIL MAX_PERC_RATE / PERC_N / PERC_COEFF only meaningful under opt 2
                 include = int(self.namelist.get('perc_option', 1)) == 2
+            elif condition == 'has_threshold_release':
+                # SPHY Paper-5 S3/S4: STORAGE_THRESHOLD (X17) and BASEFLOW_COEFF2 (X18)
+                # only meaningful when BASE_THRESH_STOR is emitted from FAST_RES.
+                include = self.namelist.get('fast_reservoir_release', 'linear') == 'threshold'
 
             if not include:
                 skip_params.add(param_key)

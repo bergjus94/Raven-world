@@ -151,7 +151,23 @@ class SPHYProcessor:
                 "(1-GlacROF) fraction routed to SLOW_RES on MASKED_GLACIER HRUs "
                 "will be immediately spread across all HRUs each timestep."
             )
-        print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}, lateral_equilibrate: {self.lateral_equilibrate}")
+        # fast_reservoir_release: 'linear' (default) keeps the single BASE_LINEAR
+        # release from FAST_RES (classical SPHY convention). 'threshold' adds a
+        # second :Baseflow BASE_THRESH_STOR alongside BASE_LINEAR — HBV-Light
+        # Q0+Q1 mechanism (Bergström 1976; Seibert & Vis 2012). Activates Paper-5
+        # structure S3 (and S4 when combined with glacier_routing='split_to_slow').
+        # Requires X17 (UZL/STORAGE_THRESHOLD) and X18 (K0/BASEFLOW_COEFF2) to be
+        # in the calibrated parameter set; gated via the 'has_threshold_release'
+        # optional-param condition in src/config/default_params.yaml SPHY section.
+        self.fast_reservoir_release = namelist.get('fast_reservoir_release', 'linear')
+        valid_release = ['linear', 'threshold']
+        if self.fast_reservoir_release not in valid_release:
+            raise ValueError(
+                f"Invalid fast_reservoir_release: {self.fast_reservoir_release!r}. "
+                f"Must be one of {valid_release}."
+            )
+
+        print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}, lateral_equilibrate: {self.lateral_equilibrate}, fast_reservoir_release: {self.fast_reservoir_release}")
 
         # ✅ ADD ONLY THIS - warm_up_date
         if 'warm_up_date' in namelist:
@@ -1391,25 +1407,33 @@ class SPHYProcessor:
         # Topsoil thickness (X10) — also drives DEFAULT_P profile.
         topsoil_thickness = p['X10']
 
-        # Soil-parameter rows depend on perc_option.
+        # Soil-parameter rows depend on perc_option and fast_reservoir_release.
         # opt1: X11 = FAST_RES MAX_PERC_RATE (drives PERC_CONSTANT FAST→SLOW)
         # opt2: X12 = TOPSOIL MAX_PERC_RATE + X13 = PERC_N (drive PERC_POWER_LAW TOPSOIL→FAST)
         #       X14 = FAST_RES PERC_COEFF (drives PERC_LINEAR FAST→SLOW)
+        # threshold: X17 = STORAGE_THRESHOLD + X18 = BASEFLOW_COEFF2 (drive BASE_THRESH_STOR on FAST_RES, Q0 in HBV-Light)
+        use_threshold = (self.fast_reservoir_release == 'threshold')
+        thresh_hdr = ", BASEFLOW_COEFF2, STORAGE_THRESHOLD" if use_threshold else ""
+        thresh_units = ",            1/d,                mm" if use_threshold else ""
+        # FAST_RES gets the threshold values; other soils get _DEFAULT for these columns.
+        thresh_default = f", _DEFAULT, _DEFAULT" if use_threshold else ""
+        thresh_fast    = f",      {p['X18']},      {p['X17']}" if use_threshold else ""
+
         if perc_option == 1:
             soil_param_block = [
-                "  :Parameters, POROSITY, FIELD_CAPACITY, SAT_WILT, HBV_BETA, MAX_CAP_RISE_RATE, MAX_PERC_RATE, BASEFLOW_COEFF",
-                "  :Units,          none,           none,     none,     none,              mm/d,          mm/d,            1/d",
-                f"   [DEFAULT],       1.0,       {p['X06']},      0.0,  {p['X05']},          {p['X15']},           0.0,            0.0",
-                f"   FAST_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      {p['X11']},      {p['X07']}",
-                f"   SLOW_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X08']}",
+                f"  :Parameters, POROSITY, FIELD_CAPACITY, SAT_WILT, HBV_BETA, MAX_CAP_RISE_RATE, MAX_PERC_RATE, BASEFLOW_COEFF{thresh_hdr}",
+                f"  :Units,          none,           none,     none,     none,              mm/d,          mm/d,            1/d{thresh_units}",
+                f"   [DEFAULT],       1.0,       {p['X06']},      0.0,  {p['X05']},          {p['X15']},           0.0,            0.0{thresh_default}",
+                f"   FAST_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      {p['X11']},      {p['X07']}{thresh_fast}",
+                f"   SLOW_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X08']}{thresh_default}",
             ]
         else:  # perc_option == 2 (SPHY-faithful)
             soil_param_block = [
-                "  :Parameters, POROSITY, FIELD_CAPACITY, SAT_WILT, HBV_BETA, MAX_CAP_RISE_RATE, MAX_PERC_RATE, BASEFLOW_COEFF, PERC_N, PERC_COEFF",
-                "  :Units,          none,           none,     none,     none,              mm/d,          mm/d,            1/d,   none,        1/d",
-                f"   [DEFAULT],       1.0,       {p['X06']},      0.0,  {p['X05']},          {p['X15']},     {p['X12']},            0.0, {p['X13']},         0.0",
-                f"   FAST_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X07']}, _DEFAULT,    {p['X14']}",
-                f"   SLOW_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X08']}, _DEFAULT,   _DEFAULT",
+                f"  :Parameters, POROSITY, FIELD_CAPACITY, SAT_WILT, HBV_BETA, MAX_CAP_RISE_RATE, MAX_PERC_RATE, BASEFLOW_COEFF, PERC_N, PERC_COEFF{thresh_hdr}",
+                f"  :Units,          none,           none,     none,     none,              mm/d,          mm/d,            1/d,   none,        1/d{thresh_units}",
+                f"   [DEFAULT],       1.0,       {p['X06']},      0.0,  {p['X05']},          {p['X15']},     {p['X12']},            0.0, {p['X13']},         0.0{thresh_default}",
+                f"   FAST_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X07']}, _DEFAULT,    {p['X14']}{thresh_fast}",
+                f"   SLOW_RES,        1.0,        _DEFAULT,      0.0, _DEFAULT,         _DEFAULT,      _DEFAULT,      {p['X08']}, _DEFAULT,   _DEFAULT{thresh_default}",
             ]
 
         return {
@@ -1662,6 +1686,13 @@ class SPHYProcessor:
                 "",
                 "   # Linear baseflow on both subsurface reservoirs",
                 "   :Baseflow          BASE_LINEAR        FAST_RESERVOIR  SURFACE_WATER",
+                # Optional HBV-Light Q0 threshold release: fast_reservoir_release='threshold'
+                # adds a second :Baseflow BASE_THRESH_STOR alongside BASE_LINEAR on
+                # FAST_RES. Q = BASEFLOW_COEFF2 * (stor - STORAGE_THRESHOLD) when above
+                # threshold, else 0. Together with the always-on BASE_LINEAR this gives
+                # HBV-Light's Q0+Q1 mechanism (Bergström 1976). Paper-5 structures S3/S4.
+                *(["   :Baseflow          BASE_THRESH_STOR   FAST_RESERVOIR  SURFACE_WATER  # Q0 (HBV-Light)"]
+                  if self.fast_reservoir_release == 'threshold' else []),
                 "   :Baseflow          BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER",
                 "",
                 "   # Snow redistribution (Bernhardt-Schulz / FSM2)",

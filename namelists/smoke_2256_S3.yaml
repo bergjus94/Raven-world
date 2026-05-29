@@ -1,0 +1,49 @@
+# =============================================================================
+# SMOKE TEST: Structure S3 on catchment 2256 Rosegbach
+# =============================================================================
+# Validates the new fast_reservoir_release='threshold' machinery:
+#   - preprocess_SPHY.py emits :Baseflow BASE_THRESH_STOR alongside BASE_LINEAR
+#     on FAST_RES (HBV-Light Q0+Q1 mechanism)
+#   - .rvp soil parameter table includes BASEFLOW_COEFF2 + STORAGE_THRESHOLD
+#     columns with FAST_RES values populated from X17/X18
+#   - X17 (UZL) and X18 (K0) auto-include in calibrated parameter set via
+#     'has_threshold_release' optional-param condition
+#   - Calibration completes without errors
+#
+# Expected calibrated parameter count: 14 (S1's 12 + X17 + X18)
+#
+# Output:
+#   model_runs/catchment_2256/configs/glogem_subdaily_opt1_threshold/SPHY_S3_smoke/
+# =============================================================================
+
+catchment: '2256'
+display_name: 'Rosegbach @ Pontresina'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1_threshold
+
+calibration:
+  metrics: ['S3_smoke']
+  iterations: 10
+  ngs: 3
+
+  objectives: [Q]
+  Q:
+    metric: KGE
+
+future:
+  enabled: false

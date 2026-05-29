@@ -188,6 +188,8 @@ SPHY:
     X14: Sphy_Perc_Coeff                # PERC_LINEAR coefficient on FAST_RES [1/d] (opt2 only)
     X15: Sphy_Max_Cap_Rise_Rate         # Capillary rise rate [mm/d]
     X16: Sphy_GlacROF                   # Glacier fast-runoff fraction (SPHY GlacF, Config D only) [-]
+    X17: Sphy_UZL_Threshold             # STORAGE_THRESHOLD for BASE_THRESH_STOR on FAST_RES [mm] (Paper-5 S3/S4 only)
+    X18: Sphy_K0_Fast_Threshold         # BASEFLOW_COEFF2 for BASE_THRESH_STOR on FAST_RES [1/d] (Paper-5 S3/S4 only)
     # Tied parameters use a Sphy_ prefix so the placeholder name never
     # collides with Raven's literal column names in :Parameters headers
     # (the substitution does a naive str.replace, see _write_parameters_to_file
@@ -213,6 +215,8 @@ SPHY:
     X14: 0.15                  # PERC_COEFF (opt2 only; gives ~7.5 mm/d at 50 mm storage)
     X15: 1.88647               # MAX_CAP_RISE_RATE (0122 prior)
     X16: 0.7                   # GlacROF (SPHY default, Lutz 2014)
+    X17: 20.0                  # UZL/STORAGE_THRESHOLD (HBV-Light typical mid-range, Seibert & Vis 2012)
+    X18: 0.3                   # K0/BASEFLOW_COEFF2 (HBV-Light fast rate, ~3-day Q0 residence)
     Sphy_Time_To_Peak: 1.1388905   # Derived: X09 / 2
     Sphy_Min_Melt_Factor: 2.0      # Derived: 0.4 × 5.0
     Sphy_Refreeze_Factor: 0.35     # Derived: 0.07 × 5.0
@@ -234,6 +238,8 @@ SPHY:
       X14: 0.01         # PERC_COEFF: ~100-day residence upper
       X15: 0.0
       X16: 0.5          # GlacROF: SPHY/Lutz lower bound
+      X17: 5.0          # UZL: ≥5 mm threshold for Q0 (HBV-Light lower, Seibert & Vis 2012)
+      X18: 0.1          # K0: ≥0.1 /day (slowest Q0 release, ~10-day above-threshold residence)
   upper:
       X01: 3.0
       X02: 8.0          # MELT_FACTOR ≤ 8 (HMA literature upper)
@@ -251,18 +257,23 @@ SPHY:
       X14: 1.0          # PERC_COEFF: ~1-day residence lower
       X15: 2.0
       X16: 0.9          # GlacROF: SPHY/Lutz upper bound
+      X17: 50.0         # UZL: ≤50 mm threshold for Q0 (HBV-Light upper, Seibert & Vis 2012)
+      X18: 0.5          # K0: ≤0.5 /day (fastest Q0 release, ~2-day above-threshold residence)
 
   # Optional parameters: only included in calibration when the condition is met.
   # Conditions:
   #   'perc_option_1'    → only when perc_option == 1
   #   'perc_option_2'    → only when perc_option == 2
   #   'has_glacier_split' → only when glacier_routing == 'split_to_slow' (Config D)
+  #   'has_threshold_release' → only when fast_reservoir_release == 'threshold' (Paper-5 S3/S4)
   optional:
       X11: 'perc_option_1'           # FAST MAX_PERC_RATE — opt 1 only
       X12: 'perc_option_2'           # TOPSOIL MAX_PERC_RATE — opt 2 only
       X13: 'perc_option_2'           # PERC_N — opt 2 only
       X14: 'perc_option_2'           # PERC_COEFF — opt 2 only
       X16: 'has_glacier_split'       # GlacROF — only when glacier_routing='split_to_slow'
+      X17: 'has_threshold_release'   # UZL — only when fast_reservoir_release='threshold'
+      X18: 'has_threshold_release'   # K0 — only when fast_reservoir_release='threshold'
 
 HMETS:
   # HMETS (Hydrological Model - École de Technologie Supérieure) parameters

@@ -1,0 +1,35 @@
+# SMOKE TEST: Structure S4 on catchment 2256 — HBV-Light threshold + glacier-GW.
+# Expected calibrated param count: 15 (S1's 12 + X16 GlacROF + X17 UZL + X18 K0).
+# No new code — combines S2 + S3 config flags.
+
+catchment: '2256'
+display_name: 'Rosegbach @ Pontresina'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1_threshold_glaciergw
+
+calibration:
+  metrics: ['S4_smoke']
+  iterations: 10
+  ngs: 3
+
+  objectives: [Q]
+  Q:
+    metric: KGE
+
+future:
+  enabled: false
