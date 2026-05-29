@@ -1,0 +1,33 @@
+# Paper 5 — Structure S5 (SPHY-faithful: direct overland routing + cascade percolation)
+#
+# Architecturally distinct from S1/S2/S3/S4. Two combined changes vs S1:
+#   1. perc_option=2 → cascade percolation TOPSOIL → FAST_RES → SLOW_RES
+#      (PERC_POWER_LAW + PERC_LINEAR; existing infrastructure, X12/X13/X14 calibrated)
+#   2. land_surface_routing='direct' → no :Flush SURFACE_WATER → FAST_RES on land
+#      HRUs. Sat-excess routes directly to outlet via :CatchmentRoute TRIANGULAR_UH.
+#      FAST_RES is now a genuine subsurface store, fed only by percolation from TOPSOIL.
+#
+# Implements the Terink 2015 SPHY architecture as a coherent unit (no lumping of
+# overland flow into upper reservoir; explicit TOPSOIL→FAST percolation cascade).
+#
+# Expected calibrated parameter count: 14 (S1's 12 minus X11 plus X12+X13+X14).
+# Glacier handling identical to S1 (meltwater → SURFACE_WATER → outlet).
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.5
+# Implementation reference: Terink et al. 2015 (SPHY v2.0, GMD).
+
+_config_key: 'glogem_subdaily_opt2_sphy_faithful'
+display_name: 'SPHY GloGEM opt2 SPHY-faithful (S5)'
+color: '#2ca02c'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 2
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'none'
+fast_reservoir_release: 'linear'
+land_surface_routing: 'direct'
+compatible_models: ['SPHY']

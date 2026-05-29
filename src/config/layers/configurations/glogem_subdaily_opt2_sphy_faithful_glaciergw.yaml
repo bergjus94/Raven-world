@@ -1,0 +1,26 @@
+# Paper 5 — Structure S6 (SPHY-faithful + glacier-GW connectivity)
+#
+# Stacks the SPHY-faithful architecture from S5 with the glacier-GW connectivity
+# from S2. Identical to S5 except sets glacier_routing='split_to_slow' to insert
+# the :Split process on MASKED_GLACIER HRUs partitioning glacier meltwater
+# GlacROF·SURFACE + (1-GlacROF)·SLOW_RES.
+#
+# Expected calibrated parameter count: 15 (S5's 14 + X16 GlacROF).
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.6
+
+_config_key: 'glogem_subdaily_opt2_sphy_faithful_glaciergw'
+display_name: 'SPHY GloGEM opt2 SPHY-faithful + Glacier-GW (S6)'
+color: '#98df8a'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 2
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'split_to_slow'
+fast_reservoir_release: 'linear'
+land_surface_routing: 'direct'
+compatible_models: ['SPHY']

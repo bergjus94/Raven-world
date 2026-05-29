@@ -1,0 +1,35 @@
+# SMOKE TEST: Structure S6 on catchment 2256 — SPHY-faithful + glacier-GW.
+# Expected calibrated param count: 15 (S5's 14 + X16 GlacROF).
+# Validates: no :Flush in .rvi; cascade percolation; :Split present.
+
+catchment: '2256'
+display_name: 'Rosegbach @ Pontresina'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt2_sphy_faithful_glaciergw
+
+calibration:
+  metrics: ['S6_smoke']
+  iterations: 10
+  ngs: 3
+
+  objectives: [Q]
+  Q:
+    metric: KGE
+
+future:
+  enabled: false

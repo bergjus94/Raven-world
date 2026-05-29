@@ -379,3 +379,27 @@ Details [PENDING].
 - The earlier "opt1 (HBV-Light) vs opt2 (SPHY-faithful)" comparison was an intra-HBV-architecture test of **percolation algorithms only** (single PERC_CONSTANT vs cascade PERC_POWER_LAW + PERC_LINEAR). Both options retained the `:Flush SURFACE_WATER → FAST_RESERVOIR` step, so neither was truly Terink-SPHY-faithful in architecture. The "SPHY-faithful" label on opt2 was inaccurate as a description of architecture; it applied only to the percolation algorithm. This was clarified during methodology design (2026-05-29 session). The opt1-wins-by-parsimony finding still stands for what it actually tested, but the framing was narrower than the labels suggested.
 - The in-flight NSGAII Pareto runs (2268, 2256, 2161 — initiated 2026-05-29) use S1 (HBV-style architecture, no glacier-GW). These provide the production-baseline calibration data for those three catchments. They become part of the Phase 1 dataset.
 - The S3/S4 threshold-release mechanism (HBV-Light Q0+Q1 on FAST_RES) is a **genuinely new structural variant in this codebase**. It has not been implemented or tested before. The `preprocess_SPHY.py` code currently emits only a single `:Baseflow BASE_LINEAR FAST_RESERVOIR → SURFACE_WATER` line for FAST_RES drainage — there is no existing config flag for the threshold variant. Implementation work required: see §4.3 implementation TODO.
+
+---
+
+## 11. Smoke-test outcomes (2026-05-29)
+
+All 6 structures successfully implemented and smoke-tested locally on catchment 2256 Rosegbach. 10-iter SCEUA per structure, ~4 minutes each.
+
+| Structure | New config file | Calibrated params (verified) | Process changes verified in .rvi/.rvp | Best KGE @ 10 iter |
+|---|---|---|---|---|
+| S1 | `glogem_subdaily_opt1.yaml` (existing) | 12 | baseline | (production) |
+| S2 | `glogem_subdaily_opt1_glaciergw.yaml` | 13 (S1 + X16) | `:Split` on MASKED_GLACIER | 0.865 |
+| S3 | `glogem_subdaily_opt1_threshold.yaml` | 14 (S1 + X17 + X18) | `:Baseflow BASE_THRESH_STOR` + `BASEFLOW_COEFF2`/`STORAGE_THRESHOLD` columns in .rvp | 0.899 |
+| S4 | `glogem_subdaily_opt1_threshold_glaciergw.yaml` | 15 (S1 + X16 + X17 + X18) | Both `:Split` AND `BASE_THRESH_STOR` | 0.922 |
+| S5 | `glogem_subdaily_opt2_sphy_faithful.yaml` | 14 (S1 − X11 + X12 + X13 + X14) | NO `:Flush SURFACE_WATER → FAST_RES`, cascade `PERC_POWER_LAW` + `PERC_LINEAR` | 0.882 |
+| S6 | `glogem_subdaily_opt2_sphy_faithful_glaciergw.yaml` | 15 (S5 + X16) | NO `:Flush`, cascade percolation, AND `:Split` | 0.849 |
+
+**Code changes that landed for the build:**
+- `preprocess_SPHY.py`: two new config flags `fast_reservoir_release` ('linear' | 'threshold') and `land_surface_routing` ('flush_to_fast' | 'direct')
+- `default_params.yaml`: X17 (UZL/STORAGE_THRESHOLD, [5, 50] mm) and X18 (K0/BASEFLOW_COEFF2, [0.1, 0.5] /day) added to SPHY section
+- `spotpy_optimize.py`: new `has_threshold_release` optional-param condition handler
+
+**Notes on KGE values:** These are noise-dominated at the 10-iter budget — the validation here is *implementation correctness*, not performance comparison. The full Phase 1 calibrations (~3000 iter each) will give the real structure ranking. Smoke values are interesting only insofar as they confirm Raven produces sensible (non-NaN, finite, plausible-range) output for each structure.
+
+**Implementation completeness:** All 6 structures ready for full Phase 1 calibration runs across the multi-catchment + multi-regime experiment described in §3.

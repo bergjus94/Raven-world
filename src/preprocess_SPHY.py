@@ -167,7 +167,21 @@ class SPHYProcessor:
                 f"Must be one of {valid_release}."
             )
 
-        print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}, lateral_equilibrate: {self.lateral_equilibrate}, fast_reservoir_release: {self.fast_reservoir_release}")
+        # land_surface_routing: 'flush_to_fast' (default — HBV convention; sat-excess
+        # on land HRUs routed via :Flush into FAST_RESERVOIR) vs 'direct' (Terink-SPHY
+        # convention; sat-excess SURFACE_WATER routes directly to outlet via
+        # :CatchmentRoute TRIANGULAR_UH). Activates Paper-5 structures S5/S6 when set
+        # to 'direct' in combination with perc_option=2 (cascade percolation
+        # TOPSOIL→FAST→SLOW so FAST_RES has its own water source via percolation).
+        self.land_surface_routing = namelist.get('land_surface_routing', 'flush_to_fast')
+        valid_routing = ['flush_to_fast', 'direct']
+        if self.land_surface_routing not in valid_routing:
+            raise ValueError(
+                f"Invalid land_surface_routing: {self.land_surface_routing!r}. "
+                f"Must be one of {valid_routing}."
+            )
+
+        print(f"Subsurface structure: {self.subsurface_structure}, glacier routing: {self.glacier_routing}, lateral_equilibrate: {self.lateral_equilibrate}, fast_reservoir_release: {self.fast_reservoir_release}, land_surface_routing: {self.land_surface_routing}")
 
         # ✅ ADD ONLY THIS - warm_up_date
         if 'warm_up_date' in namelist:
@@ -1669,13 +1683,21 @@ class SPHYProcessor:
                 "   # Infiltration — HBV beta-power saturation excess",
                 "   :Infiltration      INF_HBV            PONDED_WATER    MULTIPLE",
                 "",
-                "   # Surface water routing on land HRUs (skip glacier/masked-glacier/rock/lake)",
-                "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
-                "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
-                "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
-                "       :-->Conditional HRU_TYPE IS_NOT ROCK",
-                "       :-->Conditional HRU_TYPE IS_NOT LAKE",
-                "",
+                # Paper-5 S5/S6 (land_surface_routing='direct'): skip the flush so
+                # sat-excess SURFACE_WATER on land HRUs routes directly to outlet via
+                # :CatchmentRoute (Terink-SPHY convention). When 'flush_to_fast' (default
+                # HBV convention), sat-excess is lumped into FAST_RES.
+                *(["   # Surface water routing on land HRUs (skip glacier/masked-glacier/rock/lake)",
+                   "   :Flush             RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR",
+                   "       :-->Conditional HRU_TYPE IS_NOT GLACIER",
+                   "       :-->Conditional HRU_TYPE IS_NOT MASKED_GLACIER",
+                   "       :-->Conditional HRU_TYPE IS_NOT ROCK",
+                   "       :-->Conditional HRU_TYPE IS_NOT LAKE",
+                   ""]
+                  if self.land_surface_routing == 'flush_to_fast' else
+                  ["   # Direct overland routing on land HRUs (Terink-SPHY): sat-excess SURFACE_WATER",
+                   "   # routes directly to outlet via :CatchmentRoute TRIANGULAR_UH (no flush to FAST_RES)",
+                   ""]),
                 "   # Soil evaporation — HBV scheme",
                 "   :SoilEvaporation   SOILEVAP_HBV       SOIL[0]         ATMOSPHERE",
                 "",
