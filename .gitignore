@@ -10,3 +10,7 @@ future_multi_*.log
 
 # Raven error files
 Raven_errors.txt
+
+# Literature PDFs — large binaries, kept local only (rsync to server if needed)
+paper_ideas/multiobj_pdfs/
+paper_ideas/*_pdfs/
