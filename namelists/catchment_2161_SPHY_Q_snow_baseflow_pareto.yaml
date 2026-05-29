@@ -1,0 +1,61 @@
+# =============================================================================
+# Catchment 2161 - Massa @ Blatten bei Naters — SPHY, NSGAII Pareto-front
+# =============================================================================
+# Sibling to the SCEUA Q+snow+baseflow variant. Uses NSGAII to explore the
+# full Pareto front rather than committing to fixed weights. Part of the
+# cross-catchment Pareto comparison (2268, 2256, 2161 all get Pareto runs).
+#
+# Massa is heavily glacierized (Aletsch headwaters) — the baseflow trade-off
+# is expected to be especially sharp here, so the Pareto shape should be the
+# most diagnostic of the three.
+#
+# Output routes to:
+#   model_runs/catchment_2161/configs/glogem_subdaily_opt1/SPHY_Q_snow_baseflow_pareto/
+#
+# Budget: 10000 iter × 50 pop = 200 generations. ~14-17h wall clock.
+# =============================================================================
+
+catchment: '2161'
+display_name: 'Massa @ Blatten bei Naters'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1
+
+calibration:
+  metrics: ['Q_snow_baseflow_pareto']
+
+  algorithm: NSGAII
+  iterations: 10000
+  n_pop: 50
+
+  objectives: [Q, snow, baseflow]
+  Q:
+    metric: KGE
+  snow:
+    metric: RMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+  baseflow:
+    metric: KGE
+    method: eckhardt
+    window: winter
+
+future:
+  enabled: false
