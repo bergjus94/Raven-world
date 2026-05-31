@@ -228,14 +228,14 @@ SPHY:
       X04: 0.02         # SNOW_SWI: dense aged firn
       X05: 1.0          # HBV_BETA ≥ 1 (HBV convention)
       X06: 0.3
-      X07: 0.05         # Fast baseflow: ~20-day residence time upper
-      X08: 0.001        # Slow baseflow: ~1000-day upper residence
+      X07: 0.01         # K1 FAST baseflow: ~100-day residence upper (HBV-Light Seibert & Vis 2012)
+      X08: 0.001        # K2 SLOW baseflow: ~1000-day residence upper
       X09: 0.01
       X10: 0.05
       X11: 0.0          # FAST MAX_PERC_RATE: zero means no FAST→SLOW perc
       X12: 0.0          # TOPSOIL MAX_PERC_RATE: zero degenerates opt2 to no recharge
       X13: 1.0          # PERC_N ≥ 1 (degenerates to linear at 1)
-      X14: 0.01         # PERC_COEFF: ~100-day residence upper
+      X14: 0.05         # PERC_COEFF: ~20-day residence upper (tightened from 0.01 to ensure non-degenerate FAST→SLOW transfer in cascade percolation)
       X15: 0.0
       X16: 0.5          # GlacROF: SPHY/Lutz lower bound
       X17: 5.0          # UZL: ≥5 mm threshold for Q0 (HBV-Light lower, Seibert & Vis 2012)
@@ -247,8 +247,8 @@ SPHY:
       X04: 0.10         # SNOW_SWI: fresh fluffy snow
       X05: 5.0          # HBV_BETA ≤ 5 (HBV convention)
       X06: 1.0
-      X07: 0.5
-      X08: 0.1
+      X07: 0.5          # K1 FAST baseflow: ~2-day residence lower (HBV-Light Seibert & Vis 2012)
+      X08: 0.05         # K2 SLOW baseflow: ~20-day residence lower (bedrock storage convention)
       X09: 6.0
       X10: 1.5          # Topsoil thickness upper bound — matches SPHY HMA (Khanal 2022 Bhagirathi); was 0.5 (HBV lit)
       X11: 10.0         # FAST MAX_PERC_RATE cap (Konz & Seibert 2010, glacierized HMA)
