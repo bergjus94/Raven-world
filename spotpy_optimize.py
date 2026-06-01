@@ -1523,17 +1523,63 @@ class RavenSCEUA(object):
     def run_best_parameters(self):
         """Run the model one final time with the true best parameter set from results file"""
         try:
+            # Get parameter names
+            param_names = [p.name for p in self.params]
+
+            # If a VERIFIED_best_params.csv already exists (e.g., placed by
+            # scripts/select_pareto_best.py for a Pareto run, where the
+            # `objective` column isn't a single scalar), use those params
+            # directly. This also lets us re-run finalize against an
+            # externally-curated best without losing the original results file.
+            preexisting_verified = self.output_path / f"{self.gauge_id}_{self.model_type}_VERIFIED_best_params.csv"
+            if preexisting_verified.exists():
+                print(f"\nUsing pre-existing VERIFIED file at {preexisting_verified}")
+                ver_df = pd.read_csv(preexisting_verified)
+                # The VERIFIED file may not contain every param in `self.params`
+                # (e.g., tied/derived params), so we look up by name and skip
+                # any missing column.
+                if any(pn not in ver_df.columns for pn in param_names):
+                    missing = [pn for pn in param_names if pn not in ver_df.columns]
+                    print(f"  WARNING: VERIFIED file missing params {missing}; falling back to results-file pick")
+                else:
+                    best_params = ver_df.loc[0, param_names].values
+                    best_obj = float(ver_df.loc[0, 'objective']) if 'objective' in ver_df.columns else float('nan')
+                    best_idx = int(ver_df.loc[0, 'iteration']) - 1 if 'iteration' in ver_df.columns else -1
+                    print(f"  Loaded params from VERIFIED. Composite score: {best_obj:.4f}")
+                    print("\nBest parameter values (from VERIFIED):")
+                    for name, value in zip(param_names, best_params):
+                        print(f"  {name}: {value:.6f}")
+
+                    print("\n" + "="*50)
+                    print(f"Running final model with VERIFIED parameter set")
+                    print("="*50)
+                    print("Writing best parameters to model files...")
+                    self._write_parameters_to_file(best_params)
+                    print("Adding extended output options to RVI file for final run...")
+                    self._add_extended_output_options()
+                    obj_value, vali_obj = self._run_model()
+                    if isinstance(obj_value, dict):
+                        per_obj = obj_value
+                        print(f"Final run per-objective values:")
+                        for o in self.objectives:
+                            v = per_obj.get(o, float('nan'))
+                            print(f"  {o:8s}: {v:.4f}")
+                        obj_value = self._combine_weighted(per_obj)
+                    print(f"Final run: calibration {self.obj_function}={obj_value:.4f}, validation {self.obj_function}={vali_obj:.4f}")
+                    print("Final marker file: VERIFIED_best_params.csv was pre-existing; not overwriting.")
+                    return  # Done — VERIFIED-driven path complete.
+
             # Load results file to get the best parameters
             if not self.results_file.exists():
                 print(f"No results file found at {self.results_file}. Cannot run best parameters.")
                 return
-                
+
             print("\nExtracting best parameters from results file...")
-            
+
             # Read results file
             results = pd.read_csv(self.results_file)
             print(f"Loaded results file with {len(results)} evaluations")
-            
+
             # Find best parameter set based on objective function
             if self.obj_function in ['KGE', 'KGE_NP', 'LogKGE', 'KGE_winter', 'KGE_lowFDC', 'KGE_WB', 'KGE_WLF', 'NSE']:
                 # These metrics we want to maximize
@@ -1545,10 +1591,7 @@ class RavenSCEUA(object):
                 best_idx = results['objective'].idxmin()
                 best_obj = results.loc[best_idx, 'objective']
                 print(f"Best {self.obj_function} (min): {best_obj:.4f} at iteration {best_idx+1}")
-            
-            # Get parameter names
-            param_names = [p.name for p in self.params]
-            
+
             # Extract best parameters from results
             best_params = results.loc[best_idx, param_names].values
             

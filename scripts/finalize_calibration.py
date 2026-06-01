@@ -26,8 +26,14 @@ from config_merge import load_config
 from paths import get_paths
 
 
-def find_incomplete_runs(catchment_id, configurations, models, metrics, env=None):
-    """Find calibration runs that have results but no VERIFIED file."""
+def find_incomplete_runs(catchment_id, configurations, models, metrics, env=None, force=False):
+    """Find calibration runs that have results but no VERIFIED file.
+
+    With force=True, also includes runs that already have a VERIFIED file —
+    useful for re-running the final-best step (e.g., after select_pareto_best.py
+    placed a Tchebycheff-compromise VERIFIED on top of an NSGAII Pareto front
+    that we want to finalize using those externally-curated parameters).
+    """
     incomplete = []
 
     for config in configurations:
@@ -54,7 +60,7 @@ def find_incomplete_runs(catchment_id, configurations, models, metrics, env=None
                 model_type = nml['model_type']
 
                 verified = output_dir / f"{gauge_id}_{model_type}_VERIFIED_best_params.csv"
-                if verified.exists():
+                if verified.exists() and not force:
                     continue
 
                 # Find calibration results files
@@ -175,6 +181,11 @@ def main():
                         help='Show what would be finalized without doing it')
     parser.add_argument('--env', type=str, default=None,
                         help='Environment (local/server)')
+    parser.add_argument('--force', action='store_true',
+                        help='Re-finalize runs that already have a VERIFIED_best_params.csv. '
+                             'Useful for Pareto runs where the VERIFIED was placed externally '
+                             '(e.g., by scripts/select_pareto_best.py) and we want to trigger '
+                             'the final Raven run + postprocessing on top of it.')
     args = parser.parse_args()
 
     # Load catchment namelist
@@ -197,8 +208,8 @@ def main():
     print(f"  Models: {models}")
     print(f"  Metrics: {metrics}")
 
-    # Find incomplete runs
-    incomplete = find_incomplete_runs(catchment_id, configurations, models, metrics, env=args.env)
+    # Find incomplete runs (or all runs in --force mode)
+    incomplete = find_incomplete_runs(catchment_id, configurations, models, metrics, env=args.env, force=args.force)
 
     if not incomplete:
         print("\nNo incomplete runs found. All calibrations either completed or have no results.")
