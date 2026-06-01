@@ -744,6 +744,162 @@ def plot_j_sceua_top100_param_ranges(outdir: Path, k: int = 100):
     print(f"  Saved {fp}")
 
 
+# ----- ANALYSIS K: WEIGHTED-SUM TOP-100 PARAMETER RANGES BY STRATEGY ------
+
+def plot_k_weightedsum_top100(per_catchment_pareto: dict, outdir: Path, k: int = 100):
+    """K. SCE-UA-style weighted-sum top-K parameter distributions, three strategies:
+       1. Q-only (weights 1, 0, 0)
+       2. Q+snow (weights 0.5, 0.5, 0)
+       3. Q+snow+baseflow (weights 0.4, 0.3, 0.3) — matches production
+
+    Source: NSGAII Pareto evaluations (all 9950 valid iterations per catchment),
+    not actual separate SCE-UA runs. Each weighted-sum strategy slices the
+    Pareto evaluations differently — emulates "what SCE-UA would have picked
+    under this weight set" without requiring re-runs.
+
+    Box plot per parameter; 3 strategies × 3 catchments = 9 boxes per param.
+    Colored by strategy; positioned by catchment.
+    """
+    import yaml
+    outdir.mkdir(parents=True, exist_ok=True)
+    with open('src/config/default_params.yaml') as f:
+        bounds = yaml.safe_load(f)['SPHY']
+    name_to_x = {v: k for k, v in bounds['names'].items() if not k.startswith('Sphy_')}
+
+    # The 3 strategies (weighted-sum)
+    strategies = [
+        ('Q-only',           {'obj_Q': 1.0, 'obj_snow': 0.0, 'obj_baseflow': 0.0}),
+        ('Q+snow',           {'obj_Q': 0.5, 'obj_snow': 0.5, 'obj_baseflow': 0.0}),
+        ('Q+snow+baseflow',  {'obj_Q': 0.4, 'obj_snow': 0.3, 'obj_baseflow': 0.3}),
+    ]
+    strat_colors = {'Q-only': '#1f77b4', 'Q+snow': '#9467bd', 'Q+snow+baseflow': '#2ca02c'}
+
+    # Use FULL evaluation set per catchment (not just Pareto front)
+    # — re-load the full results CSV, NOT the front
+    full_results = {}
+    for c in CATCHMENTS:
+        df = pd.read_csv(f'/tmp/swiss_pareto/pareto_{c}.csv')
+        obj_vals = df[OBJ_COLS].replace(-9999, np.nan)
+        full_results[c] = df.loc[obj_vals.notna().all(axis=1)].reset_index(drop=True)
+
+    one_df = next(iter(full_results.values()))
+    param_cols = [c for c in one_df.columns if c.startswith('Sphy_')]
+
+    # Build long-format data and detect bound hits per (catchment, strategy, param)
+    long_rows = []
+    boundary_status = {}  # (catchment, strategy_name, param) -> 'lower'/'upper'/'interior'
+    for c, df in full_results.items():
+        for strat_name, w in strategies:
+            score = sum(w[o] * np.clip(df[o], 0, 1) for o in OBJ_COLS)
+            topk = df.iloc[score.values.argsort()[::-1][:k]]
+            for p in param_cols:
+                for v in topk[p].values:
+                    long_rows.append({'catchment': c, 'strategy': strat_name,
+                                      'param': p, 'value': v})
+                xname = name_to_x.get(p)
+                if not xname: continue
+                lo = bounds['lower'].get(xname); hi = bounds['upper'].get(xname)
+                if lo is None or hi is None: continue
+                span = hi - lo
+                if span == 0: continue
+                med = topk[p].median()
+                if (med - lo) / span < 0.05:
+                    boundary_status[(c, strat_name, p)] = 'lower'
+                elif (hi - med) / span < 0.05:
+                    boundary_status[(c, strat_name, p)] = 'upper'
+                else:
+                    boundary_status[(c, strat_name, p)] = 'interior'
+    long = pd.DataFrame(long_rows)
+
+    # Order params by divergence: spread of medians across (catchment × strategy) cells
+    spreads = {}
+    for p in param_cols:
+        meds = []
+        for c in CATCHMENTS:
+            for strat_name, _ in strategies:
+                sub = long[(long.catchment == c) & (long.strategy == strat_name) & (long.param == p)]
+                if len(sub):
+                    meds.append(sub.value.median())
+        vals = long[long.param == p].value
+        rng = max(vals.max() - vals.min(), 1e-12)
+        spreads[p] = (max(meds) - min(meds)) / rng if meds else 0
+    ordered_params = sorted(param_cols, key=lambda p: -spreads[p])
+
+    # Build the figure
+    n_params = len(ordered_params)
+    cols = 4
+    n_rows = (n_params + cols - 1) // cols
+    fig, axes = plt.subplots(n_rows, cols, figsize=(cols * 5.0, n_rows * 3.4))
+    axes = axes.flatten()
+
+    # Per-subplot layout: 3 strategies on x-axis, catchments offset within each
+    catch_offsets = {'2268': -0.27, '2256': 0.0, '2161': 0.27}
+    strat_positions = {s: i for i, (s, _) in enumerate(strategies)}
+
+    for ax_i, p in enumerate(ordered_params):
+        ax = axes[ax_i]
+        positions = []
+        box_data = []
+        box_colors = []
+        edge_colors = []  # red border if hits bound
+        for strat_name, _ in strategies:
+            for c in CATCHMENTS:
+                vals = long[(long.catchment == c) & (long.strategy == strat_name) & (long.param == p)].value.values
+                pos = strat_positions[strat_name] + catch_offsets[c]
+                positions.append(pos)
+                box_data.append(vals)
+                box_colors.append(strat_colors[strat_name])
+                # Boundary status
+                status = boundary_status.get((c, strat_name, p), 'interior')
+                edge_colors.append('red' if status != 'interior' else 'black')
+
+        bp = ax.boxplot(box_data, positions=positions, widths=0.22,
+                        patch_artist=True, showfliers=False,
+                        medianprops=dict(color='black', lw=1.3))
+        for patch, fc, ec in zip(bp['boxes'], box_colors, edge_colors):
+            patch.set_facecolor(fc); patch.set_alpha(0.55)
+            patch.set_edgecolor(ec); patch.set_linewidth(2.0 if ec == 'red' else 0.8)
+
+        # Bound lines
+        xname = name_to_x.get(p)
+        if xname:
+            lo = bounds['lower'].get(xname); hi = bounds['upper'].get(xname)
+            if lo is not None:
+                ax.axhline(lo, color='red', ls=':', lw=0.9, alpha=0.5)
+            if hi is not None:
+                ax.axhline(hi, color='red', ls=':', lw=0.9, alpha=0.5)
+
+        ax.set_xticks(range(len(strategies)))
+        ax.set_xticklabels([s for s, _ in strategies], rotation=15, ha='right', fontsize=9)
+        ax.set_title(f"{p.replace('Sphy_', '')}  (div={spreads[p]:.2f})", fontsize=10)
+        ax.grid(axis='y', alpha=0.3)
+
+    for j in range(n_params, len(axes)):
+        axes[j].axis('off')
+
+    # Legend explaining the 3-box clusters: catchments within each strategy
+    legend_strategies = [Patch(facecolor=strat_colors[s], alpha=0.55, label=s) for s, _ in strategies]
+    legend_other = [
+        plt.Line2D([0], [0], color='red', ls=':', label='parameter bounds'),
+        Patch(facecolor='none', edgecolor='red', linewidth=2, label='hits bound (median < 5% from edge)'),
+        plt.Line2D([0], [0], marker='s', color='none', markeredgecolor='black',
+                   label='Within strategy: left=2268, mid=2256, right=2161 (color = strategy)'),
+    ]
+    fig.legend(handles=legend_strategies + legend_other, loc='lower center', ncol=3,
+               bbox_to_anchor=(0.5, -0.03), fontsize=10)
+
+    fig.suptitle(f'K. SCE-UA-style weighted-sum top-{k} parameter distributions\n'
+                 'Per parameter: 3 strategies × 3 catchments = 9 boxes. Strategy by color, catchment by position within strategy.\n'
+                 'Source: NSGAII Pareto evaluations sliced by 3 weighted-sum scores.',
+                 fontsize=12, y=0.998)
+    fig.tight_layout(rect=[0, 0.025, 1, 0.965])
+
+    fp = outdir / 'K_weightedsum_top100_param_ranges.png'
+    plt.savefig(fp, dpi=120, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved {fp}")
+
+
 # ----- ANALYSIS F: SCEUA VS NSGAII ----------------------------------------
 
 def plot_f_sceua_vs_nsgaii(outdir: Path):
@@ -877,6 +1033,9 @@ def main():
 
     print("\n=== Plot J: SCEUA top-100 parameter ranges per catchment ===")
     plot_j_sceua_top100_param_ranges(outdir, k=100)
+
+    print("\n=== Plot K: weighted-sum top-100 across 3 strategies (Q-only / Q+snow / Q+snow+baseflow) ===")
+    plot_k_weightedsum_top100(per_catchment_pareto, outdir, k=100)
 
     print("\n=== Plot F: SCEUA vs NSGAII ===")
     plot_f_sceua_vs_nsgaii(outdir)
