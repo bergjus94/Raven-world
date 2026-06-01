@@ -50,6 +50,43 @@ def _kge(obs: np.ndarray, sim: np.ndarray) -> float:
     return float(sof.kge(obs, sim))
 
 
+def _kge_np(obs: np.ndarray, sim: np.ndarray) -> float:
+    """Non-parametric KGE (Pool, Vis, Knoben & Seibert 2018).
+
+    Replaces:
+      - Pearson r → Spearman rank correlation (robust to outliers/non-Gaussian)
+      - α = σ_sim/σ_obs → α_NP = 1 − 0.5·Σ|sorted_sim_norm − sorted_obs_norm|
+        (flow-duration-curve based; directly compares the shape of the
+        distribution rather than just its standard deviation)
+    β (mean ratio) stays the same.
+
+    Recommended by Cinkus et al. 2023 as the KGE variant least susceptible
+    to compensating bias-and-variability errors. Useful for catchments
+    where flow distributions are heavy-tailed (glacier-snowmelt regimes).
+    """
+    from scipy.stats import spearmanr
+    if obs.std() == 0 or sim.std() == 0:
+        return float('nan')
+    # Spearman rank correlation
+    r_s, _ = spearmanr(obs, sim)
+    # Bias ratio (same as KGE)
+    obs_mean = obs.mean()
+    if obs_mean == 0:
+        return float('nan')
+    beta = sim.mean() / obs_mean
+    # FDC-based alpha (descending sort, normalize by sum)
+    obs_sorted = np.sort(obs)[::-1]
+    sim_sorted = np.sort(sim)[::-1]
+    obs_sum = obs_sorted.sum()
+    sim_sum = sim_sorted.sum()
+    if obs_sum == 0 or sim_sum == 0:
+        return float('nan')
+    obs_fdc = obs_sorted / obs_sum
+    sim_fdc = sim_sorted / sim_sum
+    alpha_np = 1.0 - 0.5 * float(np.sum(np.abs(sim_fdc - obs_fdc)))
+    return float(1.0 - np.sqrt((r_s - 1.0) ** 2 + (alpha_np - 1.0) ** 2 + (beta - 1.0) ** 2))
+
+
 def _nse(obs: np.ndarray, sim: np.ndarray) -> float:
     return float(sof.nashsutcliffe(obs, sim))
 
@@ -148,6 +185,7 @@ def _pbias_score(obs: np.ndarray, sim: np.ndarray) -> float:
 
 METRICS = {
     'KGE':    _kge,
+    'KGE_NP': _kge_np,       # non-parametric KGE (Pool 2018; Cinkus 2023 recommended)
     'NSE':    _nse,
     'LogKGE': _logkge,
     'RMSE':   _rmse,         # score form: 1 - RMSE (assumes bounded variable)
