@@ -630,9 +630,14 @@ def _resolve_window(window) -> tuple:
     """Convert a window spec to a tuple of month integers.
 
     Accepted forms:
-      - 'winter'      → (11, 12, 1, 2, 3)
-      - 'raw_winter'  → (12, 1, 2, 3)   (tighter; for filter-free use)
-      - 'all'         → (1, 2, …, 12)
+      - 'winter'       → (11, 12, 1, 2, 3)   (NDJFM, 5 months)
+      - 'raw_winter'   → (12, 1, 2, 3)        (DJFM, 4 months — legacy, Hunza pilot)
+      - 'deep_winter'  → (12, 1, 2)           (DJF, 3 months — paper-5 Phase 1+)
+                                                Reliably below freezing across all
+                                                cold high-mountain study catchments
+                                                regardless of regime.
+      - 'huang_winter' → (11, 12, 1, 2)       (NDJF — matches Huang et al. 2026 Pamir)
+      - 'all'          → (1, 2, …, 12)
       - list/tuple of month ints, e.g. [12, 1, 2] for DJF only
     """
     if isinstance(window, (list, tuple)) and not isinstance(window, str):
@@ -650,12 +655,17 @@ def _resolve_window(window) -> tuple:
         return WINTER_MONTHS
     if window == 'raw_winter':
         return (12, 1, 2, 3)
+    if window == 'deep_winter':
+        return (12, 1, 2)
+    if window == 'huang_winter':
+        return (11, 12, 1, 2)
     if window == 'all':
         return tuple(range(1, 13))
 
     raise ValueError(
-        f"Unknown window {window!r}. Use a preset ('winter' | 'raw_winter' | "
-        f"'all') or an explicit list of month integers (e.g. [12, 1, 2])."
+        f"Unknown window {window!r}. Use a preset "
+        f"('winter' | 'raw_winter' | 'deep_winter' | 'huang_winter' | 'all') "
+        f"or an explicit list of month integers (e.g. [12, 1, 2])."
     )
 
 

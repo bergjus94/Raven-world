@@ -465,7 +465,41 @@ Effect: weighted-sum objective composition becomes cleaner without needing per-o
 - Apply theoretical-bounds Tchebycheff with the existing RMSE-on-snow front (snow will be limiting)
 - Or compute nRMSE post-hoc from the stored snow time series and re-rank the front
 
-### 12.6 Three selection rules reported in the paper [PLANNED]
+### 12.6 Baseflow window: deep_winter (Dec-Jan-Feb) [LOCKED 2026-06-01]
+
+Decision: Phase 1 calibrations use `window: 'deep_winter'` = months (12, 1, 2) — the 3-month meteorological deep winter (DJF). Reasons:
+
+- **Reliably below freezing across all study catchments** regardless of regime (Swiss alpine, Pakistan UIB, Nepal high alpine). No need to defend per-catchment window choices.
+- **Conservative**: avoids both shoulder-month risks (November autumn-melt at lower Swiss elevations; March early-spring melt in Pamir).
+- **Statistical power adequate**: ~90 days/year × ~30 years calibration period = 2700 days of winter-baseflow data per catchment — far more than needed for a stable KGE.
+- Compared to Huang et al. 2026's NDJF (Nov-Feb), we exclude November to avoid Swiss autumn-melt contamination, accept losing 1 month of Pakistan winter (negligible impact given the long cold winter there).
+
+Window presets now defined in `src/calibration_objectives.py::_resolve_window`:
+- `'winter'`       → NDJFM (11, 12, 1, 2, 3) — 5 months
+- `'raw_winter'`   → DJFM (12, 1, 2, 3) — 4 months, **legacy Hunza pilot value**
+- **`'deep_winter'` → DJF (12, 1, 2) — 3 months — Phase 1 LOCKED CHOICE**
+- `'huang_winter'` → NDJF (11, 12, 1, 2) — 4 months, matches Huang 2026 exactly
+
+**Hunza Pareto (running)** uses `raw_winter` = DJFM by design (launched before this decision). Phase 1 namelists going forward will use `deep_winter`.
+
+### 12.7 Filter-comparison validation (Huang-style) [DONE]
+
+Four baseflow separation methods applied to observed daily Q across the 4 catchments. With parameters configured for cold high-mountain catchments (Eckhardt BFI_max=0.95, Lyne-Hollick alpha=0.925 standard, Sliding-Min window=5):
+
+| Catchment | Eckhardt | Lyne-Hollick | Sliding-Min | Raw winter Q |
+|---|---|---|---|---|
+| 2268 Rhone | 0.95 | 0.89 | 0.95 | 1.00 |
+| 2256 Rosegbach | 0.97 | 0.87 | 0.98 | 1.00 |
+| 2161 Massa | 0.94 | 0.78 | 0.92 | 1.00 |
+| 0102 Hunza | 0.97 | 0.93 | 0.98 | 1.00 |
+
+Eckhardt and Sliding-Min agree with raw winter Q to within 3-8% (the "Huang convergence" finding). Lyne-Hollick disagrees more (7-22%) but this is method-inherent — LH is designed to identify quickflow components that are physically absent in cold deep-winter Q.
+
+**Conclusion**: raw_winter is justified as a parameter-free direct baseflow target for these catchments. Filter-based estimates support but do not replace this choice.
+
+Outputs: `cross_catchment_plots/baseflow_filters/` on the server.
+
+### 12.8 Three selection rules reported in the paper [PLANNED]
 
 For methodological transparency, the paper will report and compare three Pareto-selection rules applied to the same Pareto fronts:
 
