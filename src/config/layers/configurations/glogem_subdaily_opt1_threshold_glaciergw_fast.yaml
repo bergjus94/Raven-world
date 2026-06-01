@@ -1,0 +1,25 @@
+# Paper 5 — Structure S8 (HBV-Light threshold + glacier→FAST connectivity)
+#
+# Mirror of S4 with the :Split routing the (1-GlacROF) fraction to FAST_RES
+# instead of SLOW_RES. Note that in S4/S8 the FAST_RES has two outlets
+# (BASE_THRESH_STOR above UZL, BASE_LINEAR below) — so glacier melt routed
+# to FAST during high-flux summer will preferentially exit at the K0 rate
+# (very fast). Tests whether the destination of glacier-GW routing matters
+# in the threshold-release architecture (paper_5_methodology.md §4.7).
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.7
+
+_config_key: 'glogem_subdaily_opt1_threshold_glaciergw_fast'
+display_name: 'SPHY GloGEM opt1 + Threshold + Glacier→FAST (S8)'
+color: '#e6550d'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 1
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'split_to_fast'
+fast_reservoir_release: 'threshold'
+compatible_models: ['SPHY']

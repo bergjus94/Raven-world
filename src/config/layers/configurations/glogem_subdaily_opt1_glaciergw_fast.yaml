@@ -1,0 +1,29 @@
+# Paper 5 — Structure S7 (HBV-linear architecture + glacier→FAST connectivity)
+#
+# Mirror of S2 (glogem_subdaily_opt1_glaciergw) with the :Split routing the
+# (1-GlacROF) fraction to FAST_RES instead of SLOW_RES. Tests whether the
+# destination of glacier-GW routing matters as much as its existence
+# (see paper_5_methodology.md §4.7).
+#
+# Process change vs S2:
+#   :Split RAVEN_DEFAULT PONDED_WATER SURFACE_WATER  FAST_RESERVOIR  GlacROF
+#                                                    ^^^^^^^^^^^^^^
+#                                                    (was SLOW_RESERVOIR in S2)
+#
+# Calibrated parameters identical to S2 (X16 GlacROF retained).
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.7
+
+_config_key: 'glogem_subdaily_opt1_glaciergw_fast'
+display_name: 'SPHY GloGEM opt1 + Glacier→FAST (S7)'
+color: '#3182bd'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 1
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'split_to_fast'
+compatible_models: ['SPHY']

@@ -264,14 +264,15 @@ SPHY:
   # Conditions:
   #   'perc_option_1'    → only when perc_option == 1
   #   'perc_option_2'    → only when perc_option == 2
-  #   'has_glacier_split' → only when glacier_routing == 'split_to_slow' (Config D)
+  #   'has_glacier_split' → only when glacier_routing in {'split_to_slow', 'split_to_fast'}
+  #                         (Paper-5 S2/S4/S6 slow target; S7/S8/S9 fast target)
   #   'has_threshold_release' → only when fast_reservoir_release == 'threshold' (Paper-5 S3/S4)
   optional:
       X11: 'perc_option_1'           # FAST MAX_PERC_RATE — opt 1 only
       X12: 'perc_option_2'           # TOPSOIL MAX_PERC_RATE — opt 2 only
       X13: 'perc_option_2'           # PERC_N — opt 2 only
       X14: 'perc_option_2'           # PERC_COEFF — opt 2 only
-      X16: 'has_glacier_split'       # GlacROF — only when glacier_routing='split_to_slow'
+      X16: 'has_glacier_split'       # GlacROF — split_to_slow OR split_to_fast
       X17: 'has_threshold_release'   # UZL — only when fast_reservoir_release='threshold'
       X18: 'has_threshold_release'   # K0 — only when fast_reservoir_release='threshold'
 

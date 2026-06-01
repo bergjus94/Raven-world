@@ -34,11 +34,14 @@ models:
 
 configurations:
   - glogem_subdaily_opt1                              # S1 — baseline (HBV-linear, no glacier-GW)
-  - glogem_subdaily_opt1_glaciergw                    # S2 — + glacier-GW connectivity
+  - glogem_subdaily_opt1_glaciergw                    # S2 — + glacier→SLOW
   - glogem_subdaily_opt1_threshold                    # S3 — + HBV-Light Q0 threshold
-  - glogem_subdaily_opt1_threshold_glaciergw          # S4 — threshold + glacier-GW
+  - glogem_subdaily_opt1_threshold_glaciergw          # S4 — threshold + glacier→SLOW
   - glogem_subdaily_opt2_sphy_faithful                # S5 — SPHY-faithful architecture
-  - glogem_subdaily_opt2_sphy_faithful_glaciergw      # S6 — SPHY-faithful + glacier-GW
+  - glogem_subdaily_opt2_sphy_faithful_glaciergw      # S6 — SPHY-faithful + glacier→SLOW
+  - glogem_subdaily_opt1_glaciergw_fast               # S7 — S2 mirror, glacier→FAST
+  - glogem_subdaily_opt1_threshold_glaciergw_fast     # S8 — S4 mirror, glacier→FAST
+  - glogem_subdaily_opt2_sphy_faithful_glaciergw_fast # S9 — S6 mirror, glacier→FAST
 
 calibration:
   metrics: ['paper5_pareto']

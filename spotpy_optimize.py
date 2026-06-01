@@ -416,7 +416,7 @@ class RavenSCEUA(object):
                 routing = self.namelist.get('glacier_routing', 'none')
                 if isinstance(routing, bool):
                     routing = 'through_soil' if routing else 'none'
-                include = routing == 'split_to_slow'
+                include = routing in ('split_to_slow', 'split_to_fast')
             elif condition == 'perc_option_1':
                 # SPHY: FAST_RES MAX_PERC_RATE (X11) only meaningful under opt 1
                 include = int(self.namelist.get('perc_option', 1)) == 1

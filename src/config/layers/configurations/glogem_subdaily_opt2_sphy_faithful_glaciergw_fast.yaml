@@ -1,0 +1,26 @@
+# Paper 5 — Structure S9 (SPHY-faithful + glacier→FAST connectivity)
+#
+# Mirror of S6 with the :Split routing the (1-GlacROF) fraction to FAST_RES
+# instead of SLOW_RES. In the SPHY-faithful architecture FAST_RES sits in
+# the cascade percolation chain (TOPSOIL→FAST→SLOW) and releases via
+# BASE_LINEAR — so glacier melt routed to FAST joins the cascade rather
+# than bypassing it. Tests whether the destination of glacier-GW routing
+# matters in the SPHY-faithful architecture (paper_5_methodology.md §4.7).
+#
+# Reference: paper_ideas/paper_5_methodology.md §4.7
+
+_config_key: 'glogem_subdaily_opt2_sphy_faithful_glaciergw_fast'
+display_name: 'SPHY GloGEM opt2 SPHY-faithful + Glacier→FAST (S9)'
+color: '#74c476'
+coupled: true
+glacier_source: 'glogem'
+glogem_model: 'gfdl-esm4'
+glogem_scenario: 'ssp126'
+basin_name: 'Indus'
+irrigation_variable: 'discharge'
+perc_option: 2
+subsurface_structure: 'gw_2_layer'
+glacier_routing: 'split_to_fast'
+fast_reservoir_release: 'linear'
+land_surface_routing: 'direct'
+compatible_models: ['SPHY']

@@ -120,22 +120,25 @@ class SPHYProcessor:
                 f"Configs A/C/D not yet wired."
             )
         # glacier_routing: 'none' for Configs A/B/C (baseline; no :Split),
-        # 'split_to_slow' for Config D (SPHY GlacF equivalent — :Split routes
-        # MASKED_GLACIER PONDED_WATER to GlacROF·SURFACE + (1-GlacROF)·SLOW_RES).
+        # 'split_to_slow' for Paper-5 S2/S4/S6 (SPHY GlacF equivalent — :Split routes
+        # MASKED_GLACIER PONDED_WATER to GlacROF·SURFACE + (1-GlacROF)·SLOW_RES),
+        # 'split_to_fast' for Paper-5 S7/S8/S9 (same partition but the non-direct
+        # fraction goes to FAST_RES instead of SLOW_RES — tests whether the
+        # destination of the glacier-GW connection matters as much as its existence).
         # Normalize legacy bool from defaults.yaml: False/True → 'none'/'none'
         # ('through_soil' was an HBV-specific variant; SPHY rejects it).
         raw_gr = namelist.get('glacier_routing', 'none')
         if isinstance(raw_gr, bool):
             raw_gr = 'none'  # SPHY ignores HBV's legacy True→'through_soil' mapping
         self.glacier_routing = raw_gr
-        valid_routings = ['none', 'split_to_slow']
+        valid_routings = ['none', 'split_to_slow', 'split_to_fast']
         if self.glacier_routing not in valid_routings:
             raise ValueError(f"Invalid glacier_routing: {self.glacier_routing}. Must be one of {valid_routings} for SPHY.")
-        # split_to_slow needs a SLOW_RESERVOIR as :Split target, so it's valid for
-        # gw_2_layer (FAST+SLOW) and gw_3_layer (FAST+SLOW+DEEP). It's NOT valid for
-        # gw_1_layer (SINGLE_RES only, no SLOW_RESERVOIR).
-        if self.glacier_routing == 'split_to_slow' and self.subsurface_structure not in ('gw_2_layer', 'gw_3_layer'):
-            raise ValueError(f"glacier_routing='split_to_slow' requires subsurface_structure in ('gw_2_layer', 'gw_3_layer'), got '{self.subsurface_structure}'")
+        # split_to_slow needs a SLOW_RESERVOIR as :Split target → gw_2_layer (FAST+SLOW)
+        # or gw_3_layer (FAST+SLOW+DEEP). split_to_fast needs a FAST_RESERVOIR → same
+        # set in practice (gw_1_layer has only SINGLE_RES so neither variant fits it).
+        if self.glacier_routing in ('split_to_slow', 'split_to_fast') and self.subsurface_structure not in ('gw_2_layer', 'gw_3_layer'):
+            raise ValueError(f"glacier_routing={self.glacier_routing!r} requires subsurface_structure in ('gw_2_layer', 'gw_3_layer'), got '{self.subsurface_structure}'")
         # lateral_equilibrate: when true, append two :LateralEquilibrate lines
         # (FAST_RESERVOIR, SLOW_RESERVOIR) to .rvi HydrologicProcesses. Forces
         # area-weighted equilibration of subsurface storage across all HRUs
@@ -143,13 +146,14 @@ class SPHYProcessor:
         # false keeps per-HRU storage local (SPHY/UBCWM convention) per
         # docs/model_structure_decisions.md § Lateral subsurface exchange.
         self.lateral_equilibrate = bool(namelist.get('lateral_equilibrate', False))
-        if self.lateral_equilibrate and self.glacier_routing == 'split_to_slow':
+        if self.lateral_equilibrate and self.glacier_routing in ('split_to_slow', 'split_to_fast'):
+            target = 'SLOW_RES' if self.glacier_routing == 'split_to_slow' else 'FAST_RES'
             print(
-                "⚠️  lateral_equilibrate=True combined with glacier_routing="
-                "'split_to_slow' (Config D) erases the targeted glacier→GW "
-                "routing (decisions doc § Lateral subsurface exchange). The "
-                "(1-GlacROF) fraction routed to SLOW_RES on MASKED_GLACIER HRUs "
-                "will be immediately spread across all HRUs each timestep."
+                f"⚠️  lateral_equilibrate=True combined with glacier_routing="
+                f"{self.glacier_routing!r} erases the targeted glacier→GW "
+                f"routing (decisions doc § Lateral subsurface exchange). The "
+                f"(1-GlacROF) fraction routed to {target} on MASKED_GLACIER HRUs "
+                f"will be immediately spread across all HRUs each timestep."
             )
         # fast_reservoir_release: 'linear' (default) keeps the single BASE_LINEAR
         # release from FAST_RES (classical SPHY convention). 'threshold' adds a
@@ -1467,11 +1471,11 @@ class SPHYProcessor:
                 "    LAKE,           0",
                 "    ROCK,           0",
                 # MASKED_GLACIER carries the GloGEM forcing on its (zero-depth) profile.
-                # Config D (glacier_routing='split_to_slow') gives it a real profile so
-                # the :Split target SLOW_RES exists on those HRUs.
+                # Any split_to_* glacier_routing gives it a real 3-horizon profile so
+                # the :Split target (FAST_RES or SLOW_RES) exists on those HRUs.
                 *(
                     [f"    MASKED_GLACIER, 3, TOPSOIL, {topsoil_thickness}, FAST_RES, 100.0, SLOW_RES, 100.0"]
-                    if self.glacier_routing == 'split_to_slow' else
+                    if self.glacier_routing in ('split_to_slow', 'split_to_fast') else
                     ["    MASKED_GLACIER, 0"]
                 ),
                 f"    DEFAULT_P,      3, TOPSOIL, {topsoil_thickness}, FAST_RES, 100.0, SLOW_RES, 100.0",
@@ -1598,14 +1602,20 @@ class SPHYProcessor:
                 "   :Percolation       PERC_LINEAR        FAST_RESERVOIR  SLOW_RESERVOIR",
             ]
 
-        # Config D (glacier_routing='split_to_slow') uses :Split BEFORE :Infiltration
-        # to route MASKED_GLACIER melt to GlacROF·SURFACE + (1-GlacROF)·SLOW_RES.
+        # split_to_* glacier_routing uses :Split BEFORE :Infiltration to partition
+        # MASKED_GLACIER melt into GlacROF·SURFACE_WATER + (1-GlacROF)·<target>.
+        # Paper-5 S2/S4/S6: target = SLOW_RESERVOIR (slow store / baseflow).
+        # Paper-5 S7/S8/S9: target = FAST_RESERVOIR (fast store / quickflow) —
+        # tests whether the destination of the glacier-GW link matters as much
+        # as its existence (see paper_5_methodology.md §4.7).
         glacier_split_block = []
-        if self.glacier_routing == 'split_to_slow':
+        if self.glacier_routing in ('split_to_slow', 'split_to_fast'):
+            target_res = ('SLOW_RESERVOIR' if self.glacier_routing == 'split_to_slow'
+                          else 'FAST_RESERVOIR')
             glac_rof = self.params['SPHY'][param_or_name].get('X16', 0.7)
             glacier_split_block = [
-                "   # Config-D glacier→GW split (SPHY GlacF equivalent)",
-                f"   :Split             RAVEN_DEFAULT      PONDED_WATER    SURFACE_WATER   SLOW_RESERVOIR   {glac_rof}",
+                f"   # Glacier→GW split ({self.glacier_routing}; target = {target_res})",
+                f"   :Split             RAVEN_DEFAULT      PONDED_WATER    SURFACE_WATER   {target_res}   {glac_rof}",
                 "       :-->Conditional HRU_TYPE IS MASKED_GLACIER",
             ]
 

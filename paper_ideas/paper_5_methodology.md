@@ -293,24 +293,33 @@ Compared to S1: replace `{X11}` with `{X12, X13, X14}` — net +2 parameters (12
 
 ---
 
-### 4.7 Summary table — the 6 structures
+### 4.7 Summary table — the 9 structures (3×3 factorial) [REVISED 2026-06-01]
 
-| | **FAST_RES release: linear only, flush-to-FAST** | **FAST_RES release: Q0 threshold + Q1 linear, flush-to-FAST** | **SPHY-faithful: cascade percolation, direct overland routing** |
+The original Paper 5 design (S1-S6) was a 3×2 factorial: architecture × {no glacier-GW, glacier→SLOW}. On 2026-06-01 we identified that the "glacier→SLOW" choice rests on weak literature support — Huang 2026 adopts it as a calibration choice rather than from established field evidence, and the glacier-hydrology textbook view (Fountain & Walder 1998; Hock 2005; Irvine-Fynn 2011) instead points toward fast (channelised) release. To turn this hidden assumption into a testable axis, the design is expanded to a 3×3 factorial with a third glacier-GW level — glacier→FAST — applied to all three architectures (S7/S8/S9 below).
+
+| | **FAST_RES: linear, flush-to-FAST** | **FAST_RES: Q0 threshold + Q1 linear, flush-to-FAST** | **SPHY-faithful: cascade percolation, direct overland** |
 |---|---|---|---|
-| **Glacier → surface (no `:Split`)** | **S1** (baseline) — 12 params | **S3** — 14 params (S1 + UZL, K0) | **S5** — 14 params (S1 − X11 + X12,X13,X14) |
-| **Glacier → slow GW (`:Split` with GlacROF)** | **S2** — 13 params (S1 + GlacROF) | **S4** — 15 params (S1 + GlacROF + UZL, K0) | **S6** — 15 params (S5 + GlacROF) |
+| **Glacier → surface (no `:Split`)** | **S1** — 12 params | **S3** — 14 params (S1 + UZL, K0) | **S5** — 14 params (S1 − X11 + X12,X13,X14) |
+| **Glacier → SLOW (`:Split` to SLOW_RES, GlacROF)** | **S2** — 13 params (S1 + GlacROF) | **S4** — 15 params (S3 + GlacROF) | **S6** — 15 params (S5 + GlacROF) |
+| **Glacier → FAST (`:Split` to FAST_RES, GlacROF)** | **S7** — 13 params (S1 + GlacROF) | **S8** — 15 params (S3 + GlacROF) | **S9** — 15 params (S5 + GlacROF) |
+
+S7/S8/S9 are implemented via `glacier_routing: 'split_to_fast'` in `preprocess_SPHY.py`, mirroring the existing `'split_to_slow'` logic but targeting FAST_RESERVOIR instead of SLOW_RESERVOIR in the `:Split` declaration. X16 (GlacROF) is calibrated identically in the fast-routing variants (gated via `has_glacier_split` which now accepts both `split_to_slow` and `split_to_fast`).
 
 **Main effects** (averaged over the off-axis factor):
-- Effect of glacier-GW connectivity (Axis B): (S2, S4, S6) vs (S1, S3, S5)
-- Effect of architecture (Axis A, 3-level): (S1, S2) vs (S3, S4) vs (S5, S6)
-  - Sub-contrast A1: HBV-linear vs HBV-threshold = (S1, S2) vs (S3, S4) — "does adding Q0 threshold within HBV help?"
-  - Sub-contrast A2: HBV vs SPHY-faithful architecture = (S1, S2, S3, S4) vs (S5, S6) — "does architectural restructuring help?"
-  - Sub-contrast A3: HBV-threshold vs SPHY-faithful = (S3, S4) vs (S5, S6) — "is the Q0 threshold mechanism equivalent to architectural restructuring?"
+- Effect of glacier-GW destination (Axis B, 3-level): no-split vs glacier→SLOW vs glacier→FAST
+  - Sub-contrast B1: glacier-GW vs none = (S2, S4, S6, S7, S8, S9) vs (S1, S3, S5) — "does connecting glacier melt to the subsurface matter at all?"
+  - Sub-contrast B2: SLOW vs FAST destination = (S2, S4, S6) vs (S7, S8, S9) — "does the destination matter once we've decided to connect?"
+- Effect of architecture (Axis A, 3-level): unchanged from the 3×2 design.
 
 **Interactions**:
-- Architecture × glacier-GW: does the benefit of glacier-GW depend on architectural choice?
-  - (S2 − S1) vs (S4 − S3) vs (S6 − S5)
-- Whether the two HBV variants (S3, S4) achieve the same improvement as the SPHY-faithful pair (S5, S6) is itself a testable claim: if S3 ≈ S5 and S4 ≈ S6, the architectural restructuring is overkill and the simpler threshold suffices.
+- Architecture × glacier-destination: does the SLOW-vs-FAST contrast generalise across architectures?
+  - (S2 − S7) vs (S4 − S8) vs (S6 − S9)
+  - Particularly interesting for S4 vs S8: the threshold architecture means FAST routing in summer hits the K0 outlet (very fast release) — likely the most extreme contrast.
+- All previous (3×2) interactions still hold within either SLOW-only or FAST-only slices.
+
+**Hypothesis space added by S7/S8/S9**:
+- *H_destination*: Once a glacier-subsurface connection exists, the destination reservoir's release time constant matters more than the connection itself. Operationally testable as: does the magnitude of (S2 − S1) match the magnitude of (S7 − S1), or is one structurally larger than the other?
+- *H_dest×arch*: The "right" destination depends on architecture — e.g. FAST routing may be preferable for HBV-threshold (S8) because K0 lets summer melt escape quickly, while SLOW routing may be preferable for HBV-linear (S2) where the fast store is already a single linear release.
 
 ---
 
