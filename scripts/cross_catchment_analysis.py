@@ -505,6 +505,112 @@ def plot_h_divergence_summary(per_catchment_pareto: dict, outdir: Path, k: int =
     print(f"  Saved {fp}")
 
 
+# ----- ANALYSIS I: PARAMETER-BOUND HITS BY STRATEGY -----------------------
+
+def plot_i_bound_hits(per_catchment_pareto: dict, outdir: Path, k: int = 10):
+    """I. Per-strategy bound-hit pattern. For each catchment, show which
+    parameters' top-K MEDIAN values are within 5% of the upper or lower
+    bound under each strategy. This is the equifinality/over-fitting
+    diagnostic: Q-only calibration tends to push many parameters to
+    physically extreme values; multi-objective constrains them inward.
+    """
+    import yaml
+    outdir.mkdir(parents=True, exist_ok=True)
+    with open('src/config/default_params.yaml') as f:
+        bounds = yaml.safe_load(f)['SPHY']
+    name_to_x = {v: k for k, v in bounds['names'].items() if not k.startswith('Sphy_')}
+
+    strategies = ['Q-only', 'snow-only', 'baseflow-only', 'Q+snow', 'Q+baseflow', 'all-3']
+    one_front = next(iter(per_catchment_pareto.values()))
+    param_cols = [c for c in one_front.columns if c.startswith('Sphy_')]
+
+    # Build matrix per catchment: rows = params, cols = strategies, values = -1 (low), 0 (interior), +1 (high)
+    catchment_matrices = {}
+    for c, front in per_catchment_pareto.items():
+        matrix = np.zeros((len(param_cols), len(strategies)))
+        for j, strat in enumerate(strategies):
+            topk = strategy_topk(front, strat, k=k)
+            for i, p in enumerate(param_cols):
+                xname = name_to_x.get(p)
+                if not xname:
+                    continue
+                lo = bounds['lower'].get(xname); hi = bounds['upper'].get(xname)
+                if lo is None or hi is None:
+                    continue
+                med = topk[p].median()
+                span = hi - lo
+                if span == 0:
+                    continue
+                if (med - lo) / span < 0.05:
+                    matrix[i, j] = -1  # hit lower
+                elif (hi - med) / span < 0.05:
+                    matrix[i, j] = +1  # hit upper
+        catchment_matrices[c] = matrix
+
+    # 3 panels (one per catchment), each a categorical heatmap
+    fig, axes = plt.subplots(1, 3, figsize=(15, 7))
+    cmap_vals = matplotlib.colors.ListedColormap(['#4472c4', '#ffffff', '#c5504b'])  # blue/white/red
+    norm = matplotlib.colors.BoundaryNorm([-1.5, -0.5, 0.5, 1.5], cmap_vals.N)
+
+    for ax, c in zip(axes, CATCHMENTS):
+        matrix = catchment_matrices[c]
+        im = ax.imshow(matrix, aspect='auto', cmap=cmap_vals, norm=norm)
+        # Count bound hits per strategy
+        hits_per_strat = (np.abs(matrix) > 0).sum(axis=0)
+        ax.set_xticks(np.arange(len(strategies)))
+        ax.set_xticklabels([f'{s}\n({hits_per_strat[i]} hits)' for i, s in enumerate(strategies)],
+                           rotation=20, ha='right', fontsize=9)
+        ax.set_yticks(np.arange(len(param_cols)))
+        if ax is axes[0]:
+            ax.set_yticklabels([p.replace('Sphy_', '') for p in param_cols], fontsize=9)
+        else:
+            ax.set_yticklabels([])
+        ax.set_title(LABELS[c], fontsize=11)
+        # Add gridlines
+        ax.set_xticks(np.arange(-0.5, len(strategies)), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(param_cols)), minor=True)
+        ax.grid(which='minor', color='lightgray', lw=0.5)
+
+    # Legend
+    legend_elems = [
+        Patch(facecolor='#4472c4', label='hit LOWER bound (<5% above min)'),
+        Patch(facecolor='#ffffff', edgecolor='black', label='interior (>5% from either bound)'),
+        Patch(facecolor='#c5504b', label='hit UPPER bound (<5% below max)'),
+    ]
+    fig.legend(handles=legend_elems, loc='lower center', ncol=3,
+               bbox_to_anchor=(0.5, -0.02), fontsize=10)
+
+    fig.suptitle('I. Parameter-bound hits per calibration strategy\n'
+                 'Top-K (K=10) Pareto-point MEDIAN values; "hit" if within 5% of bound.\n'
+                 'Q-only is the worst offender — it pushes nearly all parameters to extremes (= equifinality + overfitting).',
+                 fontsize=12, y=0.995)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.93])
+
+    fp = outdir / 'I_bound_hits_by_strategy.png'
+    plt.savefig(fp, dpi=120, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved {fp}")
+
+    # Also save a tidy CSV of all the hits
+    rows = []
+    for c, front in per_catchment_pareto.items():
+        for strat in strategies:
+            topk = strategy_topk(front, strat, k=k)
+            for p in param_cols:
+                xname = name_to_x.get(p)
+                if not xname: continue
+                lo = bounds['lower'].get(xname); hi = bounds['upper'].get(xname)
+                if lo is None or hi is None: continue
+                med = topk[p].median()
+                span = hi - lo
+                if span == 0: continue
+                hit = 'lower' if (med - lo) / span < 0.05 else ('upper' if (hi - med) / span < 0.05 else 'interior')
+                rows.append({'catchment': c, 'strategy': strat, 'param': p,
+                             'median': med, 'lower_bound': lo, 'upper_bound': hi,
+                             'hit': hit})
+    pd.DataFrame(rows).to_csv(outdir / 'I_bound_hits_full.csv', index=False)
+
+
 # ----- ANALYSIS F: SCEUA VS NSGAII ----------------------------------------
 
 def plot_f_sceua_vs_nsgaii(outdir: Path):
@@ -632,6 +738,9 @@ def main():
 
     print("\n=== Plot H: parameter × strategy heatmap per catchment ===")
     plot_h_divergence_summary(per_catchment_pareto, outdir, k=10)
+
+    print("\n=== Plot I: parameter-bound hits per strategy ===")
+    plot_i_bound_hits(per_catchment_pareto, outdir, k=10)
 
     print("\n=== Plot F: SCEUA vs NSGAII ===")
     plot_f_sceua_vs_nsgaii(outdir)
