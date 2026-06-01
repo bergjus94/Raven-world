@@ -1,0 +1,71 @@
+# =============================================================================
+# Paper 5 — Chenab @ Tandi (0130) — NSGAII Pareto on all 6 structures
+# =============================================================================
+# UIB lower-elevation monsoon-influenced catchment. Complements Hunza by
+# extending the climate-regime axis to a wetter, more monsoon-dominated
+# tributary. Phase-1 catchment for Paper 5.
+#
+# Methodology (paper_5_methodology.md):
+#   §4    — six subsurface structures S1-S6 (3×2 factorial)
+#   §12.4 — snow metric: nRMSE
+#   §12.6 — baseflow window: deep_winter (DJF)
+#   §12.7 — baseflow filter: raw_winter
+#           (For Chenab the filter-comparison shows ~25% non-baseflow content
+#           in winter due to lower elevation; this is accepted as a catchment-
+#           specific finding and reported in the paper. raw_winter remains the
+#           consistent cross-catchment target so structures can be compared.)
+#   §12.8 — metrics: KGE_NP for Q + baseflow; nRMSE for snow
+#
+# Budget: NSGAII 10000 iter × 50 pop = 200 generations.
+# =============================================================================
+
+catchment: '0130'
+display_name: 'Chenab @ Tandi'
+
+start_date: '1980-01-01'
+end_date: '2019-12-31'
+cali_end_date: '2002-12-31'
+warm_up_date: '1970-01-01'
+
+# 10-yr warm-up cycled from the first 10 yrs of simulation data (1980-1989).
+warmup:
+  method: 'cycle'
+  cycle_years: 10
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1                              # S1 — baseline (HBV-linear, no glacier-GW)
+  - glogem_subdaily_opt1_glaciergw                    # S2 — + glacier-GW connectivity
+  - glogem_subdaily_opt1_threshold                    # S3 — + HBV-Light Q0 threshold
+  - glogem_subdaily_opt1_threshold_glaciergw          # S4 — threshold + glacier-GW
+  - glogem_subdaily_opt2_sphy_faithful                # S5 — SPHY-faithful architecture
+  - glogem_subdaily_opt2_sphy_faithful_glaciergw      # S6 — SPHY-faithful + glacier-GW
+
+calibration:
+  metrics: ['paper5_pareto']
+
+  algorithm: NSGAII
+  iterations: 10000
+  n_pop: 50
+
+  objectives: [Q, snow, baseflow]
+  Q:
+    metric: KGE_NP
+  snow:
+    metric: nRMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+  baseflow:
+    metric: KGE_NP
+    method: raw_winter
+    window: deep_winter
+
+future:
+  enabled: false

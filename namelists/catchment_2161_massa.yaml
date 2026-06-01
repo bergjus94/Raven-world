@@ -1,0 +1,69 @@
+# =============================================================================
+# Paper 5 — Massa @ Blatten bei Naters (2161) — NSGAII Pareto on all 6 structures
+# =============================================================================
+# Swiss Alpine catchment (~196 km²), heavily glacierized (Aletsch headwaters).
+# Expected to show the sharpest baseflow trade-off of the three Swiss
+# catchments due to its very high glacier fraction — the Pareto front should
+# be the most diagnostic of structural differences.
+#
+# Methodology (paper_5_methodology.md):
+#   §4    — six subsurface structures S1-S6
+#   §12.4 — snow metric: nRMSE
+#   §12.6 — baseflow window: deep_winter (DJF)
+#   §12.7 — baseflow filter: raw_winter
+#           (Validated for cold high-mountain catchments; filter-comparison
+#           shows Eckhardt/Sliding-Min/Raw agree to within 3-8%.)
+#   §12.8 — metrics: KGE_NP for Q + baseflow; nRMSE for snow
+#
+# Budget: NSGAII 10000 iter × 50 pop = 200 generations. ~14-17h wall clock.
+# =============================================================================
+
+catchment: '2161'
+display_name: 'Massa @ Blatten bei Naters'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+precip_correction: true
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1                              # S1 — baseline (HBV-linear, no glacier-GW)
+  - glogem_subdaily_opt1_glaciergw                    # S2 — + glacier-GW connectivity
+  - glogem_subdaily_opt1_threshold                    # S3 — + HBV-Light Q0 threshold
+  - glogem_subdaily_opt1_threshold_glaciergw          # S4 — threshold + glacier-GW
+  - glogem_subdaily_opt2_sphy_faithful                # S5 — SPHY-faithful architecture
+  - glogem_subdaily_opt2_sphy_faithful_glaciergw      # S6 — SPHY-faithful + glacier-GW
+
+calibration:
+  metrics: ['paper5_pareto']
+
+  algorithm: NSGAII
+  iterations: 10000
+  n_pop: 50
+
+  objectives: [Q, snow, baseflow]
+  Q:
+    metric: KGE_NP
+  snow:
+    metric: nRMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+  baseflow:
+    metric: KGE_NP
+    method: raw_winter
+    window: deep_winter
+
+future:
+  enabled: false
