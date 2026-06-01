@@ -499,7 +499,25 @@ Eckhardt and Sliding-Min agree with raw winter Q to within 3-8% (the "Huang conv
 
 Outputs: `cross_catchment_plots/baseflow_filters/` on the server.
 
-### 12.8 Three selection rules reported in the paper [PLANNED]
+### 12.8 Calibration metrics per objective [LOCKED 2026-06-01]
+
+After reviewing Cinkus et al. 2023 (which identifies the standard KGE's compensating bias-and-variability pathology as a real risk for distribution-skewed regimes), Phase 1 onward adopts the following per-objective metrics:
+
+| Objective | Metric | Rationale |
+|---|---|---|
+| Streamflow (Q) | **KGE_NP** (Pool et al. 2018) | Spearman rank correlation + FDC-based α; robust to glacier-melt heavy tails; avoids the KGE compensating-error pathology highlighted by Cinkus 2023 |
+| Baseflow (winter Q) | **KGE_NP** | Same family for consistency; non-parametric α handles the narrow, low-variance winter distribution cleanly |
+| Snow (fSCA) | **nRMSE** | Bounded variable; mean-normalized RMSE rescales to KGE-shaped [≤1, →1=perfect] for Tchebycheff compatibility (see §12.4) |
+
+Implementation: `src/calibration_objectives.py` — `KGE_NP` added to the METRICS registry alongside KGE/NSE/LogKGE/nRMSE (commit 35b7dad). All Phase 1 namelists going forward will set `metric: KGE_NP` on Q and baseflow objectives; snow keeps `metric: nRMSE`.
+
+KGE_NP formulation: `1 − sqrt((r_S − 1)² + (α_NP − 1)² + (β − 1)²)` where r_S is Spearman rank correlation and α_NP = `1 − 0.5·Σ|sorted_sim_norm − sorted_obs_norm|` (FDC-based shape distance).
+
+Selection-rule rescaling unchanged: theoretical bounds for KGE-family metrics are `[0, 1]` (clipped) regardless of whether r is Pearson or Spearman, so §12.2's Tchebycheff machinery applies identically to KGE_NP.
+
+**Note on currently running Hunza Pareto**: launched 2026-05-30 with standard KGE on Q and baseflow. We will let it complete and report it as-is; KGE_NP becomes the standard from Chenab Phase 1 onward and the full Phase 1 rollout. If the structural ranking is sensitive to this metric choice, we revisit; the §12.9 selection-rule comparison provides one axis for checking this on the Hunza run.
+
+### 12.9 Three selection rules reported in the paper [PLANNED]
 
 For methodological transparency, the paper will report and compare three Pareto-selection rules applied to the same Pareto fronts:
 
