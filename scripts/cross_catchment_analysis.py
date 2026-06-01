@@ -322,6 +322,189 @@ def plot_d_param_clustering(per_catchment_selection_rules: dict, outdir: Path):
     print(f"  Saved {fp}")
 
 
+# ----- ANALYSIS G: PARAMETER RANGES BY STRATEGY ---------------------------
+
+def strategy_topk(front: pd.DataFrame, strategy: str, k: int = 10) -> pd.DataFrame:
+    """Return the top-K parameter sets from the Pareto front under the
+    specified simulated calibration strategy.
+    """
+    if strategy == 'Q-only':
+        return front.nlargest(k, 'obj_Q')
+    elif strategy == 'snow-only':
+        return front.nlargest(k, 'obj_snow')
+    elif strategy == 'baseflow-only':
+        return front.nlargest(k, 'obj_baseflow')
+    elif strategy == 'Q+snow':
+        # equal-weight on 2D using theoretical bounds
+        sc = 0.5 * np.clip(front.obj_Q, 0, 1) + 0.5 * np.clip(front.obj_snow, 0, 1)
+        return front.iloc[sc.values.argsort()[::-1][:k]]
+    elif strategy == 'Q+baseflow':
+        sc = 0.5 * np.clip(front.obj_Q, 0, 1) + 0.5 * np.clip(front.obj_baseflow, 0, 1)
+        return front.iloc[sc.values.argsort()[::-1][:k]]
+    elif strategy == 'all-3':
+        sc = (np.clip(front.obj_Q, 0, 1)
+              + np.clip(front.obj_snow, 0, 1)
+              + np.clip(front.obj_baseflow, 0, 1)) / 3.0
+        return front.iloc[sc.values.argsort()[::-1][:k]]
+    else:
+        raise ValueError(strategy)
+
+
+def plot_g_param_ranges_by_strategy(per_catchment_pareto: dict, outdir: Path, k: int = 10):
+    """G. For each parameter: box-plot of values across strategies, per catchment.
+    Reveals where strategies agree vs disagree on parameter selection.
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+    strategies = ['Q-only', 'snow-only', 'baseflow-only', 'Q+snow', 'Q+baseflow', 'all-3']
+
+    # Collect: per (catchment, strategy, param) the K param values
+    # data[param] = DataFrame with columns: catchment, strategy, value
+    one_front = next(iter(per_catchment_pareto.values()))
+    param_cols = [c for c in one_front.columns if c.startswith('Sphy_')]
+
+    rows = []
+    for c, front in per_catchment_pareto.items():
+        for strat in strategies:
+            topk = strategy_topk(front, strat, k=k)
+            for _, row in topk.iterrows():
+                for p in param_cols:
+                    rows.append({'catchment': c, 'strategy': strat,
+                                 'param': p, 'value': row[p]})
+    long = pd.DataFrame(rows)
+
+    # Compute divergence per parameter (across strategies, within each catchment, then averaged)
+    div = []
+    for p in param_cols:
+        sub = long[long.param == p]
+        # For each catchment: std across strategy-medians
+        spreads = []
+        for c in CATCHMENTS:
+            sub_c = sub[sub.catchment == c]
+            med_per_strat = sub_c.groupby('strategy').value.median()
+            # normalize spread by parameter's value range
+            v_min = sub_c.value.min(); v_max = sub_c.value.max()
+            v_range = max(v_max - v_min, 1e-12)
+            spread = (med_per_strat.max() - med_per_strat.min()) / v_range
+            spreads.append(spread)
+        div.append({'param': p, 'mean_spread': float(np.mean(spreads))})
+    div_df = pd.DataFrame(div).sort_values('mean_spread', ascending=False).reset_index(drop=True)
+    div_df.to_csv(outdir / 'G_param_divergence_ranking.csv', index=False)
+
+    # Per-param subplot grid — sort by divergence (most-disagreeing first)
+    ordered_params = div_df.param.tolist()
+    n_params = len(ordered_params)
+    cols = 4
+    rows = (n_params + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.2, rows * 3.0))
+    axes = axes.flatten()
+
+    strat_colors = {'Q-only': '#1f77b4', 'snow-only': '#2ca02c', 'baseflow-only': '#d62728',
+                    'Q+snow': '#9467bd', 'Q+baseflow': '#8c564b', 'all-3': '#000000'}
+    catch_offsets = {'2268': -0.25, '2256': 0.0, '2161': +0.25}
+
+    for ax_i, p in enumerate(ordered_params):
+        ax = axes[ax_i]
+        sub = long[long.param == p]
+        # box per (strategy × catchment) — strategies on x-axis, catchments offset
+        positions = []
+        labels_x = []
+        box_data = []
+        box_colors = []
+        for si, strat in enumerate(strategies):
+            for c in CATCHMENTS:
+                vals = sub[(sub.strategy == strat) & (sub.catchment == c)].value.values
+                pos = si + catch_offsets[c]
+                box_data.append(vals)
+                positions.append(pos)
+                box_colors.append(strat_colors[strat])
+            labels_x.append(strat)
+        bp = ax.boxplot(box_data, positions=positions, widths=0.18,
+                        patch_artist=True, showfliers=False, medianprops=dict(color='black'))
+        for patch, col in zip(bp['boxes'], box_colors):
+            patch.set_facecolor(col); patch.set_alpha(0.55)
+        ax.set_xticks(np.arange(len(strategies)))
+        ax.set_xticklabels(strategies, rotation=20, ha='right', fontsize=8)
+        title = p.replace('Sphy_', '')
+        ax.set_title(f"{title}  (div={div_df[div_df.param==p].mean_spread.iloc[0]:.2f})", fontsize=10)
+        ax.grid(axis='y', alpha=0.3)
+
+    # turn off unused axes
+    for j in range(n_params, len(axes)):
+        axes[j].axis('off')
+
+    # legend (catchments)
+    legend_elems = [Patch(facecolor='lightgray', edgecolor='black',
+                          label=f'{c}: {LABELS[c]}') for c in CATCHMENTS]
+    # also legend for strategies (using colors)
+    legend_strat = [Patch(facecolor=strat_colors[s], alpha=0.55, label=s) for s in strategies]
+    fig.legend(handles=legend_elems + [Patch(facecolor='none', label='')] + legend_strat,
+               loc='lower center', ncol=5, fontsize=9, bbox_to_anchor=(0.5, -0.02))
+
+    fig.suptitle('G. Parameter value distributions across simulated calibration strategies\n'
+                 f'(top-{k} Pareto points per strategy; sorted by divergence, most-divergent first; '
+                 'div = (max-min strategy-median) / param range)',
+                 fontsize=13, y=0.995)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.97])
+    fp = outdir / 'G_param_ranges_by_strategy.png'
+    plt.savefig(fp, dpi=120, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved {fp}")
+
+
+def plot_h_divergence_summary(per_catchment_pareto: dict, outdir: Path, k: int = 10):
+    """H. Summary heatmap: parameter × strategy, color = top-K median value.
+    One panel per catchment; row colors indicate divergence rank.
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+    strategies = ['Q-only', 'snow-only', 'baseflow-only', 'Q+snow', 'Q+baseflow', 'all-3']
+    one_front = next(iter(per_catchment_pareto.values()))
+    param_cols = [c for c in one_front.columns if c.startswith('Sphy_')]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), sharey=True)
+    div_csv = pd.read_csv(outdir / 'G_param_divergence_ranking.csv')
+    ordered_params = div_csv.param.tolist()
+
+    for ax, c in zip(axes, CATCHMENTS):
+        front = per_catchment_pareto[c]
+        # Build matrix: rows = params (ordered by divergence), cols = strategies
+        matrix = np.zeros((len(ordered_params), len(strategies)))
+        for j, strat in enumerate(strategies):
+            topk = strategy_topk(front, strat, k=k)
+            for i, p in enumerate(ordered_params):
+                matrix[i, j] = topk[p].median()
+        # Normalize each row to [0, 1] for color comparability across params
+        norm_matrix = np.zeros_like(matrix)
+        for i in range(len(ordered_params)):
+            row = matrix[i]
+            lo, hi = row.min(), row.max()
+            span = max(hi - lo, 1e-12)
+            norm_matrix[i] = (row - lo) / span
+
+        im = ax.imshow(norm_matrix, aspect='auto', cmap='RdBu_r', vmin=0, vmax=1)
+        ax.set_xticks(np.arange(len(strategies)))
+        ax.set_xticklabels(strategies, rotation=25, ha='right', fontsize=9)
+        ax.set_yticks(np.arange(len(ordered_params)))
+        ax.set_yticklabels([p.replace('Sphy_', '') for p in ordered_params], fontsize=8)
+        ax.set_title(f'{LABELS[c]}', fontsize=11)
+
+        # annotate cells with actual values
+        for i in range(len(ordered_params)):
+            for j in range(len(strategies)):
+                ax.text(j, i, f'{matrix[i, j]:.2g}',
+                        ha='center', va='center', fontsize=7, color='black')
+
+    cbar = fig.colorbar(im, ax=axes, shrink=0.8, pad=0.02)
+    cbar.set_label('row-normalized value\n(per parameter, blue=lowest strategy / red=highest strategy)',
+                   fontsize=9)
+    fig.suptitle('H. Per-catchment heatmap: median top-K parameter value across strategies\n'
+                 '(rows sorted by divergence rank, most-divergent at top)',
+                 fontsize=12, y=1.00)
+    fp = outdir / 'H_param_strategy_heatmap.png'
+    plt.savefig(fp, dpi=120, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved {fp}")
+
+
 # ----- ANALYSIS F: SCEUA VS NSGAII ----------------------------------------
 
 def plot_f_sceua_vs_nsgaii(outdir: Path):
@@ -420,11 +603,13 @@ def main():
     per_catchment_results = {}
     per_catchment_strategies = {}
     per_catchment_selection_rules = {}
+    per_catchment_pareto = {}
 
     print("\n=== loading Pareto fronts and computing strategy/selection picks ===")
     for c in CATCHMENTS:
         _, front = load_pareto(c, root=args.pareto_dir)
         print(f"  {c}: Pareto front size = {len(front)}")
+        per_catchment_pareto[c] = front
         results, strategies, selection_rules = analyze_strategies(front)
         per_catchment_results[c] = results
         per_catchment_strategies[c] = strategies
@@ -441,6 +626,12 @@ def main():
 
     print("\n=== Plot D: parameter clustering across rules ===")
     plot_d_param_clustering(per_catchment_selection_rules, outdir)
+
+    print("\n=== Plot G: parameter ranges by strategy (top-K box plots) ===")
+    plot_g_param_ranges_by_strategy(per_catchment_pareto, outdir, k=10)
+
+    print("\n=== Plot H: parameter × strategy heatmap per catchment ===")
+    plot_h_divergence_summary(per_catchment_pareto, outdir, k=10)
 
     print("\n=== Plot F: SCEUA vs NSGAII ===")
     plot_f_sceua_vs_nsgaii(outdir)
