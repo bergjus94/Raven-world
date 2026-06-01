@@ -306,16 +306,18 @@ def main():
         fp = plot_cross_catchment_summary(all_stats, args.outdir)
         print(f'\nCross-catchment summary: {fp}')
 
-    # BFI_max sensitivity — separate plot
-    print('\nBFI_max sensitivity for Eckhardt filter:')
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bfi_vals = [0.50, 0.70, 0.80, 0.90, 0.95, 0.99]
+    # BFI_max sensitivity for Eckhardt + alpha sensitivity for Lyne-Hollick
+    print('\nFilter-parameter sensitivities:')
     catch_colors = {'2268': '#1f77b4', '2256': '#ff7f0e',
                     '2161': '#2ca02c', '0102': '#d62728'}
+
+    fig, (ax_e, ax_lh) = plt.subplots(1, 2, figsize=(18, 6))
+
+    # --- Eckhardt vs BFI_max ---
+    bfi_vals = [0.50, 0.70, 0.80, 0.90, 0.95, 0.99]
     for c, name in CATCHMENTS.items():
         rvt = args.q_dir / f'Q_daily_{c}.rvt'
-        if not rvt.exists():
-            continue
+        if not rvt.exists(): continue
         q = load_q_daily(rvt)
         sep = BaseflowSeparator(q)
         q_winter = q[q.index.month.isin(window)]
@@ -325,17 +327,44 @@ def main():
             bf = sep.eckhardt(BFI_max=bm)
             bf_winter = bf[bf.index.month.isin(window)]
             ratios.append(bf_winter.mean() / raw_mean)
-        ax.plot(bfi_vals, ratios, marker='o', label=f'{c} {name}', color=catch_colors[c], lw=2)
-    ax.axhline(1.0, color='black', ls='--', alpha=0.5, label='Raw winter Q (= 1.0)')
-    ax.axvline(0.50, color='red', ls=':', alpha=0.5, label='Library default (0.50)')
-    ax.axvline(0.95, color='green', ls=':', alpha=0.5, label='Recommended for cold catchments (0.95)')
-    ax.set_xlabel('Eckhardt BFI_max parameter')
-    ax.set_ylabel('Eckhardt winter baseflow / raw winter Q')
-    ax.set_title('Eckhardt-filter sensitivity to BFI_max\n'
-                 '(default 0.50 caps baseflow at 50% — inappropriate for cold high-mountain catchments)')
-    ax.legend(fontsize=9, loc='lower right')
-    ax.grid(alpha=0.3)
-    fp = args.outdir / 'baseflow_eckhardt_bfimax_sensitivity.png'
+        ax_e.plot(bfi_vals, ratios, marker='o', label=f'{c} {name}',
+                  color=catch_colors[c], lw=2)
+    ax_e.axhline(1.0, color='black', ls='--', alpha=0.5, label='Raw winter Q (= 1.0)')
+    ax_e.axvline(0.50, color='red', ls=':', alpha=0.5, label='Library default 0.50')
+    ax_e.axvline(0.95, color='green', ls=':', alpha=0.5, label='Recommended cold catchments 0.95')
+    ax_e.set_xlabel('Eckhardt BFI_max parameter')
+    ax_e.set_ylabel('winter baseflow / raw winter Q')
+    ax_e.set_title('Eckhardt sensitivity to BFI_max\n'
+                   '(low default 0.50 caps baseflow at 50% — wrong for cold high-mountain)')
+    ax_e.legend(fontsize=8.5, loc='lower right')
+    ax_e.grid(alpha=0.3)
+
+    # --- Lyne-Hollick vs alpha ---
+    alpha_vals = [0.85, 0.90, 0.925, 0.95, 0.98, 0.99]
+    for c, name in CATCHMENTS.items():
+        rvt = args.q_dir / f'Q_daily_{c}.rvt'
+        if not rvt.exists(): continue
+        q = load_q_daily(rvt)
+        sep = BaseflowSeparator(q)
+        q_winter = q[q.index.month.isin(window)]
+        raw_mean = q_winter.mean()
+        ratios = []
+        for a in alpha_vals:
+            bf = sep.lyne_hollick(alpha=a)
+            bf_winter = bf[bf.index.month.isin(window)]
+            ratios.append(bf_winter.mean() / raw_mean)
+        ax_lh.plot(alpha_vals, ratios, marker='o', label=f'{c} {name}',
+                   color=catch_colors[c], lw=2)
+    ax_lh.axhline(1.0, color='black', ls='--', alpha=0.5, label='Raw winter Q (= 1.0)')
+    ax_lh.axvline(0.925, color='red', ls=':', alpha=0.5, label='Standard 0.925 (Nathan & McMahon 1990)')
+    ax_lh.set_xlabel('Lyne-Hollick alpha (3-pass)')
+    ax_lh.set_ylabel('winter baseflow / raw winter Q')
+    ax_lh.set_title('Lyne-Hollick sensitivity to alpha\n'
+                    '(direction opposite to Eckhardt: lower alpha → more BF retained)')
+    ax_lh.legend(fontsize=8.5, loc='lower left')
+    ax_lh.grid(alpha=0.3)
+
+    fp = args.outdir / 'baseflow_filter_parameter_sensitivity.png'
     plt.savefig(fp, dpi=130, bbox_inches='tight')
     plt.close()
     print(f'  Saved {fp}')
