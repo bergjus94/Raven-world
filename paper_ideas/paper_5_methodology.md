@@ -403,3 +403,74 @@ All 6 structures successfully implemented and smoke-tested locally on catchment 
 **Notes on KGE values:** These are noise-dominated at the 10-iter budget — the validation here is *implementation correctness*, not performance comparison. The full Phase 1 calibrations (~3000 iter each) will give the real structure ranking. Smoke values are interesting only insofar as they confirm Raven produces sensible (non-NaN, finite, plausible-range) output for each structure.
 
 **Implementation completeness:** All 6 structures ready for full Phase 1 calibration runs across the multi-catchment + multi-regime experiment described in §3.
+
+---
+
+## 12. Multi-objective selection rule & metric scaling (2026-06-01) [LOCKED]
+
+This section captures decisions made during the analysis of the 3 finished Swiss Pareto runs (2268 Rhone, 2256 Rosegbach, 2161 Massa), which surfaced two methodological issues that needed resolving before Phase 1 expansion.
+
+### 12.1 Issue: Pareto-front-derived min-max rescaling has a narrow-axis pathology
+
+The original Path A from the multi-objective design discussion (paper_ideas/multiobj_calibration_literature.md and earlier sessions) was to use per-objective min/max from the Pareto front to rescale objectives before computing a Tchebycheff-distance compromise solution.
+
+In practice, this **systematically biases the selection toward whichever axis has the narrowest Pareto-front range**:
+
+- For catchment 2161 Massa: Q-KGE Pareto-front span = 0.039; baseflow-KGE Pareto-front span = 0.576 (15× wider)
+- After min-max rescaling, a 0.01 absolute improvement in Q-KGE = 25% of the Q-rescaled axis, but a 0.01 improvement in baseflow = 1.7% of the baseflow-rescaled axis
+- Tchebycheff then over-prefers Q-strong points at the cost of much larger baseflow degradations
+
+Empirical demonstration on the 3 Swiss catchments:
+| Catchment | Tcheb-pareto baseflow KGE | SCEUA weighted-sum baseflow KGE |
+|---|---|---|
+| 2256 | 0.672 | **0.909** |
+| 2161 | 0.483 | **0.896** |
+
+SCEUA weighted-sum found points on the Pareto front with much better baseflow — the Tchebycheff-pareto-range rule preferred narrow Q gains over substantial baseflow gains.
+
+### 12.2 Decision: use theoretical-bounds rescaling for Tchebycheff selection [LOCKED]
+
+For the paper's primary Pareto selection rule, rescale each objective using **fixed theoretical bounds**, not the data-derived Pareto range. The new `select_pareto_best.py --rescaling theoretical` mode implements:
+
+- KGE-family metrics (KGE, KGE_NP, LogKGE, NSE, KGE_winter): clamp negatives at 0 → rescale by [0, 1]
+- 1−RMSE on bounded variables (fSCA): assume already in [0, 1]
+- Any rescaled value clamped to [0, 1] (no rewarding "better than ideal")
+
+Re-running on the 3 Swiss Pareto fronts gave more balanced selections (2161 baseflow KGE went from 0.483 → 0.687). Theoretical bounds also enable **direct cross-catchment comparison** — the rescaling is the same regardless of which catchment is being analyzed.
+
+### 12.3 Residual issue: snow score has a structural ceiling around 0.7
+
+Even under theoretical-bounds Tchebycheff, the worst-shortfall axis in all 3 Swiss catchments is now **snow** — because `1 − RMSE` on fSCA has an empirical ceiling around 0.7 (data noise floor + bounded variable). The metric *cannot* reach 1.0 the way KGE on streamflow can.
+
+This is an irreducible asymmetry of the (KGE on Q, 1−RMSE on snow, KGE on baseflow) objective family.
+
+### 12.4 Decision: switch snow metric to nRMSE for Phase 1 onward [LOCKED]
+
+For Phase 1 calibrations and all subsequent work, use **`nRMSE` (mean-normalized RMSE) for the snow objective** instead of `RMSE`:
+
+```
+nRMSE = 1 − RMSE / mean(obs)
+```
+
+Key properties:
+- Natural [−∞, 1] range like KGE — no structural ceiling
+- Weights errors by snow-signal magnitude per elevation band
+- Already implemented in `src/calibration_objectives.py` (added 2026-05-29, with documentation and synthetic-data validation)
+
+Effect: weighted-sum objective composition becomes cleaner without needing per-objective rescaling, and theoretical-bounds Tchebycheff stops having snow as the universal binding constraint.
+
+### 12.5 Hunza Pareto (currently running, ~12% done as of 2026-06-01)
+
+**Keeps `RMSE`** for snow (does not get re-launched). Justification: the 3.5-day compute commitment outweighs the metric-choice cleanliness gain. At analysis time when Hunza finishes, we can either:
+- Apply theoretical-bounds Tchebycheff with the existing RMSE-on-snow front (snow will be limiting)
+- Or compute nRMSE post-hoc from the stored snow time series and re-rank the front
+
+### 12.6 Three selection rules reported in the paper [PLANNED]
+
+For methodological transparency, the paper will report and compare three Pareto-selection rules applied to the same Pareto fronts:
+
+1. **Theoretical-bounds Tchebycheff** (primary): the "minimize worst-case rescaled shortfall" rule with fixed bounds
+2. **Weighted-sum SCEUA** (sanity check): the simpler `w_Q · Q + w_snow · snow + w_baseflow · baseflow` with explicit hydrologic-priority weights
+3. **ε-constraint** (alternative): "Maximize Q-KGE subject to snow ≥ threshold AND baseflow ≥ threshold"
+
+This becomes a sub-finding in the paper: how much does the choice of Pareto-selection rule matter for the structural conclusions? — likely answer: less than the structural choice itself, but enough to discuss.

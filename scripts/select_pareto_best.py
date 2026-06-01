@@ -100,6 +100,20 @@ def main() -> int:
     parser.add_argument('--write-pareto-csv', type=Path, default=None,
                         help='Write the full Pareto front (one row per non-dominated point) '
                              'with rescaled obj cols and Tchebycheff distance.')
+    parser.add_argument('--rescaling', choices=['pareto', 'theoretical', 'none'],
+                        default='pareto',
+                        help="Rescaling scheme used to convert objective scores to comparable "
+                             "[0, 1] units before Tchebycheff selection.\n"
+                             "  pareto      (default) per-objective min/max from the Pareto front. "
+                             "Adaptive to catchment but amplifies narrow-range axes "
+                             "(see methods discussion 2026-06-01).\n"
+                             "  theoretical fixed bounds for each metric type: KGE-family clamped "
+                             "[0, 1] (negatives become 0); bounded-variable metrics like "
+                             "1-RMSE on fSCA assumed already in [0, 1]. Independent of "
+                             "the specific catchment's Pareto exploration — enables direct "
+                             "cross-catchment comparison.\n"
+                             "  none        no rescaling; Tchebycheff distance computed in raw "
+                             "score space. Only meaningful if all objectives use compatible metrics.")
     args = parser.parse_args()
 
     if not args.results_csv.exists():
@@ -135,18 +149,40 @@ def main() -> int:
     pareto = df_v.loc[is_pareto].reset_index(drop=True)
     print(f"Pareto front size: {len(pareto)} / {len(df_v)} non-dominated.")
 
-    # Per-objective ranges from the Pareto front (the "achievable trade-off space")
-    ranges = {c: (float(pareto[c].min()), float(pareto[c].max())) for c in obj_cols}
-    print("\nPareto-derived per-objective ranges (raw scores):")
-    for c, (lo, hi) in ranges.items():
-        print(f"  {c}: [{lo:+.4f}, {hi:+.4f}]   span = {hi - lo:.4f}")
+    # Per-objective ranges depending on chosen rescaling
+    if args.rescaling == 'pareto':
+        ranges = {c: (float(pareto[c].min()), float(pareto[c].max())) for c in obj_cols}
+        print("\nPareto-derived per-objective ranges (raw scores):")
+        for c, (lo, hi) in ranges.items():
+            print(f"  {c}: [{lo:+.4f}, {hi:+.4f}]   span = {hi - lo:.4f}")
+    elif args.rescaling == 'theoretical':
+        # KGE-family and (1-RMSE) on bounded variables all live in (−∞, 1].
+        # Clamp lower bound at 0 (anything worse is "as bad as climatology"),
+        # upper bound = 1. Same for all objectives — assumes all are KGE-shaped
+        # or already in [0, 1] (e.g., 1-RMSE on fSCA, CSI).
+        ranges = {c: (0.0, 1.0) for c in obj_cols}
+        # Also report the observed Pareto-front ranges for context (diagnostic only)
+        observed = {c: (float(pareto[c].min()), float(pareto[c].max())) for c in obj_cols}
+        print("\nTheoretical-bounds rescaling: all objectives clamped to [0, 1].")
+        print("Observed Pareto-front ranges (for reference only — NOT used for rescaling):")
+        for c, (lo, hi) in observed.items():
+            print(f"  {c}: observed [{lo:+.4f}, {hi:+.4f}]   span = {hi - lo:.4f}  → rescaled by [0, 1]")
+    else:  # 'none'
+        ranges = {c: (0.0, 1.0) for c in obj_cols}  # placeholder; rescaling skipped below
+        print("\nNo rescaling — Tchebycheff distance computed in raw objective space.")
 
     # Capture original row index in df_v so we can report iteration accurately
     pareto = pareto.copy()
     pareto['_original_row'] = df_v.index[is_pareto].values
 
     # Rescale + Tchebycheff distance
-    rescaled = min_max_rescale(pareto[obj_cols].values, ranges, obj_cols)
+    if args.rescaling == 'none':
+        rescaled = pareto[obj_cols].values  # raw values
+    else:
+        rescaled = min_max_rescale(pareto[obj_cols].values, ranges, obj_cols)
+        # For 'theoretical' rescaling, also clamp lower at 0 (negative KGE → 0)
+        if args.rescaling == 'theoretical':
+            rescaled = np.clip(rescaled, 0.0, 1.0)
     distances = tchebycheff_distance(rescaled)
 
     # Attach rescaled cols + distance for output
