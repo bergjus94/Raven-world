@@ -611,6 +611,139 @@ def plot_i_bound_hits(per_catchment_pareto: dict, outdir: Path, k: int = 10):
     pd.DataFrame(rows).to_csv(outdir / 'I_bound_hits_full.csv', index=False)
 
 
+# ----- ANALYSIS J: SCEUA TOP-100 PARAMETER RANGES ------------------------
+
+def plot_j_sceua_top100_param_ranges(outdir: Path, k: int = 100):
+    """J. For each catchment with SCEUA Q+snow+baseflow results, plot the
+    parameter-value distributions of the top-K (K=100) parameter sets by
+    composite objective. Cross-catchment comparison of where the
+    weighted-sum SCEUA puts each parameter.
+    """
+    import yaml
+    outdir.mkdir(parents=True, exist_ok=True)
+    with open('src/config/default_params.yaml') as f:
+        bounds = yaml.safe_load(f)['SPHY']
+    name_to_x = {v: k for k, v in bounds['names'].items() if not k.startswith('Sphy_')}
+
+    # Load SCEUA results per catchment
+    sceua = {}
+    for c in CATCHMENTS:
+        f = Path(f'/tmp/swiss_pareto/sceua_results_{c}.csv')
+        if f.exists():
+            sceua[c] = pd.read_csv(f)
+    if not sceua:
+        print("  No SCEUA results found — skipping J.")
+        return
+
+    # Find param columns from first SCEUA df
+    df0 = next(iter(sceua.values()))
+    param_cols = [c for c in df0.columns if c.startswith('Sphy_')]
+
+    # Per (catchment, param) collect top-K values
+    long_rows = []
+    for c, df in sceua.items():
+        topk = df.nlargest(k, 'objective')
+        for _, row in topk.iterrows():
+            for p in param_cols:
+                long_rows.append({'catchment': c, 'param': p, 'value': row[p]})
+    long = pd.DataFrame(long_rows)
+
+    # Boundary-hit metric per param: where does the top-K median fall vs bounds?
+    boundary_status = {}  # (catchment, param) -> 'lower' | 'upper' | 'interior'
+    for c, df in sceua.items():
+        topk = df.nlargest(k, 'objective')
+        for p in param_cols:
+            xname = name_to_x.get(p)
+            if not xname: continue
+            lo = bounds['lower'].get(xname); hi = bounds['upper'].get(xname)
+            if lo is None or hi is None: continue
+            span = hi - lo
+            if span == 0: continue
+            med = topk[p].median()
+            if (med - lo) / span < 0.05:
+                boundary_status[(c, p)] = 'lower'
+            elif (hi - med) / span < 0.05:
+                boundary_status[(c, p)] = 'upper'
+            else:
+                boundary_status[(c, p)] = 'interior'
+
+    # Sort params by spread across catchments (max - min of catchment-medians, normalized)
+    spreads = {}
+    for p in param_cols:
+        meds = [sceua[c].nlargest(k, 'objective')[p].median() for c in sceua]
+        vals = pd.concat([sceua[c].nlargest(k, 'objective')[p] for c in sceua])
+        full_range = max(vals.max() - vals.min(), 1e-12)
+        spreads[p] = (max(meds) - min(meds)) / full_range
+    ordered_params = sorted(param_cols, key=lambda p: -spreads[p])
+
+    n_params = len(ordered_params)
+    cols = 4
+    n_rows = (n_params + cols - 1) // cols
+    fig, axes = plt.subplots(n_rows, cols, figsize=(cols * 4.2, n_rows * 3.0))
+    axes = axes.flatten()
+
+    catch_color = {'2268': '#1f77b4', '2256': '#ff7f0e', '2161': '#2ca02c'}
+
+    for ax_i, p in enumerate(ordered_params):
+        ax = axes[ax_i]
+        positions = []
+        labels_x = []
+        box_data = []
+        box_colors = []
+        for ci, c in enumerate(sceua.keys()):
+            vals = long[(long.catchment == c) & (long.param == p)].value.values
+            positions.append(ci)
+            labels_x.append(c)
+            box_data.append(vals)
+            status = boundary_status.get((c, p), 'interior')
+            box_colors.append('#c5504b' if status == 'upper' else
+                              '#4472c4' if status == 'lower' else
+                              catch_color[c])
+        bp = ax.boxplot(box_data, positions=positions, widths=0.5,
+                        patch_artist=True, showfliers=True,
+                        flierprops=dict(marker='.', markersize=2, alpha=0.4),
+                        medianprops=dict(color='black', lw=1.5))
+        for patch, col in zip(bp['boxes'], box_colors):
+            patch.set_facecolor(col); patch.set_alpha(0.55)
+
+        # Overlay parameter bounds as horizontal lines
+        xname = name_to_x.get(p)
+        if xname:
+            lo = bounds['lower'].get(xname); hi = bounds['upper'].get(xname)
+            if lo is not None:
+                ax.axhline(lo, color='red', ls=':', lw=0.8, alpha=0.6)
+            if hi is not None:
+                ax.axhline(hi, color='red', ls=':', lw=0.8, alpha=0.6)
+
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels_x)
+        ax.set_title(f"{p.replace('Sphy_', '')}", fontsize=10)
+        ax.grid(axis='y', alpha=0.3)
+
+    for j in range(n_params, len(axes)):
+        axes[j].axis('off')
+
+    legend_elems = [
+        Patch(facecolor=catch_color['2268'], alpha=0.55, label='2268 (interior)'),
+        Patch(facecolor=catch_color['2256'], alpha=0.55, label='2256 (interior)'),
+        Patch(facecolor=catch_color['2161'], alpha=0.55, label='2161 (interior)'),
+        Patch(facecolor='#c5504b', alpha=0.55, label='hits UPPER bound'),
+        Patch(facecolor='#4472c4', alpha=0.55, label='hits LOWER bound'),
+        plt.Line2D([0], [0], color='red', ls=':', label='parameter bounds'),
+    ]
+    fig.legend(handles=legend_elems, loc='lower center', ncol=6,
+               bbox_to_anchor=(0.5, -0.02), fontsize=9)
+    fig.suptitle(f'J. SCEUA weighted-sum top-{k} parameter distributions per catchment\n'
+                 '(Q+snow+baseflow with weights 0.4/0.3/0.3; sorted by cross-catchment median spread)',
+                 fontsize=12, y=0.995)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.97])
+
+    fp = outdir / 'J_sceua_top100_param_ranges.png'
+    plt.savefig(fp, dpi=120, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved {fp}")
+
+
 # ----- ANALYSIS F: SCEUA VS NSGAII ----------------------------------------
 
 def plot_f_sceua_vs_nsgaii(outdir: Path):
@@ -741,6 +874,9 @@ def main():
 
     print("\n=== Plot I: parameter-bound hits per strategy ===")
     plot_i_bound_hits(per_catchment_pareto, outdir, k=10)
+
+    print("\n=== Plot J: SCEUA top-100 parameter ranges per catchment ===")
+    plot_j_sceua_top100_param_ranges(outdir, k=100)
 
     print("\n=== Plot F: SCEUA vs NSGAII ===")
     plot_f_sceua_vs_nsgaii(outdir)
