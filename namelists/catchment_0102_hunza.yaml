@@ -30,7 +30,20 @@ warmup:
   method: 'cycle'
   cycle_years: 10
 
-precip_correction: true
+# ── Forcing (paper-5 Phase 1) ────────────────────────────────────────────
+# Temperature: ERA5-Land (default meteo_source).
+# Precipitation: TPHiPr (Yang et al. 2023) — ML-bias-corrected ERA5 over HMA;
+# the published bias-correction for ERA5's high-elevation underestimation in
+# the Tibetan Plateau / surrounding ranges. Matches Huang et al. 2026 Pamir
+# SPHY setup directly.
+precip_source: 'TPHiPr'
+lapse_rate_precip_source: 'TPHiPr'
+
+# In-model precip multiplier (Cx) is OFF — bias correction is done in the
+# input data (TPHiPr) rather than as a free calibration parameter. Avoids
+# the well-known Cx × melt-factor identifiability issue and keeps the
+# structural comparison uncontaminated by forcing tuning.
+precip_correction: false
 
 models:
   - SPHY

@@ -32,7 +32,17 @@ warmup:
   method: 'cycle'
   cycle_years: 10
 
-precip_correction: true
+# ── Forcing (paper-5 Phase 1) ────────────────────────────────────────────
+# Temperature: ERA5-Land (default meteo_source).
+# Precipitation: TPHiPr (Yang et al. 2023) — ML-bias-corrected ERA5 over HMA;
+# matches Huang 2026 Pamir SPHY setup directly. See catchment_0102_hunza.yaml
+# header for full rationale.
+precip_source: 'TPHiPr'
+lapse_rate_precip_source: 'TPHiPr'
+
+# In-model precip multiplier (Cx) OFF — bias correction lives in the input
+# data, not as a free calibration parameter.
+precip_correction: false
 
 models:
   - SPHY

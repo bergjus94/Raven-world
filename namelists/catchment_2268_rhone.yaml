@@ -27,7 +27,14 @@ warm_up_date: '1990-01-01'
 warmup:
   method: 'real'
 
-precip_correction: true
+# ── Forcing (paper-5 Phase 1) ────────────────────────────────────────────
+# Swiss alpine catchment — MeteoSwiss gridded products (RhiresD precip +
+# TabsD temperature) instead of ERA5-Land. See catchment_2161_massa.yaml
+# header for full rationale.
+meteo_source: 'MeteoSwiss'
+
+# In-model precip multiplier (Cx) OFF — MeteoSwiss is already gauge-anchored.
+precip_correction: false
 
 models:
   - SPHY

@@ -91,6 +91,38 @@ forcing still pending; Phase-1 expansion when ready.
 
 ---
 
+## 4b. Forcing data [LOCKED 2026-06-01]
+
+Each region uses the **highest-quality bias-corrected precipitation
+product available for its domain**. Glacier forcing is GloGEM (regional)
+across all catchments.
+
+| Region | meteo_source | precip_source | Rationale |
+|---|---|---|---|
+| **UIB (Hunza, Chenab)** | ERA5-Land (temp) | **TPHiPr** (Yang et al. 2023) | Published ML-bias-corrected precip for HMA addressing ERA5's high-elevation underestimation. Matches Huang et al. 2026 Pamir SPHY setup directly. TPHiPr coverage 25.75–41.35°N, 61.05–105.65°E. |
+| **Swiss (Massa, Rosegbach, Rhone)** | **MeteoSwiss** (RhiresD + TabsD) | (MeteoSwiss) | Gauge-anchored Swiss-specific gridded products (~1 km); peer-reviewed and routine in Swiss alpine hydrology. TPHiPr does not cover Switzerland; ERA5-Land is inferior to MeteoSwiss for this domain. |
+
+**In-model precipitation multiplier (`precip_correction: false` everywhere):**
+The bias correction lives in the input data (TPHiPr / MeteoSwiss), not as a
+free calibration parameter. Reasoning:
+
+1. **Identifiability:** an in-model Cx couples tightly with melt factor
+   (X02) and HBV-β (X05) — adding it as a free parameter introduces
+   weakly-identifiable degrees of freedom that absorb model deficiencies.
+2. **Structural attribution:** the paper compares structures; Cx as a free
+   parameter lets each structure "tune away" its weaknesses via forcing,
+   confounding the structural test.
+3. **Literature match:** Huang 2026 uses TPHiPr without an additional
+   in-model Cx; we match that convention.
+
+Note: the SPHY `default_params.yaml` block does not define an X19/X20/X21
+rain-correction entry (the legacy `preprocess_SPHY.py` lookup was looking
+for X20/X21 that don't exist for the SPHY model, so `:RainCorrection 1.0`
+was being written regardless of namelist flag). Setting
+`precip_correction: false` makes this explicit and correct.
+
+---
+
 ## 5. Calibration setup [LOCKED]
 
 | Item | Choice |
