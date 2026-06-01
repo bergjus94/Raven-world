@@ -1803,13 +1803,19 @@ class RavenSCEUA(object):
                     ":FixedConcentration GLACIERMELT_ALL GLACIER 1.0\n",
                 ]
             
-            # Find the #Output Options line and insert everything after it
+            # Find the #Output Options line and insert everything after it.
+            # Also strip the :DontWriteWatershedStorage suppressor so the final
+            # best-params run actually writes WatershedStorage.csv (kept off
+            # during calibration iterations to avoid thousands of redundant
+            # writes, but useful as a diagnostic after the single final run).
             new_lines = []
             output_found = False
-            
+
             for line in lines:
+                if ':DontWriteWatershedStorage' in line:
+                    continue
                 new_lines.append(line)
-                
+
                 # Check if this is the #Output Options line
                 if '#Output Options' in line and not output_found:
                     output_found = True
