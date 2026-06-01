@@ -80,14 +80,21 @@ def load_q_daily(rvt_path: Path) -> pd.Series:
     return s.dropna()
 
 
-def apply_filters(q: pd.Series) -> dict:
+def apply_filters(q: pd.Series, eckhardt_bfi_max: float = 0.95) -> dict:
     """Apply all available baseflow separation methods to the Q series.
+
+    For Eckhardt, BFI_max defaults to 0.95 — appropriate for cold high-
+    mountain catchments where winter Q is essentially all baseflow. The
+    library default of 0.50 (ephemeral streams with porous aquifers,
+    Eckhardt 2005) structurally caps the baseflow estimate at 50% of total
+    Q, which is inappropriate for our regime. See plot title for the value
+    actually used.
 
     Returns dict of filter_name → baseflow Series.
     """
     sep = BaseflowSeparator(q)
     out = {
-        'Eckhardt':       sep.eckhardt(),
+        f'Eckhardt (BFI_max={eckhardt_bfi_max})': sep.eckhardt(BFI_max=eckhardt_bfi_max),
         'Lyne-Hollick':   sep.lyne_hollick(),
         'Sliding-Min':    sep.sliding_minimum(window_days=5),
     }
@@ -128,7 +135,9 @@ def plot_catchment_comparison(catch: str, q: pd.Series, baseflow: dict,
     ax_stats = fig.add_subplot(gs[2, 0]); ax_stats.axis('off')
     ax_bfi = fig.add_subplot(gs[2, 1])
 
-    colors = {'Raw winter Q': '#222', 'Eckhardt': '#1f77b4', 'Lyne-Hollick': '#ff7f0e',
+    # Identify the Eckhardt key (it includes the BFI_max value)
+    eckhardt_key = next(k for k in baseflow if k.startswith('Eckhardt'))
+    colors = {'Raw winter Q': '#222', eckhardt_key: '#1f77b4', 'Lyne-Hollick': '#ff7f0e',
               'Sliding-Min': '#2ca02c'}
 
     # Top: full time series
@@ -213,7 +222,8 @@ def plot_catchment_comparison(catch: str, q: pd.Series, baseflow: dict,
 
 def plot_cross_catchment_summary(all_stats: dict, outdir: Path):
     """Heatmap: rows = catchments, cols = filter methods, color = ratio to raw winter Q."""
-    methods = ['Raw winter Q', 'Eckhardt', 'Lyne-Hollick', 'Sliding-Min']
+    # Take the method names from the first catchment's stats
+    methods = list(next(iter(all_stats.values())).method.values)
     matrix_ratio = np.zeros((len(CATCHMENTS), len(methods)))
     matrix_bfi = np.zeros((len(CATCHMENTS), len(methods)))
     catch_labels = []
@@ -295,6 +305,40 @@ def main():
     if len(all_stats) >= 2:
         fp = plot_cross_catchment_summary(all_stats, args.outdir)
         print(f'\nCross-catchment summary: {fp}')
+
+    # BFI_max sensitivity — separate plot
+    print('\nBFI_max sensitivity for Eckhardt filter:')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bfi_vals = [0.50, 0.70, 0.80, 0.90, 0.95, 0.99]
+    catch_colors = {'2268': '#1f77b4', '2256': '#ff7f0e',
+                    '2161': '#2ca02c', '0102': '#d62728'}
+    for c, name in CATCHMENTS.items():
+        rvt = args.q_dir / f'Q_daily_{c}.rvt'
+        if not rvt.exists():
+            continue
+        q = load_q_daily(rvt)
+        sep = BaseflowSeparator(q)
+        q_winter = q[q.index.month.isin(window)]
+        raw_mean = q_winter.mean()
+        ratios = []
+        for bm in bfi_vals:
+            bf = sep.eckhardt(BFI_max=bm)
+            bf_winter = bf[bf.index.month.isin(window)]
+            ratios.append(bf_winter.mean() / raw_mean)
+        ax.plot(bfi_vals, ratios, marker='o', label=f'{c} {name}', color=catch_colors[c], lw=2)
+    ax.axhline(1.0, color='black', ls='--', alpha=0.5, label='Raw winter Q (= 1.0)')
+    ax.axvline(0.50, color='red', ls=':', alpha=0.5, label='Library default (0.50)')
+    ax.axvline(0.95, color='green', ls=':', alpha=0.5, label='Recommended for cold catchments (0.95)')
+    ax.set_xlabel('Eckhardt BFI_max parameter')
+    ax.set_ylabel('Eckhardt winter baseflow / raw winter Q')
+    ax.set_title('Eckhardt-filter sensitivity to BFI_max\n'
+                 '(default 0.50 caps baseflow at 50% — inappropriate for cold high-mountain catchments)')
+    ax.legend(fontsize=9, loc='lower right')
+    ax.grid(alpha=0.3)
+    fp = args.outdir / 'baseflow_eckhardt_bfimax_sensitivity.png'
+    plt.savefig(fp, dpi=130, bbox_inches='tight')
+    plt.close()
+    print(f'  Saved {fp}')
 
     # Combined CSV
     rows = []
