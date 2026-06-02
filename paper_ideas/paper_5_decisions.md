@@ -78,13 +78,20 @@ after gating optional parameters via `default_params.yaml` conditions.
 
 ## 4. Catchments
 
-| ID | Name | Region | Sim period | Cali period | Warm-up |
-|---|---|---|---|---|---|
-| **0102** | Hunza @ Dainyor | UIB monsoon-influenced | 1980–2014 | 1980–1999 | 10-yr cycle from 1980–1989 |
-| **0130** | Chenab @ Tandi | UIB lower-elevation monsoon | 1980–2019 | 1980–2002 | 10-yr cycle from 1980–1989 |
-| **2161** | Massa @ Blatten | Swiss alpine, heavily glacierized (Aletsch) | 2000–2020 | 2000–2010 | Real 1990–1999 |
-| **2256** | Rosegbach @ Pontresina | Swiss alpine, moderate | 2000–2020 | 2000–2010 | Real 1990–1999 |
-| **2268** | Rhone @ Gletsch | Swiss alpine, small/steep | 2000–2020 | 2000–2010 | Real 1990–1999 |
+| ID | Name | Region | Area km² | Sim period | Cali period | Warm-up |
+|---|---|---|---|---|---|---|
+| **0102** | Hunza @ Dainyor | UIB monsoon-influenced | ~14000 | 1980–2014 | 1980–1999 | 10-yr cycle from 1980–1989 |
+| **0130** | Chenab @ Tandi | UIB lower-elevation monsoon | ~22000 | 1980–2019 | 1980–2002 | 10-yr cycle from 1980–1989 |
+| **2161** | Massa @ Blatten | Swiss alpine, heavily glacierized (Aletsch) | 412 | 2000–2020 | 2000–2010 | Real 1990–1999 |
+| **2200** | Weisse Lütschine @ Zweilütschinen | Swiss alpine, Bernese (Jungfrau drainage) | 349 | 2000–2020 | 2000–2010 | Real 1990–1999 |
+| **2219** | Simme @ Oberried-Lenk | Swiss alpine, Bernese (Plaine Morte glacier) | 73 | 2000–2020 | 2000–2010 | Real 1990–1999 |
+| **2256** | Rosegbach @ Pontresina | Swiss alpine, Engadine | 140 | 2000–2020 | 2000–2010 | Real 1990–1999 |
+| **2268** | Rhone @ Gletsch | Swiss alpine, small/steep Rhone headwater | 84 | 2000–2020 | 2000–2010 | Real 1990–1999 |
+| **2269** | Lonza @ Blatten | Swiss alpine, Lötschental (Langgletscher) | 163 | 2000–2020 | 2000–2010 | Real 1990–1999 |
+
+**6 Swiss alpine catchments** (Massa, Weisse Lütschine, Simme, Rosegbach, Rhone, Lonza) spanning ~73-412 km² across the Valais (2161, 2268, 2269), Bernese (2200, 2219), and Engadine (2256) sub-regions; gives a robust regional sample for the alpine regime claim.
+
+**2 UIB catchments** (Hunza, Chenab) — large monsoon-influenced HMA basins.
 
 **Nepal catchments:** prerequisite delineation + gauge data + GloGEM
 forcing still pending; Phase-1 expansion when ready.

@@ -1,0 +1,80 @@
+# =============================================================================
+# Paper 5 — Weisse Lütschine @ Zweilütschinen (2200) — NSGAII Pareto on 9 structures
+# =============================================================================
+# Swiss alpine catchment (~349 km²), Bernese Oberland. Drains the Jungfrau /
+# Mönch / Eiger glacier complex on the south side. Moderate-to-heavy
+# glaciation. Mid-large Swiss catchment, complements the smaller Lonza (~163)
+# and Rhone (~84) and the smaller-headwater Massa (~412) by sitting in a
+# completely different alpine sub-region (Bernese vs Valais).
+#
+# Methodology (paper_5_methodology.md / paper_5_decisions.md):
+#   §4    — nine subsurface structures S1-S9 (3×3 factorial)
+#   §4b   — forcing: MeteoSwiss RhiresD + TabsD; precip_correction OFF
+#   §12.4 — snow metric: nRMSE
+#   §12.6 — baseflow window: deep_winter (DJF)
+#   §12.7 — baseflow filter: raw_winter
+#   §12.8 — metrics: KGE_NP for Q + baseflow; nRMSE for snow
+#
+# Budget: NSGAII 10000 iter × 50 pop = 200 generations. ~30h wall clock
+# (mid-large Swiss catchment; expect ~15-20s per iter).
+# =============================================================================
+
+catchment: '2200'
+display_name: 'Weisse Lütschine @ Zweilütschinen'
+region: 'switzerland'
+
+start_date: '2000-01-01'
+end_date: '2020-12-31'
+cali_end_date: '2010-12-31'
+warm_up_date: '1990-01-01'
+
+warmup:
+  method: 'real'
+
+# ── Forcing (paper-5 Phase 1) ────────────────────────────────────────────
+# Swiss alpine catchment — MeteoSwiss gridded products (RhiresD precip +
+# TabsD temperature) instead of ERA5-Land. See catchment_2161_massa.yaml
+# header for full rationale.
+meteo_source: 'MeteoSwiss'
+
+# In-model precip multiplier (Cx) OFF — MeteoSwiss is already gauge-anchored.
+precip_correction: false
+
+models:
+  - SPHY
+
+configurations:
+  - glogem_subdaily_opt1                              # S1 — baseline (HBV-linear, no glacier-GW)
+  - glogem_subdaily_opt1_glaciergw                    # S2 — + glacier→SLOW
+  - glogem_subdaily_opt1_threshold                    # S3 — + HBV-Light Q0 threshold
+  - glogem_subdaily_opt1_threshold_glaciergw          # S4 — threshold + glacier→SLOW
+  - glogem_subdaily_opt2_sphy_faithful                # S5 — SPHY-faithful architecture
+  - glogem_subdaily_opt2_sphy_faithful_glaciergw      # S6 — SPHY-faithful + glacier→SLOW
+  - glogem_subdaily_opt1_glaciergw_fast               # S7 — S2 mirror, glacier→FAST
+  - glogem_subdaily_opt1_threshold_glaciergw_fast     # S8 — S4 mirror, glacier→FAST
+  - glogem_subdaily_opt2_sphy_faithful_glaciergw_fast # S9 — S6 mirror, glacier→FAST
+
+calibration:
+  metrics: ['paper5_pareto']
+
+  algorithm: NSGAII
+  iterations: 10000
+  n_pop: 50
+
+  objectives: [Q, snow, baseflow]
+  Q:
+    metric: KGE_NP
+  snow:
+    metric: nRMSE
+    aggregation: elevation_band
+    band_width_m: 100
+    min_pixels_per_band: 5
+    band_aggregation: area_weighted_mean
+    cloud_threshold: 0.5
+  baseflow:
+    metric: KGE_NP
+    method: raw_winter
+    window: deep_winter
+
+future:
+  enabled: false
