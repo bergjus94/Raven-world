@@ -505,8 +505,9 @@ def main() -> int:
                         default=Path.home() / 'Raven_world' / 'model_runs',
                         help='model_runs root. Defaults to ~/Raven_world/model_runs.')
     parser.add_argument('--outdir', type=Path,
-                        default=Path('/tmp/pareto_sensitivity'),
-                        help='Output directory for CSVs + plots')
+                        default=None,
+                        help='Output directory for CSVs + plots. '
+                             'Default: <repo>/plots/pareto_sensitivity/<catchment>/')
     parser.add_argument('--n-bins', type=int, default=10,
                         help='PAWN conditional-bin count (Pianosi recommends 10)')
     parser.add_argument('--plot', action='store_true',
@@ -519,7 +520,12 @@ def main() -> int:
                              'Heavier output — adds 1 PNG per structure.')
     args = parser.parse_args()
 
+    # Default outdir: <repo>/plots/pareto_sensitivity/<catchment>/
+    if args.outdir is None:
+        repo_root = Path(__file__).resolve().parent.parent
+        args.outdir = repo_root / 'plots' / 'pareto_sensitivity' / args.catchment
     args.outdir.mkdir(parents=True, exist_ok=True)
+    print(f'Output directory: {args.outdir}')
 
     # Load parameter bounds for range_frac normalisation
     bounds = {}
