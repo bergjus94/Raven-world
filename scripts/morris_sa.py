@@ -215,7 +215,13 @@ def analyze_and_plot(problem: dict, results_df: pd.DataFrame,
                 'mu_star_conf': float(ci),
             })
 
-    fig.suptitle(f'Morris SA — {catchment} / {structure}\n'
+    # Pull the two-letter code from paper5_common if recognised, fall back to config key.
+    try:
+        from paper5_common import config_to_label as _ctl
+        s_label = _ctl(structure)
+    except Exception:
+        s_label = structure
+    fig.suptitle(f'Morris SA — {catchment} / {s_label} ({structure})\n'
                   f'r={n_trajectories} trajectories, levels={num_levels}',
                   fontsize=11, y=1.02)
     fig.tight_layout()
@@ -233,8 +239,7 @@ def main() -> int:
     parser.add_argument('--namelist', type=Path, required=True,
                         help='Paper-5 namelist YAML')
     parser.add_argument('--structure', type=str, required=True,
-                        help='Configuration layer name '
-                             '(e.g. glogem_subdaily_opt1 for S1)')
+                        help='Configuration layer name (e.g. glogem_subdaily_opt1 for S1/LN)')
     parser.add_argument('--n-trajectories', '-r', type=int, default=20,
                         help='Number of Morris trajectories (default 20). '
                              'Total runs = r × (k+1) where k = num params.')

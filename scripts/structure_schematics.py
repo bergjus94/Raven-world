@@ -80,30 +80,29 @@ def base_schematic(ax, struct_key):
     for name in BOXES:
         draw_box(ax, name)
 
-    # Header / structure name
-    cfg_map = {
-        'S1': 'glogem_subdaily_opt1   (HBV-linear, no glacier-GW)',
-        'S2': 'glogem_subdaily_opt1_glaciergw   (HBV-linear + glacier→GW)',
-        'S3': 'glogem_subdaily_opt1_threshold   (HBV-Light Q0+Q1, no glacier-GW)',
-        'S4': 'glogem_subdaily_opt1_threshold_glaciergw   (threshold + glacier→GW)',
-        'S5': 'glogem_subdaily_opt2_sphy_faithful   (SPHY-faithful, no glacier-GW)',
-        'S6': 'glogem_subdaily_opt2_sphy_faithful_glaciergw   (SPHY-faithful + glacier→GW)',
-    }
-    ax.text(5.0, 9.85, f"Structure {struct_key}", fontsize=14, weight='bold',
-            ha='center', va='center')
-    ax.text(5.0, 8.95, cfg_map[struct_key], fontsize=9, ha='center', va='center',
-            family='monospace', color='#555')
+    # Header / structure name — pull from paper5_common single source of truth
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from paper5_common import STRUCTURE_INFO as _SI
+    s = _SI[struct_key]
+    ax.text(5.0, 9.85,
+            f"{s['two_letter']} ({s['s_code']}) — {s['description']}",
+            fontsize=13, weight='bold', ha='center', va='center')
+    ax.text(5.0, 8.95, f"{s['config_key']}.yaml",
+            fontsize=9, ha='center', va='center', family='monospace', color='#555')
 
     # Color codes for "vs S1" change classification
     BLACK = '#222'   # standard process
     RED   = '#cc4422'  # NEW vs S1
     GRAY  = '#bbbbbb'  # REMOVED vs S1 (drawn faded)
 
-    # Per-structure config flags
-    perc_opt2 = struct_key in ('S5', 'S6')
-    glacier_split = struct_key in ('S2', 'S4', 'S6')
-    threshold_rel = struct_key in ('S3', 'S4')
-    direct_route  = struct_key in ('S5', 'S6')
+    # Per-structure config flags — derive from the central registry's axis codes
+    perc_opt2     = s['architecture'] == 'O'           # Overland (S5/S6/S9) uses opt2
+    threshold_rel = s['architecture'] == 'T'           # Threshold (S3/S4/S8) adds BASE_THRESH_STOR
+    direct_route  = s['architecture'] == 'O'           # Overland uses direct land-surface routing
+    glacier_split_slow = s['connection'] == 'S'        # S2/S4/S6
+    glacier_split_fast = s['connection'] == 'F'        # S7/S8/S9
+    glacier_split = glacier_split_slow or glacier_split_fast
 
     # =============== LAND HRU PATH (left side) ===============
 
@@ -163,17 +162,27 @@ def base_schematic(ax, struct_key):
                 fontsize=8, ha='center', color='#cc4422',
                 arrowprops=dict(arrowstyle='-|>', color='#cc4422', lw=1.6))
 
-    # PONDED_G → SURFACE / SLOW (glacier routing)
-    if glacier_split:
-        # S2/S4/S6: :Split GlacROF·SURFACE + (1-GlacROF)·SLOW_RES
+    # PONDED_G → SURFACE / SLOW / FAST  (glacier routing)
+    if glacier_split_slow:
+        # S2/S4/S6: :Split target = SLOW_RES
         draw_arrow(ax, 'PONDED_G', 'SURF',
                    label=':Split\nGlacROF·SURFACE\n(X16)',
                    color=RED, offset_from=(-0.5, -0.1), offset_to=(0.4, 0.25),
                    curve=-0.15, label_offset=(-1.8, 0.4), fontsize=7.5)
         draw_arrow(ax, 'PONDED_G', 'SLOW',
-                   label=':Split\n(1−GlacROF)·SLOW_RES\n(X16) — glacier→GW',
+                   label=':Split\n(1−GlacROF)·SLOW_RES\n(X16) — glacier→SLOW',
                    color=RED, offset_from=(-0.6, -0.25), offset_to=(0.7, 0.45),
                    curve=-0.25, label_offset=(0.4, 1.5), fontsize=7.5)
+    elif glacier_split_fast:
+        # S7/S8/S9: :Split target = FAST_RES (mirror of slow variants)
+        draw_arrow(ax, 'PONDED_G', 'SURF',
+                   label=':Split\nGlacROF·SURFACE\n(X16)',
+                   color=RED, offset_from=(-0.5, -0.1), offset_to=(0.4, 0.25),
+                   curve=-0.15, label_offset=(-1.8, 0.4), fontsize=7.5)
+        draw_arrow(ax, 'PONDED_G', 'FAST',
+                   label=':Split\n(1−GlacROF)·FAST_RES\n(X16) — glacier→FAST',
+                   color=RED, offset_from=(-0.6, -0.15), offset_to=(0.7, 0.55),
+                   curve=-0.30, label_offset=(0.4, 1.3), fontsize=7.5)
     else:
         # S1/S3/S5: 100% to SURFACE_WATER (no :Split)
         draw_arrow(ax, 'PONDED_G', 'SURF',
@@ -221,27 +230,37 @@ def base_schematic(ax, struct_key):
 
 
 def main():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from paper5_common import STRUCTURE_ORDER, STRUCTURE_INFO
+
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--outdir', type=Path,
-                        default=Path('/tmp/cross_catchment_plots/structures'))
+                        default=Path(__file__).resolve().parent.parent /
+                                'plots' / 'structures',
+                        help='Output directory (default: <repo>/plots/structures/)')
     args = parser.parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
 
-    # Per-structure schematics
-    for key in ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']:
+    # Per-structure schematics — all 9
+    for key in STRUCTURE_ORDER:
+        s = STRUCTURE_INFO[key]
         fig, ax = plt.subplots(figsize=(13, 10))
         base_schematic(ax, key)
-        fp = args.outdir / f'{key}_schematic.png'
+        fp = args.outdir / f'{key}_{s["two_letter"]}_schematic.png'
         plt.savefig(fp, dpi=130, bbox_inches='tight')
         plt.close()
         print(f'  Saved {fp}')
 
-    # 6-panel overview
-    fig, axes = plt.subplots(2, 3, figsize=(36, 22))
-    for ax, key in zip(axes.flatten(), ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']):
+    # 3×3 overview — architecture × glacier-GW connection
+    fig, axes = plt.subplots(3, 3, figsize=(36, 30))
+    for ax, key in zip(axes.flatten(), STRUCTURE_ORDER):
         base_schematic(ax, key)
-    fig.tight_layout()
+    fig.suptitle('Paper 5 — subsurface structures '
+                 '(rows: Lumped / Threshold / Overland   |   cols: None / Slow / Fast)',
+                 fontsize=18, y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.99])
     fp = args.outdir / 'ALL_structures_schematic.png'
     plt.savefig(fp, dpi=110, bbox_inches='tight')
     plt.close()

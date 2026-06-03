@@ -38,17 +38,31 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
-CATCHMENTS = ['2268', '2256', '2161']
-LABELS = {'2268': 'Rhone @ Gletsch (2268)',
-          '2256': 'Rosegbach @ Pontresina (2256)',
-          '2161': 'Massa @ Aletsch (2161)'}
+# Paper-5 catchment + structure + metric metadata pulled from the central
+# scripts/paper5_common.py so renaming or extension stays in one place.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from paper5_common import (
+    CATCHMENT_INFO as _CI, CATCHMENT_ORDER as _CO,
+    METRIC_LABELS as _ML,
+    STRUCTURE_INFO as _SI, STRUCTURE_ORDER as _SO,
+)
+
+# All 8 paper-5 catchments (was only 2268/2256/2161 historically).
+CATCHMENTS = list(_CO)
+LABELS = {cid: f"{_CI[cid][0]} ({cid})" for cid in CATCHMENTS}
 OBJ_COLS = ['obj_Q', 'obj_snow', 'obj_baseflow']
-OBJ_LABELS = {'obj_Q': 'Q-KGE',
-              'obj_snow': '1−RMSE snow',
-              'obj_baseflow': 'baseflow KGE'}
+# Display labels reflect the locked metrics (KGE_NP for Q+baseflow, nRMSE for snow)
+OBJ_LABELS = dict(_ML)
 OBJ_COLORS = {'obj_Q': '#1f77b4',
               'obj_snow': '#2ca02c',
               'obj_baseflow': '#d62728'}
+
+# All 9 structures with new two-letter naming for compact display
+STRUCTURES_CANONICAL = _SO  # ['S1', ..., 'S9']
+STRUCTURE_LABEL = {s: _SI[s]['two_letter'] for s in _SO}  # 'S1' → 'LN', etc.
+STRUCTURE_CONFIG = {s: _SI[s]['config_key'] for s in _SO}
 
 # Default ε-constraint behavioral thresholds
 EPS_THRESHOLDS = {'obj_Q': 0.85, 'obj_snow': 0.50, 'obj_baseflow': 0.40}
@@ -947,8 +961,8 @@ def plot_f_sceua_vs_nsgaii(outdir: Path):
                        label='SCEUA single-best')
         ax.scatter(pareto_front.obj_Q, pareto_front.obj_baseflow,
                    alpha=0.7, s=12, color='orange', label=f'NSGAII Pareto front (n={len(pareto_front)})')
-        ax.set_xlabel('Q-KGE')
-        ax.set_ylabel('baseflow KGE')
+        ax.set_xlabel(OBJ_LABELS['obj_Q'])
+        ax.set_ylabel(OBJ_LABELS['obj_baseflow'])
         ax.set_title(f'{c}: search-space comparison — Q × baseflow')
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
@@ -961,9 +975,9 @@ def plot_f_sceua_vs_nsgaii(outdir: Path):
         nsgaii_full, _ = load_pareto(c)
         ax.hist(nsgaii_full.obj_Q, bins=40, alpha=0.5, color='orange',
                 density=True, label=f'NSGAII all evals (n={len(nsgaii_full)})')
-        ax.set_xlabel('Q-KGE')
+        ax.set_xlabel(OBJ_LABELS['obj_Q'])
         ax.set_ylabel('density')
-        ax.set_title(f'{c}: Q-KGE exploration histograms')
+        ax.set_title(f'{c}: {OBJ_LABELS["obj_Q"]} exploration histograms')
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
 

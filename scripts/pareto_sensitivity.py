@@ -45,19 +45,17 @@ from scipy.stats import ks_2samp, spearmanr
 OBJECTIVE_COLS = ['obj_Q', 'obj_snow', 'obj_baseflow']
 NON_PARAM_COLS = {*OBJECTIVE_COLS, 'timestamp'}
 
-# Map config keys to S1-S9 labels for compact display across plotting fns.
-STRUCTURE_ORDER = [
-    ('glogem_subdaily_opt1',                                'S1'),
-    ('glogem_subdaily_opt1_glaciergw',                      'S2'),
-    ('glogem_subdaily_opt1_threshold',                      'S3'),
-    ('glogem_subdaily_opt1_threshold_glaciergw',            'S4'),
-    ('glogem_subdaily_opt2_sphy_faithful',                  'S5'),
-    ('glogem_subdaily_opt2_sphy_faithful_glaciergw',        'S6'),
-    ('glogem_subdaily_opt1_glaciergw_fast',                 'S7'),
-    ('glogem_subdaily_opt1_threshold_glaciergw_fast',       'S8'),
-    ('glogem_subdaily_opt2_sphy_faithful_glaciergw_fast',   'S9'),
-]
-CONFIG_TO_LABEL = dict(STRUCTURE_ORDER)
+# Pull the structure naming + ordering from the shared paper-5 module so all
+# plotting scripts stay in sync (LN/LS/.../OF labels per paper_5_decisions.md §3).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from paper5_common import (  # noqa: E402
+    STRUCTURE_INFO as _SI,
+    CONFIG_TO_LABEL,
+    METRIC_LABELS,
+)
+# Build (config_key, two_letter_label) pairs in canonical S1→S9 order
+STRUCTURE_ORDER = [(_SI[s]['config_key'], _SI[s]['two_letter'])
+                    for s in ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9']]
 
 
 def load_param_bounds(params_yaml: Path, model: str = 'SPHY') -> dict:
