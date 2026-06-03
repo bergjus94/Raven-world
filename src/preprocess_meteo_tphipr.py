@@ -230,6 +230,26 @@ class TPHiPrAnalyzer(MeteoBase):
             self.logger.info(f"  Combined: {ds.time.min().values} to {ds.time.max().values} "
                              f"({len(ds.time)} days)")
 
+        # Sample DEM at each grid-cell centroid → add 'elevation' data variable.
+        # Without this, Raven's UpdateForcings.cpp:319 sets ref_elev = HRU_elev
+        # when the grid has no elevation field, making OROCORR_HBV's
+        # (HRU_elev − ref_elev) term identically zero. The data-derived
+        # HBVEC_LAPSE_RATE is then silently discarded for the lower zone
+        # (and only the upper-vs-lower differential is applied above the
+        # breakpoint). See model_structure_decisions.md §
+        # "Precipitation lapsing — data-derived approach".
+        try:
+            elev_da = self._sample_dem_for_grid(ds['prcp'], lat_dim, lon_dim)
+            ds['elevation'] = elev_da
+            self.logger.info(f"  ✅ Added 'elevation' data variable "
+                             f"(min={float(elev_da.min()):.0f}, "
+                             f"max={float(elev_da.max()):.0f} m)")
+        except Exception as e:
+            self.logger.warning(
+                f"  ⚠️ Could not add elevation to TPHiPr file: {e} — "
+                f"Raven OROCORR_HBV lower-zone term will be inert."
+            )
+
         # Metadata
         ds.attrs.update({
             'title': 'TPHiPr daily precipitation',
@@ -244,6 +264,8 @@ class TPHiPrAnalyzer(MeteoBase):
         encoding = {
             'prcp': {'zlib': True, 'complevel': 4, 'dtype': 'float32'},
         }
+        if 'elevation' in ds.data_vars:
+            encoding['elevation'] = {'zlib': True, 'complevel': 4, 'dtype': 'float32'}
         if lat_dim:
             encoding[lat_dim] = {'dtype': 'float64', '_FillValue': None}
         if lon_dim:
@@ -254,6 +276,72 @@ class TPHiPrAnalyzer(MeteoBase):
 
         self.logger.info("✅ Saved tphipr_precip.nc")
         return output_file
+
+    def _sample_dem_for_grid(self, da: xr.DataArray,
+                              lat_dim: str, lon_dim: str) -> xr.DataArray:
+        """Sample the catchment DEM at each precip grid cell centroid.
+
+        Returns a 2D (lat, lon) DataArray of elevation in metres, matching
+        the shape of ``da[time=0]``. Cells whose centroid falls outside the
+        DEM coverage get NaN — Raven will fall back to the HRU elevation for
+        those cells (i.e. no orographic adjustment for that cell).
+
+        Mirrors preprocess_lapse_rate._sample_dem_at_cells but preserves the
+        2D grid shape instead of flattening to valid-only points.
+        """
+        import rasterio
+        import rasterio.warp
+        from paths import get_paths
+
+        paths = get_paths(self.config)
+        # Prefer the variant-specific DEM if present, fall back to shared.
+        candidates = [
+            paths.get('topo_dir', Path('.')) / 'clipped_dem.tif',
+            paths.get('topo_shared_dir', Path('.')) / 'clipped_dem.tif',
+        ]
+        dem_path = next((p for p in candidates if Path(p).exists()), None)
+        if dem_path is None:
+            raise FileNotFoundError(
+                f"clipped_dem.tif not found under any of {candidates}"
+            )
+
+        lat = da[lat_dim].values
+        lon = da[lon_dim].values
+        if lat.ndim == 1 and lon.ndim == 1:
+            lon2d, lat2d = np.meshgrid(lon, lat)
+        else:
+            lon2d, lat2d = lon, lat
+
+        flat_lons = lon2d.ravel().tolist()
+        flat_lats = lat2d.ravel().tolist()
+
+        with rasterio.open(dem_path) as src:
+            xs, ys = rasterio.warp.transform(
+                'EPSG:4326', src.crs, flat_lons, flat_lats
+            )
+            samples = np.fromiter(
+                (v[0] for v in src.sample(zip(xs, ys))),
+                dtype=float, count=len(xs),
+            )
+
+        # Map sentinels / out-of-range to NaN
+        samples = np.where(
+            np.isfinite(samples) & (samples > -1e4) & (samples < 1e5),
+            samples, np.nan,
+        )
+        elev_2d = samples.reshape(lat2d.shape).astype(np.float32)
+
+        return xr.DataArray(
+            elev_2d,
+            dims=(lat_dim, lon_dim),
+            coords={lat_dim: da[lat_dim], lon_dim: da[lon_dim]},
+            attrs={
+                'units': 'm',
+                'long_name': 'DEM elevation at TPHiPr cell centroid',
+                'standard_name': 'surface_altitude',
+                'source': str(dem_path.name),
+            },
+        )
 
 
 #--------------------------------------------------------------------------------

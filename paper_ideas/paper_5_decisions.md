@@ -98,6 +98,37 @@ forcing still pending; Phase-1 expansion when ready.
 
 ---
 
+## 4a. Precipitation lapse rate — implementation note [2026-06-03]
+
+Lapse rate is applied via OROCORR_HBV with data-derived parameters
+(`HBVEC_LAPSE_RATE` / `_UPPER` / `_ELEV`) from a segmented regression of
+gridded precip vs DEM elevation. The regression itself is correct (see
+`preprocess_lapse_rate.py`).
+
+**Critical Raven detail:** for the lower-zone correction to actually
+apply, the gridded forcing NetCDF must carry an `elevation` data
+variable. If absent, `UpdateForcings.cpp:319` falls back to
+`ref_elev = HRU_elev`, which makes the `(HRU_elev − ref_elev)` factor in
+OROCORR_HBV (`OrographicCorrections.cpp:243`) identically zero. The
+lower-zone `HBVEC_LAPSE_RATE` is silently discarded; only the upper-zone
+*differential* `(HBVEC_LAPSE_UPPER − HBVEC_LAPSE_RATE)` is applied to
+HRUs above the breakpoint.
+
+**Status per source:**
+| Source | Elevation var in NetCDF? | OROCORR_HBV fully active? |
+|---|---|---|
+| MeteoSwiss (`prec_Meteoswiss.nc`) | ✅ yes (`elevation`) | ✅ yes |
+| TPHiPr (`tphipr_precip.nc`) | ✅ yes (added by `TPHiPrAnalyzer._sample_dem_for_grid`, commit 2026-06-03) | ✅ yes |
+
+**Historical note:** the in-flight wave-1 Hunza + Chenab Pareto runs
+(2026-06-01 launch) were calibrated against TPHiPr *without* the
+elevation variable, so for those runs only the upper-zone differential
+is active on HRUs above the breakpoint (5372 m for Hunza, 3114 m for
+Chenab). Those results are kept as a "no-lapse baseline" and will be
+re-run with the fix applied after the current Pareto finishes.
+
+---
+
 ## 4b. Forcing data [LOCKED 2026-06-01]
 
 Each region uses the **highest-quality bias-corrected precipitation

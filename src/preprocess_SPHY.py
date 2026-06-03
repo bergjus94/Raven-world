@@ -1174,11 +1174,14 @@ class SPHYProcessor:
 
         forcing_data = {}
 
-        # Rainfall forcing block (uses precip-specific weights and dim names)
-        # TPHiPr has no elevation variable (high-res product, no lapse correction needed)
-        precip_elev_line = ("    :ElevationVarNameNC   elevation"
-                            if self.config.get('precip_source', '').upper() != 'TPHIPR'
-                            else "    # No ElevationVarNameNC for TPHiPr (high-res gridded product)")
+        # Rainfall forcing block (uses precip-specific weights and dim names).
+        # All supported precip sources (ERA5-Land, MeteoSwiss, TPHiPr) now ship
+        # an 'elevation' data variable so Raven can compute the
+        # (HRU_elev − grid_elev) term in OROCORR_HBV. Without this, Raven
+        # falls back to ref_elev = HRU_elev (UpdateForcings.cpp:319), which
+        # silently zeros out the lower-zone HBVEC_LAPSE_RATE term.
+        # TPHiPr elevation is now written by TPHiPrAnalyzer._sample_dem_for_grid.
+        precip_elev_line = "    :ElevationVarNameNC   elevation"
         forcing_data['Rainfall'] = [
             f":GriddedForcing           Rainfall",
             f"    :ForcingType          RAINFALL",
