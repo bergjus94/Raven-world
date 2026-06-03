@@ -20,3 +20,6 @@ plots/
 
 # Local download caches (raw HDFs, etc. — regeneratable from source)
 downloads/cache/
+
+# Generated validation figures — regeneratable via scripts/validate_glacier_coverage.py
+outputs/glacier_validation/
