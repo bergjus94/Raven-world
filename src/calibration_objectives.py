@@ -396,13 +396,44 @@ def _load_raven_by_hru_csv(src: Path) -> pd.DataFrame:
     return df.set_index('date')
 
 
+def swe_to_fsca(swe_mm: Union[float, np.ndarray, pd.Series],
+                d_scale: float = 50.0) -> Union[float, np.ndarray, pd.Series]:
+    """Convert snow water equivalent (mm) to fractional snow cover area [0, 1].
+
+    Linear ramp: fSCA = min(SWE / d_scale, 1.0).
+
+    Why this is needed: Raven's `SNOW_FRAC` variable is the snowfall-fraction
+    *forcing* (controlled by RainSnow_Temp), and `SNOW_COVER` (the proper fSCA
+    state) is only updated by algorithms like SNOBAL_CEMA_NEIGE — our
+    SNOBAL_SIMPLE_MELT leaves it at zero. So we output the SWE state and
+    derive fSCA here.
+
+    The default d_scale=50 mm matches typical alpine depletion thresholds in
+    operational snow models (Liston 2004 family). A smaller value makes the
+    objective more sensitive to melt timing; a larger value smooths the
+    transition. d_scale is a structural parameter of the metric, not a
+    calibrated model parameter.
+
+    Parameters
+    ----------
+    swe_mm   : SWE in millimetres (any array-like).
+    d_scale  : depth (mm) above which fSCA saturates at 1.
+
+    Returns
+    -------
+    fSCA in [0, 1], same shape as input.
+    """
+    return np.minimum(swe_mm / float(d_scale), 1.0)
+
+
 def load_raven_snow_frac(
     output_dir: Union[str, Path],
     hru_areas: Dict[int, float],
     glacier_hrus: Optional[Iterable[int]] = None,
+    d_scale_mm: float = 50.0,
 ) -> pd.Series:
-    """Read Raven SNOW_FRAC BY_HRU and aggregate to basin-mean off-glacier
-    snow cover fraction.
+    """Read Raven SNOW BY_HRU (SWE), derive fSCA via ``swe_to_fsca``, and
+    aggregate to basin-mean off-glacier fractional snow cover.
 
     Parameters
     ----------
@@ -410,16 +441,28 @@ def load_raven_snow_frac(
     hru_areas    : dict HRU id (int) -> area_km2.
     glacier_hrus : optional set/list of HRU ids treated as glacier and
                    excluded from the basin mean.
+    d_scale_mm   : SWE saturation threshold for the depth-area function.
     """
     output_dir = Path(output_dir)
-    matches = sorted(output_dir.glob('*SNOW_FRAC*Daily_Average*ByHRU*.csv'))
+    # Match exact ..._SNOW_Daily_Average*ByHRU* — i.e. excludes SNOW_FRAC,
+    # SNOWFALL, SNOW_LIQ, etc.
+    matches = sorted(output_dir.glob('*_SNOW_Daily_Average*ByHRU*.csv'))
     if not matches:
         raise FileNotFoundError(
-            f"No SNOW_FRAC ByHRU CSV in {output_dir}.  "
-            "Make sure ':CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU' is in "
+            f"No SNOW ByHRU CSV in {output_dir}.  "
+            "Make sure ':CustomOutput DAILY AVERAGE SNOW BY_HRU' is in "
             "the .rvi during calibration."
         )
     df = _load_raven_by_hru_csv(matches[0])
+    # Convert SWE → fSCA in place on the HRU columns
+    drop_cols = {'time', 'hour', 'tag', 'HRU:'}
+    hru_cols_all = [c for c in df.columns if c not in drop_cols]
+    for c in hru_cols_all:
+        try:
+            int(c)
+        except (ValueError, TypeError):
+            continue
+        df[c] = swe_to_fsca(pd.to_numeric(df[c], errors='coerce'), d_scale_mm)
 
     # HRU columns are integer IDs; drop non-data columns.
     drop_cols = {'time', 'hour', 'tag', 'HRU:'}
@@ -453,22 +496,37 @@ def load_raven_snow_frac_per_band(
     hru_elevations: Dict[int, float],
     glacier_hrus: Optional[Iterable[int]] = None,
     band_width_m: int = 100,
+    d_scale_mm: float = 50.0,
 ) -> pd.DataFrame:
-    """Read Raven SNOW_FRAC BY_HRU and aggregate per elevation band.
+    """Read Raven SNOW BY_HRU (SWE), derive fSCA, aggregate per elevation band.
 
     Returns a DataFrame indexed by date, columns are band lower edges in
-    metres (int). Each cell is the area-weighted mean SNOW_FRAC over the
-    HRUs in that band (glacier HRUs excluded).
+    metres (int). Each cell is the area-weighted mean fSCA over the HRUs in
+    that band (glacier HRUs excluded). fSCA is derived from SWE via
+    ``swe_to_fsca`` because Raven's `SNOW_FRAC` is the snowfall-fraction
+    forcing, not fractional snow cover.
     """
     output_dir = Path(output_dir)
-    matches = sorted(output_dir.glob('*SNOW_FRAC*Daily_Average*ByHRU*.csv'))
+    # Match exact ..._SNOW_Daily_Average*ByHRU* — i.e. excludes SNOW_FRAC,
+    # SNOWFALL, SNOW_LIQ, etc.
+    matches = sorted(output_dir.glob('*_SNOW_Daily_Average*ByHRU*.csv'))
     if not matches:
         raise FileNotFoundError(
-            f"No SNOW_FRAC ByHRU CSV in {output_dir}.  "
-            "Make sure ':CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU' is in "
+            f"No SNOW ByHRU CSV in {output_dir}.  "
+            "Make sure ':CustomOutput DAILY AVERAGE SNOW BY_HRU' is in "
             "the .rvi during calibration."
         )
     df = _load_raven_by_hru_csv(matches[0])
+    # Convert SWE → fSCA in place on the HRU columns
+    drop_cols = {'time', 'hour', 'tag', 'HRU:'}
+    for c in df.columns:
+        if c in drop_cols:
+            continue
+        try:
+            int(c)
+        except (ValueError, TypeError):
+            continue
+        df[c] = swe_to_fsca(pd.to_numeric(df[c], errors='coerce'), d_scale_mm)
 
     drop_cols = {'time', 'hour', 'tag', 'HRU:'}
     glacier_set = {int(h) for h in (glacier_hrus or [])}

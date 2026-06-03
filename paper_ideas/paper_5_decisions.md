@@ -25,7 +25,7 @@ improve winter baseflow, and does the answer depend on climate regime?
 |---|---|---|
 | Architecture (A) | 3 — HBV-linear / HBV-threshold / SPHY-faithful | `perc_option` + `fast_reservoir_release` + `land_surface_routing` |
 | Glacier-GW destination (B) | 3 — no link / link to SLOW / link to FAST | `glacier_routing: none / split_to_slow / split_to_fast` |
-| Climate regime (C) | 3 — Swiss alpine / UIB monsoon-influenced / (Nepal pending) | Catchment selection |
+| Climate regime (C) | 3 — Swiss alpine / UIB arid / Eastern Himalaya monsoon (7 selected 2026-06-03, setup pending) | Catchment selection |
 
 Phase 1 runs the full **3 × 3 = 9 subsurface structures** on **5
 catchments** spanning **2 of the 3 regimes** (Nepal data still pending).
@@ -51,6 +51,20 @@ after gating optional parameters via `default_params.yaml` conditions.
 | **S7** | HBV-linear | FAST | `glogem_subdaily_opt1_glaciergw_fast` | 13 |
 | **S8** | HBV-threshold | FAST | `glogem_subdaily_opt1_threshold_glaciergw_fast` | 15 |
 | **S9** | SPHY-faithful | FAST | `glogem_subdaily_opt2_sphy_faithful_glaciergw_fast` | 15 |
+
+**Display naming [LOCKED 2026-06-03]** — for figures and text, structures use a
+two-letter code `[architecture][connection]` instead of S1–S9. Axis A
+(architecture): **L**umped / **T**hreshold / **O**verland. Axis B (glacier
+connection): **N**one / **S**low / **F**ast. Lineage is cited in prose only
+(Threshold → HBV-Light, Seibert & Vis 2012; Overland → SPHY, Terink 2015) — no
+"faithful" claims, since the model lacks SPHY's distributed flow-network routing
+and two-soil-layer structure (decided after reading Terink 2015).
+
+| Code | S-code | Code | S-code | Code | S-code |
+|---|---|---|---|---|---|
+| LN | S1 | LS | S2 | LF | S7 |
+| TN | S3 | TS | S4 | TF | S8 |
+| ON | S5 | OS | S6 | OF | S9 |
 
 **Architectural definitions:**
 - *HBV-linear* — single linear release K1 from FAST_RES; `:Flush`
@@ -93,8 +107,27 @@ after gating optional parameters via `default_params.yaml` conditions.
 
 **2 UIB catchments** (Hunza, Chenab) — large monsoon-influenced HMA basins.
 
-**Nepal catchments:** prerequisite delineation + gauge data + GloGEM
-forcing still pending; Phase-1 expansion when ready.
+**Eastern Himalaya (Ganges–Brahmaputra, monsoon) catchments [SELECTED 2026-06-03]:**
+7 gauged catchments, chosen for ≥10 yr post-2000 streamflow (MODIS era) + glacier
+cover, spanning a 4.9–31.7 % glacier gradient. Computed glacier fractions
+(catchment ∩ RGI `Ganges_glaciers`, EPSG:6933):
+
+| Stn | River @ location | Country | Area km² | Glacier % | Record |
+|---|---|---|---|---|---|
+| 4461 | Langtang Khola @ Langtang | Nepal | 314 | 31.7 | 1993–2020 |
+| 0647 | Tamakosi @ Busti | Nepal | 2934 | 11.5 | 1971–2020 |
+| 0670 | Dudh Koshi @ Rabuwabazar | Nepal | 3716 | 9.8 | 1964–2019 |
+| 0684 | Tamur @ Majhitar | Nepal | 4005 | 9.2 | 1996–2019 |
+| 0620 | Balephi @ Jalbire | Nepal | 620 | 8.6 | 1964–2018 |
+| 0610 | Bhotekosi @ Barabise | Nepal | 2366 | 8.1 | 1965–2012 |
+| 0201 | Puna Tsang Chu @ Wangdi Rapids | **Bhutan** | 5640 | 4.9 | 1988–2014 |
+
+Delineated outlines: `OneDrive/Raven_worldwide/01_data/topo/catchment_shapefile/catchments_Ganges/Ganges_selected_catchments.shp`.
+Daily discharge (DFL_*.txt) in `OneDrive/Data_collection_Himalaya/streamflow/Nepal/Nepal_daily_discharge`.
+Still pending (prerequisite work before Phase-1 runs): per-catchment forcing
+(ERA5-Land + TPHiPr coverage check), GloGEM for these glaciers, MODIS fSCA,
+streamflow → .rvt, Raven model setup. Record window is nominal (to − from);
+actual gap-free coverage to be verified from the DFL files.
 
 ---
 
@@ -126,6 +159,49 @@ elevation variable, so for those runs only the upper-zone differential
 is active on HRUs above the breakpoint (5372 m for Hunza, 3114 m for
 Chenab). Those results are kept as a "no-lapse baseline" and will be
 re-run with the fix applied after the current Pareto finishes.
+
+---
+
+## 4c. Snow objective — fSCA derived from SWE [2026-06-03]
+
+**The bug.** The original snow objective used `:CustomOutput SNOW_FRAC BY_HRU`
+on the assumption that `SNOW_FRAC` was fractional snow-cover area. It is not —
+`SNOW_FRAC` is the *snowfall fraction* forcing (fraction of precip falling as
+snow, controlled solely by RainSnow_Temp). The proper state variable is
+`SNOW_COVER`, but `SNOBAL_SIMPLE_MELT` does not update it (verified by reading
+`SnowBalance.cpp` and confirmed empirically: Raven silently skips the
+`:CustomOutput SNOW_COVER` directive).
+
+All three SA methods detected the issue: snow obj had only **4 distinct values
+across 260 Morris samples**, Sphy_RainSnow_Temp Spearman correlation =
+**+1.000** to obj_snow in the NSGAII Pareto.
+
+**The fix [commit 2026-06-03].** Output the `SNOW` state (SWE, mm) and derive
+fSCA externally via a linear depth–area function:
+
+```
+fSCA = min(SWE / D_scale, 1.0),    D_scale = 50 mm
+```
+
+`D_scale` is a structural hyperparameter of the metric, fixed (Liston 2004
+alpine typical) not calibrated. Implementation in
+`calibration_objectives.swe_to_fsca`. `load_raven_snow_frac` and
+`load_raven_snow_frac_per_band` now read the SNOW CSV;
+`spotpy_optimize._inject_snow_output_in_rvi` injects `:CustomOutput SNOW`.
+
+**Verification** — Rhone, default params except Melt_Factor swept:
+
+| Melt_Factor | obj_Q | obj_snow BEFORE | obj_snow AFTER |
+|---|---|---|---|
+| 3.0 | 0.9143 | 0.4073 | **0.6578** |
+| 5.5 | 0.9115 | 0.4073 | **0.5549** |
+| 8.0 | 0.9011 | 0.4073 | **0.4989** |
+
+Range 0.169 across Melt_Factor (was 0.000).
+
+**Implications.** All in-flight wave-1v3 (Hunza, Chenab), wave-2 (Rosegbach),
+and queued wave-3 runs were calibrating against the broken signal and must be
+re-launched.
 
 ---
 
@@ -302,7 +378,8 @@ but enough to discuss.
 - 2161 Massa
 - 2256 Rosegbach
 
-**Nepal** — blocked on data. Add when prerequisites resolved.
+**Eastern Himalaya (monsoon)** — 7 catchments selected 2026-06-03 (see §4); model
+setup (forcing, GloGEM, MODIS, .rvt) still to be built before Phase-1 runs.
 
 ---
 

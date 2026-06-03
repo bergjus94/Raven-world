@@ -281,8 +281,17 @@ class RavenSCEUA(object):
             print(f"  weights:    {self.weights}")
 
     def _inject_snow_output_in_rvi(self):
-        """Ensure ``:CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU`` is present
-        in the calibration .rvi so the snow objective can read it each iter.
+        """Ensure ``:CustomOutput DAILY AVERAGE SNOW BY_HRU`` is present in
+        the calibration .rvi so the snow objective can derive fSCA from SWE
+        each iter.
+
+        **Why SNOW (SWE) and not SNOW_FRAC** — Raven's ``SNOW_FRAC`` is the
+        snowfall-fraction *forcing* (fraction of precip falling as snow,
+        controlled solely by RainSnow_Temp), NOT fractional snow-cover area.
+        And ``SNOW_COVER`` (the actual fSCA state variable) is only updated
+        by snow algorithms like SNOBAL_CEMA_NEIGE — our SNOBAL_SIMPLE_MELT
+        leaves it at zero. So we output ``SNOW`` (the SWE state, in mm) and
+        compute fSCA externally via ``calibration_objectives.swe_to_fsca``.
 
         Writes to the .rvi.tpl TEMPLATE rather than the rendered .rvi —
         every iteration's _write_parameters_to_file regenerates .rvi from
@@ -303,11 +312,13 @@ class RavenSCEUA(object):
                   f"snow output injection skipped")
             return
         text = target.read_text()
-        needle = ':CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU'
+        needle = ':CustomOutput DAILY AVERAGE SNOW BY_HRU'
         if needle in text:
             return
         insertion = (
-            "\n# Snow cover fraction for MODIS-based calibration objective\n"
+            "\n# Snow water equivalent (SWE) for MODIS-based fSCA objective.\n"
+            "# fSCA is derived externally from SWE via a depth-area function;\n"
+            "# see calibration_objectives.swe_to_fsca.\n"
             f"  {needle}\n"
         )
         if ':EndHydrologicProcesses' in text:
@@ -321,11 +332,11 @@ class RavenSCEUA(object):
         # Also write to the rendered .rvi so Raven uses it immediately —
         # without this, the snow objective on iteration 0 (which uses the
         # current .rvi, before _write_parameters_to_file's first regen)
-        # might miss SNOW_FRAC. After iter 1 the regen from .rvi.tpl will
+        # might miss SNOW. After iter 1 the regen from .rvi.tpl will
         # pick it up automatically.
         if target == tpl and rvi.exists():
             rvi.write_text(text)
-        print(f"📝 Injected SNOW_FRAC CustomOutput into {target.name}")
+        print(f"📝 Injected SNOW CustomOutput into {target.name}")
 
     def _load_hru_info(self):
         """Parse the .rvh once to learn each HRU's area (km²), elevation (m),
@@ -1784,8 +1795,13 @@ class RavenSCEUA(object):
                 "  :CustomOutput DAILY AVERAGE RAINFALL BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE SNOWFALL BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SNOWFALL BY_HRU_GROUP\n",
+                # Note: SNOW_FRAC is the snowfall-fraction FORCING (controlled by
+                # RainSnow_Temp), NOT fractional snow-cover area. We output SNOW (SWE)
+                # below and derive fSCA externally via swe_to_fsca() in the metric.
                 "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE SNOW_FRAC BY_HRU_GROUP\n",
+                "  :CustomOutput DAILY AVERAGE SNOW BY_HRU\n",
+                "  :CustomOutput DAILY AVERAGE SNOW BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_HRU\n",
                 "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_HRU_GROUP\n",
                 "  :CustomOutput DAILY AVERAGE Between:SNOW_LIQ.And.PONDED_WATER BY_BASIN\n",
