@@ -705,6 +705,11 @@ def _run_multi_config(catchment_nml, args):
     configurations = catchment_nml['configurations']
     max_workers = catchment_nml.get('parallel', args.parallel)
 
+    # All pipeline_*.log files land under logs/ instead of CWD. Without this
+    # they accumulate at the repo root and clutter `ls`. Created here once so
+    # downstream log_file = f'logs/...' lines never have to mkdir individually.
+    Path('logs').mkdir(exist_ok=True)
+
     # Extract overrides from the catchment namelist
     overrides = {}
     for key in ('start_date', 'end_date', 'cali_end_date', 'warm_up_date',
@@ -817,7 +822,7 @@ def _run_multi_config(catchment_nml, args):
                 print(f"  [{config}] Failed to load config: {e}")
                 continue
 
-            log_file = f"pipeline_{catchment_id}_{config}_inputs.log"
+            log_file = f"logs/pipeline_{catchment_id}_{config}_inputs.log"
             # Run only Phase 1 (skip calibration + future)
             cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file)
             # Override: only do preprocessing
@@ -853,7 +858,7 @@ def _run_multi_config(catchment_nml, args):
                         model=model, env=args.env,
                         overrides=overrides if overrides else None,
                     )
-                    log2 = f"pipeline_{catchment_id}_{config}_{model}_inputs.log"
+                    log2 = f"logs/pipeline_{catchment_id}_{config}_{model}_inputs.log"
                     cmd2 = _build_sub_argv(args, Path(tmp2).resolve(), log2)
                     cmd2_phase1 = [a for a in cmd2 if a not in ('--skip-preprocessing',)]
                     cmd2_phase1.extend(['--skip-calibration', '--skip-future'])
@@ -975,7 +980,7 @@ def _run_multi_config(catchment_nml, args):
             continue
 
         metric_tag = '' if metric == 'KGE' else f'_{metric}'
-        log_file = f"pipeline_{catchment_id}_{config}_{model}{metric_tag}.log"
+        log_file = f"logs/pipeline_{catchment_id}_{config}_{model}{metric_tag}.log"
         cmd = _build_sub_argv(args, Path(tmp_path).resolve(), log_file,
                               skip_preprocessing=True)
         # Always skip future in Phase B — handled sequentially in Phase C
@@ -1058,7 +1063,7 @@ def _run_multi_config(catchment_nml, args):
                 try:
                     cmd, tmp_path = _build_future_cmd(
                         config, first_model, metric,
-                        f"pipeline_{catchment_id}_{config}_{first_model}{metric_tag}_future.log")
+                        f"logs/pipeline_{catchment_id}_{config}_{first_model}{metric_tag}_future.log")
                 except Exception as e:
                     print(f"  [{run_label}] Failed to load config: {e}")
                     continue
@@ -1097,7 +1102,7 @@ def _run_multi_config(catchment_nml, args):
                 metric_tag = '' if metric == 'KGE' else f'_{metric}'
                 run_key = f"{config}/{model}{metric_tag}"
                 try:
-                    log_file = f"pipeline_{catchment_id}_{config}_{model}{metric_tag}_future.log"
+                    log_file = f"logs/pipeline_{catchment_id}_{config}_{model}{metric_tag}_future.log"
                     cmd, tmp_path = _build_future_cmd(config, model, metric, log_file)
                     future_job_info[run_key] = (cmd, tmp_path, log_file)
                 except Exception as e:
@@ -1230,9 +1235,14 @@ Examples:
     gauge_id = str(nml['gauge_id'])
     model_type = nml['model_type']
 
-    # Setup logging
+    # Setup logging — default location is logs/ (created if missing). If a
+    # caller passes --log-file already prefixed with logs/, we don't double it.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = args.log_file or f"pipeline_{gauge_id}_{timestamp}.log"
+    if args.log_file:
+        log_file = args.log_file
+    else:
+        Path('logs').mkdir(exist_ok=True)
+        log_file = f"logs/pipeline_{gauge_id}_{timestamp}.log"
     logger = setup_logging(args.verbose, log_file)
 
     # Detect if this is a future namelist (has future: true and cmip6_models)

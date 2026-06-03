@@ -285,12 +285,14 @@ Examples:
 
     nml = load_namelist(namelist_path)
 
-    # Setup logging
+    # Setup logging — default location is logs/ (created if missing). If a
+    # caller passes --log-file already prefixed, we don't double it.
     if args.log_file:
         log_file = args.log_file
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = f"future_run_{nml['gauge_id']}_{timestamp}.log"
+        Path('logs').mkdir(exist_ok=True)
+        log_file = f"logs/future_run_{nml['gauge_id']}_{timestamp}.log"
 
     logger = setup_logging(args.verbose, log_file)
 
