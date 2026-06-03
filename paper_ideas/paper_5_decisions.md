@@ -183,11 +183,38 @@ fSCA externally via a linear depth–area function:
 fSCA = min(SWE / D_scale, 1.0),    D_scale = 50 mm
 ```
 
-`D_scale` is a structural hyperparameter of the metric, fixed (Liston 2004
-alpine typical) not calibrated. Implementation in
-`calibration_objectives.swe_to_fsca`. `load_raven_snow_frac` and
-`load_raven_snow_frac_per_band` now read the SNOW CSV;
-`spotpy_optimize._inject_snow_output_in_rvi` injects `:CustomOutput SNOW`.
+`D_scale` is a structural hyperparameter of the metric, fixed not calibrated.
+
+**Justification for `D_scale = 50 mm`.** The linear-ramp SDC is standard in
+the literature (Verseghy 1991 CLASS; Niu & Yang 2007 CLM4; Yang et al. 1997
+BATS), differing primarily in the saturation threshold. Reported alpine
+values cluster in the **30–80 mm range** (Liston 2004 review); the
+hyperbolic variant of Roesch et al. 2001 uses K=10 mm but with a different
+functional form. We pick D = 50 mm as the centre of the alpine range. This
+is a 4× decrease from Raven's internal `SNOWCOV_LINEAR` default of 200 mm,
+which is tuned for prairie/forest land surfaces and is too lenient for
+alpine sensitivity to melt-timing.
+
+Huang et al. 2026 (our methodological anchor) uses a **different paradigm**
+— SPHY's 1 km² grid cells with binary thresholds (1, 5, 10 mm SWE) for
+"snow presence", then aggregated to elevation-band SCF as the fraction of
+cells with snow. With ~1,400 cells per band, the cell-level binary
+averages into a smooth band SCF. Our Raven setup has only ~6 non-glacier
+HRUs per elevation band (vs Huang's ~1,400 cells per band), so a hard
+threshold per HRU would quantize band SCF too coarsely. The continuous
+per-HRU SDC is the correct adaptation of Huang's spirit to a sparse-HRU
+discretization, with `D_scale` representing the sub-HRU SWE heterogeneity
+that Huang captures via many cells.
+
+Implementation: `calibration_objectives.swe_to_fsca` does the conversion;
+`load_raven_snow_frac` and `load_raven_snow_frac_per_band` now read the
+SNOW CSV; `spotpy_optimize._inject_snow_output_in_rvi` injects
+`:CustomOutput SNOW BY_HRU` (replacing the old SNOW_FRAC line).
+
+**Planned D-scale sensitivity (supplement).** Post-hoc on the saved SWE
+outputs, re-compute snow_objective with D ∈ {10, 20, 50, 100, 200} and
+confirm the cross-structure ranking is stable. No additional Raven runs
+required — re-use the calibration_results.csv SWE samples.
 
 **Verification** — Rhone, default params except Melt_Factor swept:
 
