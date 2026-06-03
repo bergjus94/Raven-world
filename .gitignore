@@ -17,3 +17,6 @@ paper_ideas/*_pdfs/
 
 # Generated plots — large binaries, regenerable from data; keep out of git
 plots/
+
+# Local download caches (raw HDFs, etc. — regeneratable from source)
+downloads/cache/
